@@ -17,7 +17,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Default do
     * `extract_accessed_resources/4` is not implemented, so
       `Lotus.Preflight.authorize/4` short-circuits to `:ok` — visibility rules
       are **not** checked against the tables the query touches.
-    * `list_schemas/1`, `list_tables/3`, and `get_table_schema/3` return
+    * `list_schemas/1`, `list_tables/3`, and `describe_table/3` return
       empty lists — the schema browser will be blank.
     * `default_schemas/1` returns `["public"]` (Postgres-specific) and
       `builtin_denies/1` is a shotgun union of Postgres + MySQL + SQLite
@@ -43,9 +43,10 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Default do
   require Logger
 
   alias __MODULE__.EditorConfig
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
-  alias Lotus.SQL.FilterInjector
-  alias Lotus.SQL.SortInjector
+  alias Lotus.Source.Adapters.Ecto.SQL.FilterInjector
+  alias Lotus.Source.Adapters.Ecto.SQL.SortInjector
 
   @impl true
   def source_type, do: :other
@@ -157,17 +158,17 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Default do
   end
 
   @impl true
-  def get_table_schema(_repo, _schema, _table) do
+  def describe_table(_repo, _schema, _table) do
     []
   end
 
   @impl true
-  def explain_plan(_repo, _sql, _params, _opts) do
+  def query_plan(_repo, _sql, _params, _opts) do
     {:error, "EXPLAIN not supported for this database adapter"}
   end
 
   @impl true
-  def resolve_table_schema(_repo, _table, _schemas) do
+  def resolve_table_namespace(_repo, _table, _schemas) do
     nil
   end
 
@@ -178,13 +179,16 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Default do
   end
 
   @impl true
-  def apply_filters(sql, params, filters) do
-    FilterInjector.apply(sql, params, filters, &quote_identifier/1, fn _idx -> "?" end)
+  def apply_filters(%Statement{text: sql, params: params} = statement, filters) do
+    {new_sql, new_params} =
+      FilterInjector.apply(sql, params, filters, &quote_identifier/1, fn _idx -> "?" end)
+
+    %{statement | text: new_sql, params: new_params}
   end
 
   @impl true
-  def apply_sorts(sql, sorts) do
-    SortInjector.apply(sql, sorts, &quote_identifier/1)
+  def apply_sorts(%Statement{text: sql} = statement, sorts) do
+    %{statement | text: SortInjector.apply(sql, sorts, &quote_identifier/1)}
   end
 
   @impl true

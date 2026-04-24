@@ -11,7 +11,7 @@ defmodule Lotus.AI.ConversationTest do
 
       assert conversation.messages == []
       assert conversation.generation_count == 0
-      assert conversation.schema_context == %{tables_analyzed: []}
+      assert conversation.source_context == %{tables_analyzed: []}
       assert %DateTime{} = conversation.started_at
       assert %DateTime{} = conversation.last_activity
     end
@@ -316,21 +316,21 @@ defmodule Lotus.AI.ConversationTest do
     end
   end
 
-  describe "update_schema_context/2" do
-    test "adds tables to schema context" do
+  describe "update_source_context/2" do
+    test "adds tables to source context" do
       conversation = Conversation.new()
-      conversation = Conversation.update_schema_context(conversation, ["users", "orders"])
+      conversation = Conversation.update_source_context(conversation, ["users", "orders"])
 
-      assert conversation.schema_context.tables_analyzed == ["users", "orders"]
+      assert conversation.source_context.tables_analyzed == ["users", "orders"]
     end
 
     test "appends tables without duplicates" do
       conversation =
         Conversation.new()
-        |> Conversation.update_schema_context(["users", "orders"])
-        |> Conversation.update_schema_context(["orders", "products"])
+        |> Conversation.update_source_context(["users", "orders"])
+        |> Conversation.update_source_context(["orders", "products"])
 
-      assert Enum.sort(conversation.schema_context.tables_analyzed) ==
+      assert Enum.sort(conversation.source_context.tables_analyzed) ==
                Enum.sort(["users", "orders", "products"])
     end
   end

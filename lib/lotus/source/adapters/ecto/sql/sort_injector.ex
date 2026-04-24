@@ -1,4 +1,4 @@
-defmodule Lotus.SQL.SortInjector do
+defmodule Lotus.Source.Adapters.Ecto.SQL.SortInjector do
   @moduledoc """
   Shared helpers for SQL-based sources to inject sort directives into queries.
 
@@ -11,16 +11,16 @@ defmodule Lotus.SQL.SortInjector do
   ## Example
 
       quote_fn = fn id -> ~s("\#{id}") end
-      Lotus.SQL.SortInjector.apply("SELECT * FROM users ORDER BY id", [
+      Lotus.Source.Adapters.Ecto.SQL.SortInjector.apply("SELECT * FROM users ORDER BY id", [
         %Lotus.Query.Sort{column: "created_at", direction: :desc}
       ], quote_fn)
       #=> ~s(WITH _sorted AS (SELECT * FROM users ORDER BY id) SELECT * FROM _sorted ORDER BY "created_at" DESC)
   """
 
   alias Lotus.Query.Sort
-  alias Lotus.SQL.Identifier
+  alias Lotus.Source.Adapters.Ecto.SQL.Identifier
 
-  import Lotus.SQL.Sanitizer, only: [strip_trailing_semicolon: 1]
+  import Lotus.Source.Adapters.Ecto.SQL.Sanitizer, only: [strip_trailing_semicolon: 1]
 
   @doc """
   Wraps the given SQL in a CTE and appends ORDER BY for each sort directive.

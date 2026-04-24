@@ -1,4 +1,4 @@
-defmodule Lotus.SQL.Sanitizer do
+defmodule Lotus.Source.Adapters.Ecto.SQL.Sanitizer do
   @moduledoc """
   Shared helpers for cleaning SQL strings before further processing.
   """

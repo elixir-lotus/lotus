@@ -12,9 +12,9 @@ defmodule Lotus do
   Add to your config:
 
       config :lotus,
-        repo: MyApp.Repo,
-        primary_key_type: :id,    # or :binary_id
-        foreign_key_type: :id     # or :binary_id
+        storage_repo: MyApp.Repo,
+        default_source: "main",
+        data_sources: %{"main" => MyApp.Repo}
 
   ## Usage
 
@@ -33,6 +33,16 @@ defmodule Lotus do
 
       # Execute SQL directly (read-only)
       {:ok, results} = Lotus.run_statement("SELECT * FROM products WHERE price > $1", [100])
+
+  ## Further reading
+
+    * [Source adapters guide](source-adapters.md) — how the adapter contract
+      works, building custom SQL dialects or non-Ecto adapters, AI
+      `ai_context` + trust boundary, security boundaries around variable
+      substitution and visibility.
+    * [Upgrading to v1.0](upgrading-to-v1.md) — step-by-step migration from
+      v0.x (config renames, DB column rename, middleware/telemetry payload
+      changes, adapter-contract updates).
   """
 
   @default_page_size 1000
@@ -61,14 +71,16 @@ defmodule Lotus do
           vars: map(),
           cache: [cache_opt] | :bypass | :refresh | nil,
           window: window_opts,
-          filters: [Lotus.Query.Filter.t()],
+          filters: [Filter.t()],
           context: term()
         ]
 
   alias Lotus.Cache.{Key, KeyBuilder}
   alias Lotus.{Config, Dashboards, Result, Runner, Schema, Source, Storage, Viz}
+  alias Lotus.Query.{Filter, Sort, Statement}
   alias Lotus.Source.Adapter
   alias Lotus.Storage.Query
+  alias Lotus.UnsupportedOperatorError
 
   def child_spec(opts), do: Lotus.Supervisor.child_spec(opts)
   def start_link(opts \\ []), do: Lotus.Supervisor.start_link(opts)
@@ -114,24 +126,6 @@ defmodule Lotus do
   - If no data sources are configured, raises an error
   """
   def default_data_source, do: Config.default_data_source()
-
-  # ── Deprecated aliases ──────────────────────────────────────────────────────
-
-  @doc false
-  @deprecated "Use data_sources/0 instead. Will be removed in v1.0"
-  def data_repos, do: data_sources()
-
-  @doc false
-  @deprecated "Use get_data_source!/1 instead. Will be removed in v1.0"
-  def get_data_repo!(name), do: get_data_source!(name)
-
-  @doc false
-  @deprecated "Use list_data_source_names/0 instead. Will be removed in v1.0"
-  def list_data_repo_names, do: list_data_source_names()
-
-  @doc false
-  @deprecated "Use default_data_source/0 instead. Will be removed in v1.0"
-  def default_data_repo, do: default_data_source()
 
   @doc """
   Lists all saved queries.
@@ -467,30 +461,31 @@ defmodule Lotus do
   defp execute_with_options(adapter, sql, params, opts, runner_opts, cache_identity, query_id) do
     search_path = Keyword.get(runner_opts, :search_path)
 
-    {sql, params} = Adapter.transform_bound_query(adapter, sql, params, runner_opts)
+    statement = %Statement{adapter: adapter.module, text: sql, params: params}
+    statement = Adapter.transform_bound_query(adapter, statement, runner_opts)
 
     filters = Keyword.get(opts, :filters, [])
-    {sql, params} = Adapter.apply_filters(adapter, sql, params, filters)
+    :ok = validate_filter_columns!(adapter, filters)
+    :ok = validate_filter_operators!(adapter, filters)
+    statement = Adapter.apply_filters(adapter, statement, filters)
 
     sorts = Keyword.get(opts, :sorts, [])
-    sql = Adapter.apply_sorts(adapter, sql, sorts)
+    :ok = validate_sort_columns!(adapter, sorts)
+    statement = Adapter.apply_sorts(adapter, statement, sorts)
 
-    {sql, params, pagination_meta, cache_bound} =
-      maybe_paginate(
-        sql,
-        params,
-        adapter,
-        search_path,
-        Keyword.get(opts, :window)
-      )
+    {statement, pagination_meta, cache_bound} =
+      maybe_paginate(statement, adapter, search_path, Keyword.get(opts, :window))
 
     scope = Keyword.get(opts, :scope)
-    key = result_key(sql, cache_bound || cache_identity, adapter.name, search_path, scope)
+
+    key =
+      result_key(statement.text, cache_bound || cache_identity, adapter.name, search_path, scope)
+
     tags = build_cache_tags(query_id, adapter.name, opts)
     profile = determine_cache_profile(opts)
 
     exec_with_cache(opts[:cache], profile, key, tags, fn ->
-      with {:ok, %Result{} = res} <- Runner.run_statement(adapter, sql, params, runner_opts) do
+      with {:ok, %Result{} = res} <- Runner.run_statement(adapter, statement, runner_opts) do
         {:ok, merge_pagination_meta(res, pagination_meta)}
       end
     end)
@@ -508,8 +503,8 @@ defmodule Lotus do
   defp build_cache_tags(query_id, repo_name, opts) do
     base_tags =
       case query_id do
-        nil -> ["repo:#{repo_name}"]
-        id -> ["query:#{id}", "repo:#{repo_name}"]
+        nil -> ["source:#{repo_name}"]
+        id -> ["query:#{id}", "source:#{repo_name}"]
       end
 
     custom_tags =
@@ -622,12 +617,6 @@ defmodule Lotus do
     execute_with_options(adapter, statement, params, opts, runner_opts, params, nil)
   end
 
-  @doc false
-  @deprecated "Use Lotus.run_statement/3 instead"
-  @spec run_sql(binary(), list(any()), keyword()) :: {:ok, Result.t()} | {:error, term()}
-  def run_sql(statement, params \\ [], opts \\ []),
-    do: run_statement(statement, params, opts)
-
   @doc """
   Returns whether unique query names are enforced.
   """
@@ -690,23 +679,23 @@ defmodule Lotus do
   def list_schemas(repo_or_name, opts \\ []), do: Schema.list_schemas(repo_or_name, opts)
 
   @doc """
-  Gets the schema for a specific table.
+  Describes a specific table, returning its column definitions.
 
   ## Options
 
-  - `:context` — opaque value threaded into the `:after_get_table_schema`
+  - `:context` — opaque value threaded into the `:after_describe_table`
     and `:after_discover` middleware events.
   - `:scope` — opaque value passed to the visibility resolver and hashed
     into the cache key. See `Lotus.Visibility.Resolver`.
 
   ## Examples
 
-      {:ok, schema} = Lotus.get_table_schema("primary", "users")
-      {:ok, schema} = Lotus.get_table_schema("postgres", "customers", schema: "reporting")
-      {:ok, schema} = Lotus.get_table_schema(MyApp.DataRepo, "products", search_path: "analytics, public")
+      {:ok, columns} = Lotus.describe_table("primary", "users")
+      {:ok, columns} = Lotus.describe_table("postgres", "customers", schema: "reporting")
+      {:ok, columns} = Lotus.describe_table(MyApp.DataRepo, "products", search_path: "analytics, public")
   """
-  def get_table_schema(repo_or_name, table_name, opts \\ []),
-    do: Schema.get_table_schema(repo_or_name, table_name, opts)
+  def describe_table(repo_or_name, table_name, opts \\ []),
+    do: Schema.describe_table(repo_or_name, table_name, opts)
 
   @doc """
   Gets statistics for a specific table.
@@ -721,7 +710,7 @@ defmodule Lotus do
     do: Schema.get_table_stats(repo_or_name, table_name, opts)
 
   @doc """
-  Lists all relations (tables with schema information) in a data repository.
+  Lists all relations (tables with column information) in a data repository.
 
   ## Options
 
@@ -890,10 +879,69 @@ defmodule Lotus do
     end
   end
 
-  defp maybe_paginate(sql, params, _adapter, _search_path, nil),
-    do: {sql, params, nil, nil}
+  # Pipeline-level validation of caller-supplied filter/sort column names
+  # and filter operators. Catches mismatches (unknown columns, operators the
+  # adapter can't handle) before we ever hand them to `apply_filters/3` /
+  # `apply_sorts/3` — so the failure mode is a clear error at the boundary,
+  # not a cryptic SQL/DSL error from deep inside the adapter.
+  defp validate_filter_columns!(_adapter, []), do: :ok
 
-  defp maybe_paginate(sql, params, adapter, search_path, pagination_opts)
+  defp validate_filter_columns!(adapter, filters) do
+    Enum.each(filters, fn %Filter{column: col} ->
+      case Adapter.validate_identifier(adapter, :column, col) do
+        :ok -> :ok
+        {:error, reason} -> raise ArgumentError, reason
+      end
+    end)
+
+    :ok
+  end
+
+  defp validate_sort_columns!(_adapter, []), do: :ok
+
+  defp validate_sort_columns!(adapter, sorts) do
+    Enum.each(sorts, fn
+      %Sort{column: col} -> check_column!(adapter, col)
+      col when is_binary(col) -> check_column!(adapter, col)
+      _other -> :ok
+    end)
+
+    :ok
+  end
+
+  defp check_column!(adapter, col) do
+    case Adapter.validate_identifier(adapter, :column, col) do
+      :ok -> :ok
+      {:error, reason} -> raise ArgumentError, reason
+    end
+  end
+
+  defp validate_filter_operators!(_adapter, []), do: :ok
+
+  defp validate_filter_operators!(adapter, filters) do
+    supported = Adapter.supported_filter_operators(adapter)
+
+    Enum.each(filters, fn %Filter{op: op} ->
+      unless op in supported do
+        raise UnsupportedOperatorError,
+          operator: op,
+          source: adapter.name,
+          supported: supported
+      end
+    end)
+
+    :ok
+  end
+
+  defp maybe_paginate(%Statement{} = statement, _adapter, _search_path, nil),
+    do: {statement, nil, nil}
+
+  defp maybe_paginate(
+         %Statement{params: params} = statement,
+         adapter,
+         search_path,
+         pagination_opts
+       )
        when is_list(pagination_opts) do
     limit = resolve_window_limit(pagination_opts)
     offset = Keyword.get(pagination_opts, :offset, 0)
@@ -901,15 +949,16 @@ defmodule Lotus do
 
     callback_opts = [limit: limit, offset: offset, count: count_mode, search_path: search_path]
 
-    {paged_sql, paged_params, count_spec} =
-      Adapter.apply_pagination(adapter, sql, params, callback_opts)
+    paged_statement = Adapter.apply_pagination(adapter, statement, callback_opts)
+    count_spec = Map.get(paged_statement.meta, :count_spec)
 
-    # Assemble the internal meta with the real adapter from scope. The
-    # preserved user-facing shape (Result.meta.window / .total_count /
-    # .total_mode) is built by merge_pagination_meta/2 below.
+    # `total_mode` reflects what the caller requested — not how the adapter
+    # chose to fulfil it. Strategy A adapters (inline count via the main
+    # query result) don't set :count_spec but still need :exact plumbed
+    # through so merge_pagination_meta/2 surfaces the total.
     pagination_meta = %{
       window: %{limit: limit, offset: offset},
-      total_mode: if(count_spec, do: :exact, else: :none),
+      total_mode: count_mode,
       count_spec: count_spec,
       adapter: adapter,
       search_path: search_path
@@ -920,7 +969,7 @@ defmodule Lotus do
       __window__: %{limit: limit, offset: offset, count: count_mode}
     }
 
-    {paged_sql, paged_params, pagination_meta, cache_bound}
+    {paged_statement, pagination_meta, cache_bound}
   end
 
   defp merge_pagination_meta(%Result{} = res, nil), do: res
@@ -933,11 +982,21 @@ defmodule Lotus do
   defp merge_pagination_meta(%Result{} = res, %{total_mode: :exact} = meta) do
     win = Map.fetch!(meta, :window)
 
-    # Try to compute exact count synchronously. If it fails, fall back with no total.
+    # Precedence: adapter-supplied inline count (Strategy A) wins over
+    # :count_spec (Strategy B). If neither yields a count, fall back to nil.
     total_count =
-      case do_count(meta) do
-        {:ok, n} when is_integer(n) and n >= 0 -> n
-        _ -> nil
+      cond do
+        is_integer(res.meta[:total_count]) ->
+          res.meta[:total_count]
+
+        is_map(meta[:count_spec]) ->
+          case do_count(meta) do
+            {:ok, n} when is_integer(n) and n >= 0 -> n
+            _ -> nil
+          end
+
+        true ->
+          nil
       end
 
     updated_meta =
@@ -952,9 +1011,10 @@ defmodule Lotus do
 
   defp do_count(%{count_spec: %{query: q, params: ps}, adapter: adapter} = meta) do
     runner_opts = build_runner_opts(meta)
+    statement = %Statement{adapter: adapter.module, text: q, params: ps}
 
     adapter
-    |> Runner.run_statement(q, ps, runner_opts)
+    |> Runner.run_statement(statement, runner_opts)
     |> parse_count_result()
   end
 

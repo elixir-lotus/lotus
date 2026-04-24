@@ -1,45 +1,53 @@
 defmodule Lotus.AI.Prompts.Optimization do
   @moduledoc """
   System prompts for AI-powered query optimization suggestions.
+
+  Prompts are layered the same way as `Lotus.AI.Prompts.QueryGeneration`:
+  core review rules (language-agnostic) precede adapter-supplied syntax
+  notes, so a compromised adapter cannot repeal them via later text.
   """
 
   @doc """
   Generate system prompt for query optimization analysis.
 
+  ## Composition order
+
+    1. System role, keyed off `ai_context.language` (core)
+    2. Response contract (core)
+    3. Core optimization heuristics — language-agnostic (core)
+    4. Adapter `syntax_notes` — filtered if untrusted (adapter)
+    5. Rules / response-format example (core)
+
   ## Parameters
 
-  - `database_type` - Database type (e.g., :postgres, :mysql, :sqlite)
+    * `ai_context` — the adapter's `ai_context_map` (`:language`,
+      `:syntax_notes`, ...).
   """
-  @spec system_prompt(atom()) :: String.t()
-  def system_prompt(database_type) do
-    """
-    You are a database performance expert specializing in #{database_type} query optimization.
+  @spec system_prompt(map()) :: String.t()
+  def system_prompt(ai_context) do
+    language = Map.get(ai_context, :language, "sql")
+    syntax_notes = Map.get(ai_context, :syntax_notes, "")
 
-    You will receive a SQL query and its execution plan. Analyze them and provide actionable
-    optimization suggestions.
+    """
+    You are a database performance expert specializing in "#{language}" query optimization.
+
+    You will receive a statement and (when available) its execution plan or diagnostic.
+    Analyze them and provide actionable optimization suggestions. When no execution plan
+    is supplied, review the statement structurally and suggest improvements from patterns
+    visible in the query itself.
 
     ## Response Format
 
     Respond with a JSON array of suggestion objects. Each suggestion must have:
-    - `"type"` — one of: `"index"`, `"rewrite"`, `"schema"`, `"configuration"`
+    - `"type"` — one of: `"index"`, `"rewrite"`, `"structure"`, `"configuration"`
     - `"impact"` — one of: `"high"`, `"medium"`, `"low"`
     - `"title"` — short summary (under 100 characters)
     - `"suggestion"` — detailed explanation of what to change and why
 
-    ## What to look for
+    #{core_optimization_notes()}
 
-    - **Sequential scans** on large tables that could benefit from indexes
-    - **Missing indexes** on columns used in WHERE, JOIN, ORDER BY, or GROUP BY clauses
-    - **Correlated subqueries** that could be rewritten as JOINs
-    - **SELECT *** when only specific columns are needed
-    - **OR conditions** that prevent index usage (suggest UNION rewrite)
-    - **Implicit type casts** that prevent index usage
-    - **Redundant or unused JOINs**
-    - **Inefficient sorting** (filesort, external merge)
-    - **N+1 patterns** or queries that could be batched
-    - **Missing LIMIT** on potentially large result sets
-
-    #{database_specific_notes(database_type)}
+    ## Language-Specific Notes (from adapter):
+    #{syntax_notes}
 
     ## Rules
 
@@ -79,14 +87,14 @@ defmodule Lotus.AI.Prompts.Optimization do
 
   - `sql` - The SQL query to optimize
   - `execution_plan` - The execution plan string (from EXPLAIN)
-  - `schema_context` - Optional schema context string
+  - `source_context` - Optional source context string
   """
   @spec user_prompt(String.t(), String.t() | nil, String.t() | nil) :: String.t()
-  def user_prompt(sql, execution_plan, schema_context \\ nil) do
+  def user_prompt(sql, execution_plan, source_context \\ nil) do
     [
       "## SQL Query\n\n```sql\n#{sql}\n```",
       if(execution_plan, do: "\n\n## Execution Plan\n\n```\n#{execution_plan}\n```"),
-      if(schema_context, do: "\n\n## Schema Context\n\n#{schema_context}")
+      if(source_context, do: "\n\n## Source Context\n\n#{source_context}")
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join()
@@ -119,7 +127,7 @@ defmodule Lotus.AI.Prompts.Optimization do
     end
   end
 
-  @valid_types ~w(index rewrite schema configuration)
+  @valid_types ~w(index rewrite structure configuration)
   @valid_impacts ~w(high medium low)
 
   defp validate_suggestions(suggestions) do
@@ -156,46 +164,23 @@ defmodule Lotus.AI.Prompts.Optimization do
     |> String.slice(0, 100)
   end
 
-  defp database_specific_notes(:postgres) do
+  # Core, language-agnostic optimization heuristics. Kept in the prompt
+  # builder (not an adapter callback) so untrusted adapters can't repeal
+  # them. Adapter-specific vocabulary (SQL index types, ES mapping
+  # tuning, Mongo index hints) lives in `ai_context.syntax_notes`.
+  defp core_optimization_notes do
     """
-    ## PostgreSQL-Specific Notes
-    - The execution plan is in JSON format from `EXPLAIN (FORMAT JSON)`
-    - Look for `"Node Type": "Seq Scan"` indicating sequential scans
-    - Check `"Plan Rows"` vs actual rows for estimation accuracy
-    - Suggest partial indexes when WHERE clauses filter on constant values
-    - Consider GIN/GiST indexes for JSONB, array, or full-text columns
-    - Look for `"Sort Method": "external merge"` indicating insufficient work_mem
-    """
-  end
+    ## What to look for (language-agnostic)
 
-  defp database_specific_notes(:mysql) do
-    """
-    ## MySQL-Specific Notes
-    - The execution plan is in JSON format from `EXPLAIN FORMAT=JSON`
-    - Look for `"access_type": "ALL"` indicating full table scans
-    - Check `"using_filesort": true` for expensive sorting operations
-    - Check `"using_temporary_table": true` for temp table usage
-    - Consider covering indexes to avoid table lookups
-    - Look for `"possible_keys"` being null where filtering occurs
-    """
-  end
-
-  defp database_specific_notes(:sqlite) do
-    """
-    ## SQLite-Specific Notes
-    - The execution plan is from `EXPLAIN QUERY PLAN` (text format)
-    - Look for `SCAN TABLE` indicating full table scans (vs `SEARCH TABLE` using index)
-    - SQLite has limited index types — only B-tree indexes
-    - Consider covering indexes for frequently queried column combinations
-    - SQLite doesn't support concurrent writes; suggest query batching where appropriate
-    """
-  end
-
-  defp database_specific_notes(_) do
-    """
-    ## Notes
-    - The database type is unknown — avoid database-specific syntax in suggestions
-    - Focus on general SQL optimization patterns (indexes, query structure, joins)
+    - **Full scans** on large collections that could benefit from an index / filter pushdown
+    - **Missing secondary access paths** on columns used to filter, join, order, or group
+    - **Unnecessary result set size** — selecting more fields than needed, or missing a LIMIT
+    - **Correlated / nested queries** that could be flattened or batched
+    - **Type coercion at access time** that prevents index usage (implicit casts, mixed-type compares)
+    - **Redundant joins / lookups** that can be dropped without changing results
+    - **Inefficient sorting** — external merge / temp sort when an ordered index exists
+    - **N+1-ish patterns** — repeated one-row lookups that could be a single pass
+    - **Overly broad filters** that the engine can't push down to an access path
     """
   end
 end

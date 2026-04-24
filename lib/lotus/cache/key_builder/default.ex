@@ -48,7 +48,17 @@ defmodule Lotus.Cache.KeyBuilder.Default do
     digest =
       :crypto.hash(
         :sha256,
-        [sql, ?|, :erlang.term_to_binary(digest_input), ?|, repo, ?|, path, ?|, version]
+        [
+          :erlang.term_to_binary(sql),
+          ?|,
+          :erlang.term_to_binary(digest_input),
+          ?|,
+          repo,
+          ?|,
+          path,
+          ?|,
+          version
+        ]
       )
       |> Base.encode16(case: :lower)
 

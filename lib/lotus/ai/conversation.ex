@@ -15,7 +15,7 @@ defmodule Lotus.AI.Conversation do
           %{role: :error, content: "column 'status' not found", sql: "...", timestamp: ~U[...]},
           %{role: :user, content: "Fix the error", timestamp: ~U[...]}
         ],
-        schema_context: %{tables_analyzed: ["users", "orders"]},
+        source_context: %{tables_analyzed: ["users", "orders"]},
         generation_count: 3,
         started_at: ~U[...],
         last_activity: ~U[...]
@@ -43,7 +43,7 @@ defmodule Lotus.AI.Conversation do
 
   @type t :: %{
           messages: [message()],
-          schema_context: map(),
+          source_context: map(),
           generation_count: non_neg_integer(),
           started_at: DateTime.t(),
           last_activity: DateTime.t()
@@ -66,7 +66,7 @@ defmodule Lotus.AI.Conversation do
 
     %{
       messages: [],
-      schema_context: %{tables_analyzed: []},
+      source_context: %{tables_analyzed: []},
       generation_count: 0,
       started_at: now,
       last_activity: now
@@ -314,7 +314,7 @@ defmodule Lotus.AI.Conversation do
   end
 
   @doc """
-  Update schema context with tables analyzed during generation.
+  Update source context with tables analyzed during generation.
 
   Tracks which tables the AI has examined to provide context for
   future queries in the conversation.
@@ -327,18 +327,18 @@ defmodule Lotus.AI.Conversation do
   ## Examples
 
       iex> conversation = Conversation.new()
-      iex> conversation = Conversation.update_schema_context(conversation, ["users", "orders"])
-      iex> conversation.schema_context.tables_analyzed
+      iex> conversation = Conversation.update_source_context(conversation, ["users", "orders"])
+      iex> conversation.source_context.tables_analyzed
       ["users", "orders"]
   """
-  @spec update_schema_context(t(), [String.t()]) :: t()
-  def update_schema_context(conversation, table_names) do
-    current_tables = conversation.schema_context[:tables_analyzed] || []
+  @spec update_source_context(t(), [String.t()]) :: t()
+  def update_source_context(conversation, table_names) do
+    current_tables = conversation.source_context[:tables_analyzed] || []
     updated_tables = Enum.uniq(current_tables ++ table_names)
 
     %{
       conversation
-      | schema_context: %{conversation.schema_context | tables_analyzed: updated_tables}
+      | source_context: %{conversation.source_context | tables_analyzed: updated_tables}
     }
   end
 

@@ -1,4 +1,4 @@
-defmodule Lotus.SQL.Identifier do
+defmodule Lotus.Source.Adapters.Ecto.SQL.Identifier do
   @moduledoc false
 
   # Regex for valid SQL identifiers: letters, digits, underscores.

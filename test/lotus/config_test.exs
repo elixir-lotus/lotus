@@ -11,10 +11,9 @@ defmodule Lotus.ConfigTest do
     :schema_visibility,
     :column_visibility,
     :data_sources,
-    :data_repos,
     :default_source,
-    :default_repo,
-    :source_adapters
+    :source_adapters,
+    :allow_unrestricted_resources
   ]
 
   setup do
@@ -158,86 +157,6 @@ defmodule Lotus.ConfigTest do
     end
   end
 
-  describe "deprecated config key backward compatibility" do
-    test "data_repos config key still works and resolves correctly" do
-      original_sources = Application.get_env(:lotus, :data_sources)
-      original_default = Application.get_env(:lotus, :default_source)
-      Application.delete_env(:lotus, :data_sources)
-      # Cross-validation requires :default_source to be a key in :data_sources,
-      # so align both when we swap the source map for this test.
-      Application.put_env(:lotus, :default_source, "test")
-      Application.put_env(:lotus, :data_repos, %{"test" => Lotus.Test.Repo})
-
-      log =
-        capture_log(fn ->
-          Config.reload!()
-          assert Config.data_sources() == %{"test" => Lotus.Test.Repo}
-        end)
-
-      assert log =~ "deprecated"
-      assert log =~ ":data_repos"
-      assert log =~ ":data_sources"
-
-      Application.delete_env(:lotus, :data_repos)
-      Application.put_env(:lotus, :data_sources, original_sources)
-
-      if original_default do
-        Application.put_env(:lotus, :default_source, original_default)
-      else
-        Application.delete_env(:lotus, :default_source)
-      end
-
-      Config.reload!()
-    end
-
-    test "default_repo config key still works with warning" do
-      original_source = Application.get_env(:lotus, :default_source)
-      Application.delete_env(:lotus, :default_source)
-      Application.put_env(:lotus, :default_repo, "postgres")
-
-      log =
-        capture_log(fn ->
-          Config.reload!()
-          {name, _mod} = Config.default_data_source()
-          assert name == "postgres"
-        end)
-
-      assert log =~ "deprecated"
-      assert log =~ ":default_repo"
-      assert log =~ ":default_source"
-
-      Application.delete_env(:lotus, :default_repo)
-
-      if original_source do
-        Application.put_env(:lotus, :default_source, original_source)
-      end
-
-      Config.reload!()
-    end
-
-    test "both data_repos and data_sources present raises error" do
-      Application.put_env(:lotus, :data_repos, %{"old" => Lotus.Test.Repo})
-
-      assert_raise ArgumentError, ~r/Cannot configure both/, fn ->
-        Config.reload!()
-      end
-
-      Application.delete_env(:lotus, :data_repos)
-      Config.reload!()
-    end
-
-    test "both default_repo and default_source present raises error" do
-      Application.put_env(:lotus, :default_repo, "old")
-
-      assert_raise ArgumentError, ~r/Cannot configure both/, fn ->
-        Config.reload!()
-      end
-
-      Application.delete_env(:lotus, :default_repo)
-      Config.reload!()
-    end
-  end
-
   describe "source_adapters config validation" do
     test "accepts modules that implement Lotus.Source.Adapter behaviour" do
       # Use a built-in adapter as the "known valid" module so the test exercises
@@ -275,5 +194,65 @@ defmodule Lotus.ConfigTest do
   defp put_visibility(key, value) do
     Application.put_env(:lotus, key, value)
     Config.reload!()
+  end
+
+  describe "allow_unrestricted_resources?/1" do
+    setup do
+      # Preserve the app-level `default_source` pointing at the real test
+      # sources; these test cases use isolated `data_sources` and would fail
+      # the cross-validation that `:default_source` must be a configured key.
+      Application.delete_env(:lotus, :default_source)
+      :ok
+    end
+
+    test "returns true when the source's config map opts in" do
+      Application.put_env(:lotus, :allow_unrestricted_resources, false)
+
+      Application.put_env(:lotus, :data_sources, %{
+        "es" => %{adapter: :elasticsearch, allow_unrestricted_resources: true}
+      })
+
+      Config.reload!()
+
+      assert Config.allow_unrestricted_resources?("es") == true
+    end
+
+    test "falls back to the global flag when the source has no per-source setting" do
+      Application.put_env(:lotus, :allow_unrestricted_resources, true)
+      Application.put_env(:lotus, :data_sources, %{"pg" => Lotus.Test.Repo})
+      Config.reload!()
+
+      assert Config.allow_unrestricted_resources?("pg") == true
+    end
+
+    test "returns false when neither the source nor the global flag opts in" do
+      Application.put_env(:lotus, :allow_unrestricted_resources, false)
+      Application.put_env(:lotus, :data_sources, %{"pg" => Lotus.Test.Repo})
+      Config.reload!()
+
+      assert Config.allow_unrestricted_resources?("pg") == false
+    end
+
+    test "per-source opt-in wins over global flag being false" do
+      Application.put_env(:lotus, :allow_unrestricted_resources, false)
+
+      Application.put_env(:lotus, :data_sources, %{
+        "es" => %{adapter: :elasticsearch, allow_unrestricted_resources: true},
+        "pg" => Lotus.Test.Repo
+      })
+
+      Config.reload!()
+
+      assert Config.allow_unrestricted_resources?("es") == true
+      assert Config.allow_unrestricted_resources?("pg") == false
+    end
+
+    test "defaults to false when nothing is configured" do
+      Application.delete_env(:lotus, :allow_unrestricted_resources)
+      Application.put_env(:lotus, :data_sources, %{"pg" => Lotus.Test.Repo})
+      Config.reload!()
+
+      assert Config.allow_unrestricted_resources?("pg") == false
+    end
   end
 end

@@ -1,19 +1,18 @@
 defmodule Lotus.Runner do
   @moduledoc """
-  SQL execution with safety checks, param binding, and result shaping.
+  Statement execution with safety checks, param binding, and result shaping.
 
-  By default, all queries are read-only. Destructive operations (INSERT, UPDATE,
-  DELETE, DDL) are blocked at both the application and database level. Pass
-  `read_only: false` to allow write operations.
+  By default, all statements are read-only. Destructive operations (INSERT,
+  UPDATE, DELETE, DDL) are blocked at both the application and database level.
+  Pass `read_only: false` to allow write operations.
   """
 
   alias Lotus.{Middleware, Preflight, Result, Telemetry, Visibility}
   alias Lotus.Preflight.Relations
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
   alias Lotus.Visibility.Policy
 
-  @type statement :: String.t()
-  @type params :: list()
   @type query_result :: Result.t()
   @type opts :: [
           timeout: non_neg_integer(),
@@ -22,20 +21,19 @@ defmodule Lotus.Runner do
           search_path: String.t() | nil
         ]
 
-  @spec run_statement(Adapter.t(), statement(), params(), opts()) ::
+  @spec run_statement(Adapter.t(), Statement.t(), opts()) ::
           {:ok, query_result()} | {:error, term()}
-  def run_statement(%Adapter{} = adapter, statement, params \\ [], opts \\ [])
-      when is_binary(statement) and is_list(params) do
+  def run_statement(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
     context = Keyword.get(opts, :context)
-    telemetry_meta = %{repo: adapter.name, sql: statement, params: params, context: context}
+    telemetry_meta = %{repo: adapter.name, statement: statement, context: context}
     start_time = Telemetry.query_start(telemetry_meta)
 
     result =
       with :ok <- Adapter.sanitize_query(adapter, statement, sanitize_opts(opts)),
-           :ok <- preflight_visibility(adapter, statement, params, opts),
-           :ok <- run_before_query(adapter, statement, params, context),
-           {:ok, %Result{} = res} <- exec_read_only(adapter, statement, params, opts),
-           {:ok, %Result{} = res} <- run_after_query(adapter, statement, params, res, context) do
+           :ok <- preflight_visibility(adapter, statement, opts),
+           :ok <- run_before_query(adapter, statement, context),
+           {:ok, %Result{} = res} <- exec_read_only(adapter, statement, opts),
+           {:ok, %Result{} = res} <- run_after_query(adapter, statement, res, context) do
         {:ok, res}
       end
 
@@ -54,14 +52,7 @@ defmodule Lotus.Runner do
     end
   end
 
-  @doc false
-  @deprecated "Use Lotus.Runner.run_statement/4 instead"
-  @spec run_sql(Adapter.t(), statement(), params(), opts()) ::
-          {:ok, query_result()} | {:error, term()}
-  def run_sql(adapter, statement, params \\ [], opts \\ []),
-    do: run_statement(adapter, statement, params, opts)
-
-  defp exec_read_only(%Adapter{} = adapter, sql, params, opts) do
+  defp exec_read_only(%Adapter{} = adapter, %Statement{text: sql, params: params}, opts) do
     Adapter.transaction(
       adapter,
       fn _state ->
@@ -103,12 +94,17 @@ defmodule Lotus.Runner do
         {:error, msg}
 
       {final_cols, final_rows} ->
+        result_meta =
+          raw
+          |> Map.take([:connection_id, :messages])
+          |> maybe_put_total_count(raw)
+
         {:ok,
          Result.new(final_cols, final_rows,
            num_rows: num_rows,
            duration_ms: duration_ms,
            command: command,
-           meta: Map.take(raw, [:connection_id, :messages])
+           meta: result_meta
          )}
     end
   end
@@ -120,6 +116,11 @@ defmodule Lotus.Runner do
   defp handle_query_result(other, _elapsed_us, _adapter) do
     other
   end
+
+  defp maybe_put_total_count(meta, %{total_count: n}) when is_integer(n) and n >= 0,
+    do: Map.put(meta, :total_count, n)
+
+  defp maybe_put_total_count(meta, _raw), do: meta
 
   defp normalize_command(nil), do: nil
   defp normalize_command(cmd) when is_atom(cmd), do: Atom.to_string(cmd)
@@ -210,8 +211,8 @@ defmodule Lotus.Runner do
     Keyword.take(opts, [:read_only])
   end
 
-  defp run_before_query(%Adapter{} = adapter, sql, params, context) do
-    payload = %{source: adapter.name, sql: sql, params: params, context: context}
+  defp run_before_query(%Adapter{} = adapter, %Statement{} = statement, context) do
+    payload = %{source: adapter.name, statement: statement, context: context}
 
     case Middleware.run(:before_query, payload) do
       {:cont, _} -> :ok
@@ -219,8 +220,13 @@ defmodule Lotus.Runner do
     end
   end
 
-  defp run_after_query(%Adapter{} = adapter, sql, params, %Result{} = result, context) do
-    payload = %{source: adapter.name, sql: sql, params: params, result: result, context: context}
+  defp run_after_query(
+         %Adapter{} = adapter,
+         %Statement{} = statement,
+         %Result{} = result,
+         context
+       ) do
+    payload = %{source: adapter.name, statement: statement, result: result, context: context}
 
     case Middleware.run(:after_query, payload) do
       {:cont, %{result: res}} -> {:ok, res}
@@ -228,11 +234,11 @@ defmodule Lotus.Runner do
     end
   end
 
-  defp preflight_visibility(%Adapter{} = adapter, sql, params, opts) do
-    if needs_preflight?(sql) do
+  defp preflight_visibility(%Adapter{} = adapter, %Statement{} = statement, opts) do
+    if Adapter.needs_preflight?(adapter, statement) do
       search_path = Keyword.get(opts, :search_path)
 
-      case Preflight.authorize(adapter, sql, params, search_path) do
+      case Preflight.authorize(adapter, statement, search_path) do
         :ok -> :ok
         {:error, msg} -> {:error, msg}
       end
@@ -242,30 +248,4 @@ defmodule Lotus.Runner do
   rescue
     e -> {:error, Exception.message(e)}
   end
-
-  defp needs_preflight?(sql) do
-    s = scrub(sql)
-
-    cond do
-      starts_with?(s, "EXPLAIN") -> false
-      starts_with?(s, "PRAGMA") -> false
-      starts_with?(s, "SHOW") -> false
-      true -> true
-    end
-  end
-
-  defp scrub(sql) do
-    sql
-    |> String.replace(~r/--.*$/m, "")
-    |> String.replace(~r/\/\*[\s\S]*?\*\//, "")
-    |> String.trim_leading()
-    |> upcase_head(12)
-  end
-
-  defp upcase_head(s, n) do
-    {head, tail} = String.split_at(s, n)
-    String.upcase(head) <> tail
-  end
-
-  defp starts_with?(s, prefix), do: String.starts_with?(s, prefix)
 end

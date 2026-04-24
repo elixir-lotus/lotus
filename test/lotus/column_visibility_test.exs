@@ -103,7 +103,7 @@ defmodule Lotus.ColumnVisibilityTest do
       :ok
     end
 
-    test "get_table_schema annotates visibility and preserves visible columns" do
+    test "describe_table annotates visibility and preserves visible columns" do
       mock_adapter = %Lotus.Source.Adapter{
         name: "postgres",
         module: Lotus.Source.Adapters.Ecto,
@@ -115,10 +115,10 @@ defmodule Lotus.ColumnVisibilityTest do
       |> stub(:resolve!, fn _repo_opt, _fallback -> mock_adapter end)
 
       Lotus.Source.Adapter
-      |> stub(:resolve_table_schema, fn _adapter, _table, _schemas -> {:ok, "public"} end)
+      |> stub(:resolve_table_namespace, fn _adapter, _table, _schemas -> {:ok, "public"} end)
 
       Lotus.Source.Adapter
-      |> stub(:get_table_schema, fn _adapter, _schema, _table ->
+      |> stub(:describe_table, fn _adapter, _schema, _table ->
         {:ok,
          [
            %{name: "id", type: "integer", nullable: false, default: nil, primary_key: true},
@@ -130,7 +130,7 @@ defmodule Lotus.ColumnVisibilityTest do
       Lotus.Source.Adapter
       |> stub(:default_schemas, fn _adapter -> ["public"] end)
 
-      {:ok, cols} = Schema.get_table_schema("postgres", "users", schema: "public")
+      {:ok, cols} = Schema.describe_table("postgres", "users", schema: "public")
 
       names = Enum.map(cols, & &1.name)
       # secret should be hidden in introspection

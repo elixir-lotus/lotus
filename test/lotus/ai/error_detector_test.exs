@@ -73,7 +73,7 @@ defmodule Lotus.AI.ErrorDetectorTest do
       assert result.error_message == "column 'status' does not exist"
       assert result.failed_sql == "SELECT status FROM users"
       assert result.suggestions != []
-      assert Enum.any?(result.suggestions, &String.contains?(&1, "get_table_schema"))
+      assert Enum.any?(result.suggestions, &String.contains?(&1, "describe_table"))
     end
 
     test "provides context for table not found errors" do
@@ -146,7 +146,7 @@ defmodule Lotus.AI.ErrorDetectorTest do
           %{tables_analyzed: ["users", "orders"]}
         )
 
-      assert Enum.any?(suggestions, &String.contains?(&1, "get_table_schema('users')"))
+      assert Enum.any?(suggestions, &String.contains?(&1, "describe_table('users')"))
       assert Enum.any?(suggestions, &String.contains?(&1, "different name"))
     end
 
@@ -159,7 +159,7 @@ defmodule Lotus.AI.ErrorDetectorTest do
           %{}
         )
 
-      assert Enum.any?(suggestions, &String.contains?(&1, "get_table_schema()"))
+      assert Enum.any?(suggestions, &String.contains?(&1, "describe_table()"))
       assert Enum.any?(suggestions, &String.contains?(&1, "might not exist"))
     end
 
@@ -255,6 +255,97 @@ defmodule Lotus.AI.ErrorDetectorTest do
 
       assert Enum.any?(suggestions, &String.contains?(&1, "unexpected"))
       assert Enum.any?(suggestions, &String.contains?(&1, "Review"))
+    end
+  end
+
+  describe "analyze_error/4 with ai_context" do
+    test "prepends hints for adapter error_patterns that match" do
+      ai_context = %{
+        error_patterns: [
+          %{
+            pattern: ~r/column "(.+)" does not exist/i,
+            hint: "Adapter hint: run describe_table before retrying"
+          }
+        ]
+      }
+
+      result =
+        ErrorDetector.analyze_error(
+          ~s(column "status" does not exist),
+          "SELECT status FROM users",
+          %{},
+          ai_context
+        )
+
+      assert hd(result.suggestions) == "Adapter hint: run describe_table before retrying"
+      assert Enum.any?(result.suggestions, &String.contains?(&1, "describe_table"))
+    end
+
+    test "falls back to generic suggestions when no pattern matches" do
+      ai_context = %{
+        error_patterns: [%{pattern: ~r/unrelated/i, hint: "unrelated hint"}]
+      }
+
+      result =
+        ErrorDetector.analyze_error(
+          "column 'status' does not exist",
+          nil,
+          %{},
+          ai_context
+        )
+
+      refute Enum.any?(result.suggestions, &String.contains?(&1, "unrelated hint"))
+    end
+
+    test "is a no-op when ai_context is nil" do
+      result = ErrorDetector.analyze_error("some error", nil, %{}, nil)
+      assert result.suggestions != []
+    end
+
+    test "untrusted adapters contribute no hints (empty error_patterns)" do
+      # Simulates what `Lotus.Source.Adapter.ai_context/1` returns for an
+      # untrusted adapter — `:error_patterns` stripped to `[]`.
+      ai_context = %{error_patterns: []}
+
+      result =
+        ErrorDetector.analyze_error(
+          "column 'status' does not exist",
+          nil,
+          %{},
+          ai_context
+        )
+
+      # Generic suggestions only — none of the hints come from adapter input.
+      refute result.suggestions == []
+
+      assert Enum.all?(result.suggestions, fn s ->
+               String.contains?(s, "describe_table") or
+                 String.contains?(s, "column") or
+                 String.contains?(s, "table") or
+                 String.contains?(s, "Verify")
+             end)
+    end
+
+    test "ignores malformed pattern entries" do
+      ai_context = %{
+        error_patterns: [
+          %{pattern: "not a regex", hint: "should be ignored"},
+          %{hint: "no pattern key"},
+          "not a map",
+          %{pattern: ~r/does not exist/i, hint: "valid hint"}
+        ]
+      }
+
+      result =
+        ErrorDetector.analyze_error(
+          "column does not exist",
+          nil,
+          %{},
+          ai_context
+        )
+
+      assert "valid hint" in result.suggestions
+      refute "should be ignored" in result.suggestions
     end
   end
 end

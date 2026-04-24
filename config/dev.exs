@@ -1,7 +1,7 @@
 import Config
 
 config :lotus,
-  ecto_repo: Lotus.Test.Repo,
+  storage_repo: Lotus.Test.Repo,
   default_source: "postgres",
   data_sources: %{
     "postgres" => Lotus.Test.Repo,

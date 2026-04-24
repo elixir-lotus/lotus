@@ -2,6 +2,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
   use Lotus.AICase, async: true
 
   alias Lotus.AI.QueryOptimizer
+  alias Lotus.Query.Statement
 
   describe "suggest_optimizations/2" do
     setup do
@@ -19,7 +20,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
         }
       end)
 
-      stub(Lotus.Source.Adapter, :explain_plan, fn _adapter, _sql, _params, _opts ->
+      stub(Lotus.Source.Adapter, :query_plan, fn _adapter, _sql, _params, _opts ->
         {:ok, postgres_explain_plan()}
       end)
 
@@ -31,7 +32,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
 
       assert {:ok, result} =
                QueryOptimizer.suggest_optimizations("openai:gpt-4o",
-                 sql: "SELECT * FROM orders WHERE created_at > '2024-01-01'",
+                 statement: Statement.new("SELECT * FROM orders WHERE created_at > '2024-01-01'"),
                  data_source: "postgres",
                  api_key: "sk-test"
                )
@@ -57,7 +58,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
 
       assert {:ok, result} =
                QueryOptimizer.suggest_optimizations("openai:gpt-4o",
-                 sql: "SELECT id, name FROM users WHERE id = 1",
+                 statement: Statement.new("SELECT id, name FROM users WHERE id = 1"),
                  data_source: "postgres",
                  api_key: "sk-test"
                )
@@ -66,7 +67,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
     end
 
     test "works when execution plan is unavailable" do
-      stub(Lotus.Source.Adapter, :explain_plan, fn _adapter, _sql, _params, _opts ->
+      stub(Lotus.Source.Adapter, :query_plan, fn _adapter, _sql, _params, _opts ->
         {:error, "permission denied"}
       end)
 
@@ -74,7 +75,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
 
       assert {:ok, result} =
                QueryOptimizer.suggest_optimizations("openai:gpt-4o",
-                 sql: "SELECT * FROM orders",
+                 statement: Statement.new("SELECT * FROM orders"),
                  data_source: "postgres",
                  api_key: "sk-test"
                )
@@ -89,24 +90,24 @@ defmodule Lotus.AI.QueryOptimizerTest do
 
       assert {:ok, _} =
                QueryOptimizer.suggest_optimizations("anthropic:claude-opus-4",
-                 sql: "SELECT * FROM orders",
+                 statement: Statement.new("SELECT * FROM orders"),
                  data_source: "postgres",
                  api_key: "sk-test"
                )
     end
 
-    test "includes get_table_schema tool" do
+    test "includes describe_table tool" do
       mock_with_assertion(fn _model, _context, opts ->
         tools = opts[:tools]
         assert length(tools) == 1
 
         tool_names = Enum.map(tools, & &1.name)
-        assert "get_table_schema" in tool_names
+        assert "describe_table" in tool_names
       end)
 
       assert {:ok, _} =
                QueryOptimizer.suggest_optimizations("openai:gpt-4o",
-                 sql: "SELECT * FROM orders",
+                 statement: Statement.new("SELECT * FROM orders"),
                  data_source: "postgres",
                  api_key: "sk-test"
                )
@@ -117,7 +118,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
 
       assert {:error, %Lotus.AI.Error.ServiceError{}} =
                QueryOptimizer.suggest_optimizations("openai:gpt-4o",
-                 sql: "SELECT * FROM orders",
+                 statement: Statement.new("SELECT * FROM orders"),
                  data_source: "postgres",
                  api_key: "sk-invalid"
                )
@@ -128,14 +129,14 @@ defmodule Lotus.AI.QueryOptimizerTest do
 
       assert {:error, %Lotus.AI.Error.ServiceError{}} =
                QueryOptimizer.suggest_optimizations("openai:gpt-4o",
-                 sql: "SELECT * FROM orders",
+                 statement: Statement.new("SELECT * FROM orders"),
                  data_source: "postgres",
                  api_key: "sk-test"
                )
     end
 
-    test "sanitizes Lotus variable syntax before calling explain_plan" do
-      expect(Lotus.Source.Adapter, :explain_plan, fn _adapter, sql, _params, _opts ->
+    test "sanitizes Lotus variable syntax before calling query_plan" do
+      expect(Lotus.Source.Adapter, :query_plan, fn _adapter, sql, _params, _opts ->
         refute sql =~ "{{"
         refute sql =~ "}}"
         assert sql =~ "NULL"
@@ -146,14 +147,17 @@ defmodule Lotus.AI.QueryOptimizerTest do
 
       assert {:ok, _} =
                QueryOptimizer.suggest_optimizations("openai:gpt-4o",
-                 sql: "SELECT * FROM users WHERE id = {{user_id}} AND status = {{status}}",
+                 statement:
+                   Statement.new(
+                     "SELECT * FROM users WHERE id = {{user_id}} AND status = {{status}}"
+                   ),
                  data_source: "postgres",
                  api_key: "sk-test"
                )
     end
 
-    test "sanitizes optional clause brackets before calling explain_plan" do
-      expect(Lotus.Source.Adapter, :explain_plan, fn _adapter, sql, _params, _opts ->
+    test "sanitizes optional clause brackets before calling query_plan" do
+      expect(Lotus.Source.Adapter, :query_plan, fn _adapter, sql, _params, _opts ->
         refute sql =~ "[["
         refute sql =~ "]]"
         assert sql =~ "AND name ILIKE"
@@ -171,14 +175,14 @@ defmodule Lotus.AI.QueryOptimizerTest do
 
       assert {:ok, _} =
                QueryOptimizer.suggest_optimizations("openai:gpt-4o",
-                 sql: sql,
+                 statement: Statement.new(sql),
                  data_source: "postgres",
                  api_key: "sk-test"
                )
     end
 
     test "sends original SQL with Lotus syntax to AI prompt" do
-      stub(Lotus.Source.Adapter, :explain_plan, fn _adapter, _sql, _params, _opts ->
+      stub(Lotus.Source.Adapter, :query_plan, fn _adapter, _sql, _params, _opts ->
         {:ok, postgres_explain_plan()}
       end)
 
@@ -193,7 +197,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
 
       assert {:ok, _} =
                QueryOptimizer.suggest_optimizations("openai:gpt-4o",
-                 sql: original_sql,
+                 statement: Statement.new(original_sql),
                  data_source: "postgres",
                  api_key: "sk-test"
                )

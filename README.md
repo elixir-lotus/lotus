@@ -62,7 +62,7 @@ end
 ```elixir
 # config/config.exs
 config :lotus,
-  ecto_repo: MyApp.Repo,
+  storage_repo: MyApp.Repo,
   default_source: "main",
   data_sources: %{
     "main" => MyApp.Repo
@@ -144,7 +144,7 @@ Lotus works great as a standalone library without the web UI. Use it to run quer
 
 ```elixir
 config :lotus,
-  ecto_repo: MyApp.Repo,
+  storage_repo: MyApp.Repo,
   default_source: "main",
   data_sources: %{
     "main" => MyApp.Repo,
@@ -235,6 +235,13 @@ See the [configuration guide](guides/configuration.md) for all options including
 - Cache backends and TTL profiles
 - AI configuration
 - Query execution options (timeouts, search paths)
+
+## Upgrading
+
+Upgrading from Lotus v0.x? See the [upgrading to v1.0 guide](guides/upgrading-to-v1.md)
+for the full list of config renames, DB column renames, middleware/telemetry
+payload changes, and adapter-contract updates — plus a step-by-step
+upgrade checklist.
 
 ## How Lotus Compares
 

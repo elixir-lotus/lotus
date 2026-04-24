@@ -2,6 +2,7 @@ defmodule Lotus.TelemetryTest do
   use Lotus.Case, async: true
 
   alias Lotus.Fixtures
+  alias Lotus.Query.Statement
   alias Lotus.Runner
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
   alias Lotus.Test.Repo
@@ -27,13 +28,17 @@ defmodule Lotus.TelemetryTest do
         nil
       )
 
-      {:ok, _result} = Runner.run_statement(@pg_adapter, "SELECT 1 AS num")
+      {:ok, _result} = Runner.run_statement(@pg_adapter, Statement.new("SELECT 1 AS num"))
 
       assert_received {:telemetry, [:lotus, :query, :start], %{system_time: _},
-                       %{repo: "postgres", sql: "SELECT 1 AS num"}}
+                       %{repo: "postgres", statement: %Statement{text: "SELECT 1 AS num"}}}
 
       assert_received {:telemetry, [:lotus, :query, :stop], measurements,
-                       %{repo: "postgres", sql: "SELECT 1 AS num", result: %Lotus.Result{}}}
+                       %{
+                         repo: "postgres",
+                         statement: %Statement{text: "SELECT 1 AS num"},
+                         result: %Lotus.Result{}
+                       }}
 
       assert is_integer(measurements.duration)
       assert measurements.duration >= 0
@@ -56,7 +61,8 @@ defmodule Lotus.TelemetryTest do
         nil
       )
 
-      {:ok, _result} = Runner.run_statement(@pg_adapter, "SELECT 1 AS num", [], context: ctx)
+      {:ok, _result} =
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT 1 AS num", []), context: ctx)
 
       assert_received {:telemetry, [:lotus, :query, :start], _,
                        %{repo: "postgres", context: ^ctx}}
@@ -79,7 +85,7 @@ defmodule Lotus.TelemetryTest do
         nil
       )
 
-      {:ok, _result} = Runner.run_statement(@pg_adapter, "SELECT 1 AS num")
+      {:ok, _result} = Runner.run_statement(@pg_adapter, Statement.new("SELECT 1 AS num"))
 
       assert_received {:telemetry, [:lotus, :query, :start], _, %{context: nil}}
       assert_received {:telemetry, [:lotus, :query, :stop], _, %{context: nil}}
@@ -101,7 +107,10 @@ defmodule Lotus.TelemetryTest do
         nil
       )
 
-      {:error, _} = Runner.run_statement(@pg_adapter, "DROP TABLE test_users", [], context: ctx)
+      {:error, _} =
+        Runner.run_statement(@pg_adapter, Statement.new("DROP TABLE test_users", []),
+          context: ctx
+        )
 
       assert_received {:telemetry, [:lotus, :query, :exception], _,
                        %{kind: :error, context: ^ctx}}
@@ -122,13 +131,17 @@ defmodule Lotus.TelemetryTest do
         nil
       )
 
-      {:error, _} = Runner.run_statement(@pg_adapter, "DROP TABLE test_users")
+      {:error, _} = Runner.run_statement(@pg_adapter, Statement.new("DROP TABLE test_users"))
 
       assert_received {:telemetry, [:lotus, :query, :start], %{system_time: _},
-                       %{repo: "postgres", sql: "DROP TABLE test_users"}}
+                       %{repo: "postgres", statement: %Statement{text: "DROP TABLE test_users"}}}
 
       assert_received {:telemetry, [:lotus, :query, :exception], measurements,
-                       %{kind: :error, repo: "postgres", sql: "DROP TABLE test_users"}}
+                       %{
+                         kind: :error,
+                         repo: "postgres",
+                         statement: %Statement{text: "DROP TABLE test_users"}
+                       }}
 
       assert is_integer(measurements.duration)
 
@@ -170,7 +183,7 @@ defmodule Lotus.TelemetryTest do
     end
 
     @tag :sqlite
-    test "emits start and stop events for get_table_schema" do
+    test "emits start and stop events for describe_table" do
       ref = make_ref()
       pid = self()
 
@@ -186,13 +199,13 @@ defmodule Lotus.TelemetryTest do
         nil
       )
 
-      {:ok, _schema} = Lotus.Schema.get_table_schema("sqlite", "products")
+      {:ok, _schema} = Lotus.Schema.describe_table("sqlite", "products")
 
       assert_received {:telemetry, [:lotus, :schema, :introspection, :start], _,
-                       %{operation: :get_table_schema, repo: "sqlite"}}
+                       %{operation: :describe_table, repo: "sqlite"}}
 
       assert_received {:telemetry, [:lotus, :schema, :introspection, :stop], %{duration: _},
-                       %{operation: :get_table_schema, repo: "sqlite", result: :ok}}
+                       %{operation: :describe_table, repo: "sqlite", result: :ok}}
 
       :telemetry.detach("#{inspect(ref)}")
     end

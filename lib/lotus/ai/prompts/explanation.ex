@@ -65,13 +65,13 @@ defmodule Lotus.AI.Prompts.Explanation do
   ## Parameters
 
   - `sql` - The full SQL query to explain
-  - `schema_context` - Optional schema context string
+  - `source_context` - Optional source context string
   """
   @spec user_prompt(String.t(), String.t() | nil) :: String.t()
-  def user_prompt(sql, schema_context \\ nil) do
+  def user_prompt(sql, source_context \\ nil) do
     [
       "Explain what this SQL query does:\n\n```sql\n#{sql}\n```",
-      if(schema_context, do: "\n\n## Schema Context\n\n#{schema_context}")
+      if(source_context, do: "\n\n## Source Context\n\n#{source_context}")
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join()
@@ -88,16 +88,16 @@ defmodule Lotus.AI.Prompts.Explanation do
 
   - `fragment` - The selected SQL fragment to explain
   - `full_sql` - The complete SQL query for context
-  - `schema_context` - Optional schema context string
+  - `source_context` - Optional source context string
   """
   @spec fragment_prompt(String.t(), String.t(), String.t() | nil) :: String.t()
-  def fragment_prompt(fragment, full_sql, schema_context \\ nil) do
+  def fragment_prompt(fragment, full_sql, source_context \\ nil) do
     [
       "The user selected the following fragment from a SQL query and wants it explained.\n",
       "\n## Selected Fragment\n\n```sql\n#{fragment}\n```",
       "\n\n## Full Query (for context)\n\n```sql\n#{full_sql}\n```",
       "\n\nExplain ONLY what the selected fragment does. Use the full query for context but do not describe other parts of the query.",
-      if(schema_context, do: "\n\n## Schema Context\n\n#{schema_context}")
+      if(source_context, do: "\n\n## Source Context\n\n#{source_context}")
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join()

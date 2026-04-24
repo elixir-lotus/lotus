@@ -2,17 +2,21 @@ defmodule Lotus.AI.Actions.ValidateSQLTest do
   use Lotus.AICase, async: true
 
   alias Lotus.AI.Actions.ValidateSQL
+  alias Lotus.Query.Statement
+  alias Lotus.Source.Adapter
 
   describe "run/2" do
     test "returns valid: true when validation succeeds" do
-      expect(Lotus.SQL.Validator, :validate, fn "SELECT 1", "postgres" -> :ok end)
+      expect(Adapter, :validate_statement, fn _adapter, %Statement{text: "SELECT 1"}, _opts ->
+        :ok
+      end)
 
       assert {:ok, %{valid: true}} =
                ValidateSQL.run(%{sql: "SELECT 1", data_source: "postgres"}, %{})
     end
 
     test "returns valid: false with error when validation fails" do
-      expect(Lotus.SQL.Validator, :validate, fn _sql, "postgres" ->
+      expect(Adapter, :validate_statement, fn _adapter, %Statement{}, _opts ->
         {:error, "SQL syntax error: unexpected token"}
       end)
 

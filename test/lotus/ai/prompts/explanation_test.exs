@@ -48,15 +48,15 @@ defmodule Lotus.AI.Prompts.ExplanationTest do
       assert prompt =~ "Explain what this SQL query does"
     end
 
-    test "includes schema context when provided" do
+    test "includes source context when provided" do
       prompt = Explanation.user_prompt("SELECT * FROM users", "users: id, name, email")
-      assert prompt =~ "## Schema Context"
+      assert prompt =~ "## Source Context"
       assert prompt =~ "users: id, name, email"
     end
 
-    test "omits schema context when nil" do
+    test "omits source context when nil" do
       prompt = Explanation.user_prompt("SELECT * FROM users", nil)
-      refute prompt =~ "## Schema Context"
+      refute prompt =~ "## Source Context"
     end
   end
 
@@ -78,17 +78,17 @@ defmodule Lotus.AI.Prompts.ExplanationTest do
       assert prompt =~ "context"
     end
 
-    test "includes schema context when provided" do
+    test "includes source context when provided" do
       prompt =
         Explanation.fragment_prompt("JOIN orders", "SELECT ...", "orders: id, total, user_id")
 
-      assert prompt =~ "## Schema Context"
+      assert prompt =~ "## Source Context"
       assert prompt =~ "orders: id, total, user_id"
     end
 
-    test "omits schema context when nil" do
+    test "omits source context when nil" do
       prompt = Explanation.fragment_prompt("JOIN orders", "SELECT ...", nil)
-      refute prompt =~ "## Schema Context"
+      refute prompt =~ "## Source Context"
     end
   end
 end

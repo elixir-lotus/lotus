@@ -55,7 +55,7 @@ defmodule Lotus.AI.QueryExplainer do
 
   defp build_tools(data_source) do
     [
-      Tool.from_action(Actions.GetTableSchema, bind: %{data_source: data_source})
+      Tool.from_action(Actions.DescribeTable, bind: %{data_source: data_source})
     ]
   end
 

@@ -1,37 +1,41 @@
 defmodule Lotus.AI.QueryOptimizer do
   @moduledoc """
-  Generates AI-powered optimization suggestions for SQL queries.
+  Generates AI-powered optimization suggestions for a query.
 
-  Analyzes a query's execution plan and structure to suggest index additions,
-  query rewrites, or structural improvements.
+  Runs the adapter's `prepare_for_analysis/2` to resolve Lotus template
+  syntax into a form parseable by the engine's diagnostic endpoint, calls
+  `query_plan/4` to get an execution plan (when available), and sends
+  both the statement and the plan to the LLM for review.
+
+  The module is adapter-agnostic — SQL dialects produce EXPLAIN output,
+  non-SQL adapters can produce whatever their native profile/diagnostic
+  API returns (or `nil` if unavailable; the LLM then reviews the
+  statement structurally).
   """
 
   alias Lotus.AI.Actions
   alias Lotus.AI.Prompts.Optimization
   alias Lotus.AI.Tool
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
-  alias Lotus.SQL.OptionalClause
-  alias Lotus.Variables
 
   @doc """
-  Generate optimization suggestions for a SQL query.
-
-  Runs EXPLAIN on the query to get the execution plan, then sends both
-  the SQL and plan to the AI for analysis.
+  Generate optimization suggestions for a statement.
 
   ## Options
 
-  - `:sql` (required) - The SQL query to optimize
-  - `:data_source` (required) - Name of the data source
-  - `:api_key` (required) - API key for the LLM provider
-  - `:params` (optional) - Query parameters (default: `[]`)
-  - `:search_path` (optional) - PostgreSQL search path
-  - `:temperature` (optional) - LLM temperature (default: `0.1`)
+    * `:statement` (required) — a `%Lotus.Query.Statement{}` to review.
+    * `:data_source` (required) — name of the data source.
+    * `:api_key` (required) — API key for the LLM provider.
+    * `:search_path` (optional) — Postgres search path.
+    * `:temperature` (optional) — LLM temperature (default: `0.1`).
 
   ## Returns
 
-  - `{:ok, result}` - Map with `:suggestions`, `:model`, and `:usage`
-  - `{:error, term}` - Error tuple
+    * `{:ok, result}` — map with `:suggestions`, `:model`, `:usage`.
+    * `{:error, :ai_not_supported_for_source}` — adapter returned
+      `{:error, _}` from `ai_context/1`.
+    * `{:error, term}` — other failure.
   """
   @type optimization_response :: %{
           suggestions: [map()],
@@ -47,50 +51,52 @@ defmodule Lotus.AI.QueryOptimizer do
           {:ok, optimization_response()} | {:error, term()}
   def suggest_optimizations(model_string, opts) do
     data_source = Keyword.fetch!(opts, :data_source)
-    sql = Keyword.fetch!(opts, :sql)
+    statement = Keyword.fetch!(opts, :statement)
     api_key = Keyword.fetch!(opts, :api_key)
-    params = Keyword.get(opts, :params, [])
     search_path = Keyword.get(opts, :search_path)
     temperature = Keyword.get(opts, :temperature, 0.1)
 
     adapter = Lotus.Source.get_source!(data_source)
-    database_type = Adapter.source_type(adapter)
 
-    execution_plan = get_execution_plan(adapter, sql, params, search_path: search_path)
+    case Adapter.ai_context(adapter) do
+      {:ok, ai_context} ->
+        execution_plan = get_execution_plan(adapter, statement, search_path: search_path)
 
-    system_prompt = Optimization.system_prompt(database_type)
-    user_prompt = Optimization.user_prompt(sql, execution_plan)
+        system_prompt = Optimization.system_prompt(ai_context)
+        user_prompt = Optimization.user_prompt(statement.text, execution_plan)
 
-    tools = build_tools(data_source)
-    messages = build_messages(system_prompt, user_prompt)
-    context = ReqLLM.Context.new(messages)
+        tools = build_tools(data_source)
+        messages = build_messages(system_prompt, user_prompt)
+        context = ReqLLM.Context.new(messages)
 
-    Tool.run(model_string, context, tools, api_key: api_key, temperature: temperature)
-    |> handle_response(model_string)
-  end
+        Tool.run(model_string, context, tools, api_key: api_key, temperature: temperature)
+        |> handle_response(model_string)
 
-  defp get_execution_plan(adapter, sql, params, opts) do
-    explainable_sql = prepare_sql_for_explain(sql)
+      {:error, :ai_not_supported} ->
+        {:error, :ai_not_supported_for_source}
 
-    case Adapter.explain_plan(adapter, explainable_sql, params, opts) do
-      {:ok, plan} -> plan
-      {:error, _} -> nil
+      {:error, _} = err ->
+        err
     end
   end
 
-  # Strips Lotus-specific syntax so the SQL is valid for EXPLAIN:
-  # - Removes [[ ]] brackets (keeps inner content so all clauses are visible)
-  # - Replaces {{variable}} placeholders with NULL
-  # Note: nested [[ ]] is not part of Lotus syntax and is not supported.
-  defp prepare_sql_for_explain(sql) do
-    sql
-    |> OptionalClause.strip_brackets()
-    |> Variables.neutralize("NULL")
+  # Returns the engine's execution plan for the statement (a string), or
+  # `nil` when the adapter can't produce one (no plan API, or
+  # `prepare_for_analysis/2` declined). The prompt branches on plan
+  # availability — a `nil` plan still produces useful structural
+  # suggestions.
+  defp get_execution_plan(adapter, %Statement{} = statement, opts) do
+    with {:ok, prepared} <- Adapter.prepare_for_analysis(adapter, statement),
+         {:ok, plan} <- Adapter.query_plan(adapter, prepared.text, prepared.params, opts) do
+      plan
+    else
+      _ -> nil
+    end
   end
 
   defp build_tools(data_source) do
     [
-      Tool.from_action(Actions.GetTableSchema, bind: %{data_source: data_source})
+      Tool.from_action(Actions.DescribeTable, bind: %{data_source: data_source})
     ]
   end
 

@@ -1,7 +1,7 @@
-defmodule Lotus.SQL.OptionalClauseTest do
+defmodule Lotus.Query.OptionalClauseTest do
   use ExUnit.Case, async: true
 
-  alias Lotus.SQL.OptionalClause
+  alias Lotus.Query.OptionalClause
 
   describe "process/2" do
     test "passes through SQL with no brackets" do

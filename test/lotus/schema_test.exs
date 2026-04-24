@@ -43,7 +43,7 @@ defmodule Lotus.SchemaTest do
 
     @tag :sqlite
     test "gets schema for a table" do
-      {:ok, schema} = Schema.get_table_schema("sqlite", "products")
+      {:ok, schema} = Schema.describe_table("sqlite", "products")
 
       assert is_list(schema)
       refute Enum.empty?(schema)
@@ -68,7 +68,7 @@ defmodule Lotus.SchemaTest do
 
     @tag :sqlite
     test "gets schema for a table with foreign keys" do
-      {:ok, schema} = Schema.get_table_schema(Lotus.Test.SqliteRepo, "order_items")
+      {:ok, schema} = Schema.describe_table(Lotus.Test.SqliteRepo, "order_items")
 
       column_names = Enum.map(schema, & &1.name)
       assert "order_id" in column_names
@@ -79,14 +79,14 @@ defmodule Lotus.SchemaTest do
 
     @tag :sqlite
     test "returns empty schema for non-existent table" do
-      {:ok, schema} = Schema.get_table_schema(Lotus.Test.SqliteRepo, "non_existent_table")
+      {:ok, schema} = Schema.describe_table(Lotus.Test.SqliteRepo, "non_existent_table")
 
       assert schema == []
     end
 
     @tag :sqlite
     test "includes default values in schema" do
-      {:ok, schema} = Schema.get_table_schema(Lotus.Test.SqliteRepo, "products")
+      {:ok, schema} = Schema.describe_table(Lotus.Test.SqliteRepo, "products")
 
       stock_quantity_col = Enum.find(schema, &(&1.name == "stock_quantity"))
       assert stock_quantity_col.default != nil
@@ -163,7 +163,7 @@ defmodule Lotus.SchemaTest do
 
     @tag :postgres
     test "gets schema for a table" do
-      {:ok, schema} = Schema.get_table_schema(Lotus.Test.Repo, "test_users")
+      {:ok, schema} = Schema.describe_table(Lotus.Test.Repo, "test_users")
 
       assert is_list(schema)
       refute Enum.empty?(schema)
@@ -182,7 +182,7 @@ defmodule Lotus.SchemaTest do
 
     @tag :postgres
     test "gets schema for a table with schema prefix" do
-      {:ok, schema} = Schema.get_table_schema(Lotus.Test.Repo, "test_users", schema: "public")
+      {:ok, schema} = Schema.describe_table(Lotus.Test.Repo, "test_users", schema: "public")
 
       assert is_list(schema)
       refute Enum.empty?(schema)
@@ -194,7 +194,7 @@ defmodule Lotus.SchemaTest do
 
     @tag :postgres
     test "returns error for non-existent table" do
-      {:error, error} = Schema.get_table_schema(Lotus.Test.Repo, "non_existent_table")
+      {:error, error} = Schema.describe_table(Lotus.Test.Repo, "non_existent_table")
 
       assert error =~ "not found"
     end
@@ -284,7 +284,7 @@ defmodule Lotus.SchemaTest do
 
     @tag :mysql
     test "gets schema for a table" do
-      {:ok, schema} = Schema.get_table_schema(Lotus.Test.MysqlRepo, "products")
+      {:ok, schema} = Schema.describe_table(Lotus.Test.MysqlRepo, "products")
 
       assert is_list(schema)
       refute Enum.empty?(schema)
@@ -308,7 +308,7 @@ defmodule Lotus.SchemaTest do
 
     @tag :mysql
     test "gets schema for a table with foreign keys" do
-      {:ok, schema} = Schema.get_table_schema(Lotus.Test.MysqlRepo, "order_items")
+      {:ok, schema} = Schema.describe_table(Lotus.Test.MysqlRepo, "order_items")
 
       column_names = Enum.map(schema, & &1.name)
       assert "order_id" in column_names
@@ -319,14 +319,14 @@ defmodule Lotus.SchemaTest do
 
     @tag :mysql
     test "returns error for non-existent table" do
-      {:error, error} = Schema.get_table_schema(Lotus.Test.MysqlRepo, "non_existent_table")
+      {:error, error} = Schema.describe_table(Lotus.Test.MysqlRepo, "non_existent_table")
 
       assert error =~ "not found"
     end
 
     @tag :mysql
     test "includes default values in schema" do
-      {:ok, schema} = Schema.get_table_schema(Lotus.Test.MysqlRepo, "products")
+      {:ok, schema} = Schema.describe_table(Lotus.Test.MysqlRepo, "products")
 
       stock_quantity_col = Enum.find(schema, &(&1.name == "stock_quantity"))
       assert stock_quantity_col.default != nil
@@ -362,9 +362,9 @@ defmodule Lotus.SchemaTest do
       end
     end
 
-    test "get_table_schema returns error for non-existent repo name" do
+    test "describe_table returns error for non-existent repo name" do
       assert_raise ArgumentError, ~r/Data source \"nonexistent\" not configured/, fn ->
-        Schema.get_table_schema("nonexistent", "some_table")
+        Schema.describe_table("nonexistent", "some_table")
       end
     end
 
@@ -401,24 +401,24 @@ defmodule Lotus.SchemaTest do
     end
 
     @tag :sqlite
-    test "get_table_schema is accessible through main module for SQLite" do
-      {:ok, schema} = Lotus.get_table_schema("sqlite", "products")
+    test "describe_table is accessible through main module for SQLite" do
+      {:ok, schema} = Lotus.describe_table("sqlite", "products")
 
       assert is_list(schema)
       refute Enum.empty?(schema)
     end
 
     @tag :postgres
-    test "get_table_schema is accessible through main module for PostgreSQL" do
-      {:ok, schema} = Lotus.get_table_schema("postgres", "test_users")
+    test "describe_table is accessible through main module for PostgreSQL" do
+      {:ok, schema} = Lotus.describe_table("postgres", "test_users")
 
       assert is_list(schema)
       refute Enum.empty?(schema)
     end
 
     @tag :mysql
-    test "get_table_schema is accessible through main module for MySQL" do
-      {:ok, schema} = Lotus.get_table_schema("mysql", "products")
+    test "describe_table is accessible through main module for MySQL" do
+      {:ok, schema} = Lotus.describe_table("mysql", "products")
 
       assert is_list(schema)
       refute Enum.empty?(schema)
@@ -506,19 +506,19 @@ defmodule Lotus.SchemaTest do
       {:ok, adapter: adapter}
     end
 
-    test "get_table_schema/3 propagates permission errors from resolve_table_schema" do
+    test "describe_table/3 propagates permission errors from resolve_table_namespace" do
       Lotus.Source.Adapter
-      |> expect(:resolve_table_schema, fn _adapter, _table, _schemas ->
+      |> expect(:resolve_table_namespace, fn _adapter, _table, _schemas ->
         {:error, "permission denied for schema reporting"}
       end)
 
       assert {:error, "permission denied for schema reporting"} =
-               Schema.get_table_schema("postgres", "orders", schema: "reporting")
+               Schema.describe_table("postgres", "orders", schema: "reporting")
     end
 
-    test "get_table_stats/3 propagates connection errors from resolve_table_schema" do
+    test "get_table_stats/3 propagates connection errors from resolve_table_namespace" do
       Lotus.Source.Adapter
-      |> expect(:resolve_table_schema, fn _adapter, _table, _schemas ->
+      |> expect(:resolve_table_namespace, fn _adapter, _table, _schemas ->
         {:error, "connection refused"}
       end)
 
@@ -526,47 +526,47 @@ defmodule Lotus.SchemaTest do
                Schema.get_table_stats("postgres", "orders", schema: "reporting")
     end
 
-    test "get_table_schema/3 propagates errors with schemas option" do
+    test "describe_table/3 propagates errors with schemas option" do
       Lotus.Source.Adapter
-      |> expect(:resolve_table_schema, fn _adapter, _table, _schemas ->
+      |> expect(:resolve_table_namespace, fn _adapter, _table, _schemas ->
         {:error, "permission denied"}
       end)
 
       assert {:error, "permission denied"} =
-               Schema.get_table_schema("postgres", "orders", schemas: ["reporting", "public"])
+               Schema.describe_table("postgres", "orders", schemas: ["reporting", "public"])
     end
 
-    test "get_table_schema/3 propagates errors with search_path option" do
+    test "describe_table/3 propagates errors with search_path option" do
       Lotus.Source.Adapter
-      |> expect(:resolve_table_schema, fn _adapter, _table, _schemas ->
+      |> expect(:resolve_table_namespace, fn _adapter, _table, _schemas ->
         {:error, "permission denied"}
       end)
 
       assert {:error, "permission denied"} =
-               Schema.get_table_schema("postgres", "orders", search_path: "reporting, public")
+               Schema.describe_table("postgres", "orders", search_path: "reporting, public")
     end
 
     test "adapter errors are not cached — retried on next call" do
       Lotus.Source.Adapter
-      |> expect(:resolve_table_schema, fn _adapter, _table, _schemas ->
+      |> expect(:resolve_table_namespace, fn _adapter, _table, _schemas ->
         {:error, "transient error"}
       end)
 
       assert {:error, "transient error"} =
-               Schema.get_table_schema("postgres", "orders", schema: "reporting")
+               Schema.describe_table("postgres", "orders", schema: "reporting")
 
       Lotus.Source.Adapter
-      |> expect(:resolve_table_schema, fn _adapter, _table, _schemas ->
+      |> expect(:resolve_table_namespace, fn _adapter, _table, _schemas ->
         {:ok, "reporting"}
       end)
 
       Lotus.Source.Adapter
-      |> expect(:get_table_schema, fn _adapter, _schema, _table ->
+      |> expect(:describe_table, fn _adapter, _schema, _table ->
         {:ok, [%{name: "id", type: "integer", nullable: false, default: nil, primary_key: true}]}
       end)
 
       assert {:ok, [%{name: "id"}]} =
-               Schema.get_table_schema("postgres", "orders", schema: "reporting")
+               Schema.describe_table("postgres", "orders", schema: "reporting")
     end
   end
 end

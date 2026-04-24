@@ -22,7 +22,7 @@ defmodule Lotus.Storage.SchemaCache do
       adapter = Lotus.Source.resolve!("main", nil)
 
       # Get all columns for a table
-      {:ok, schema} = SchemaCache.get_table_schema(adapter, "public", "users")
+      {:ok, schema} = SchemaCache.describe_table(adapter, "public", "users")
       # => %{"id" => %{type: "uuid", nullable: false, ...}, ...}
 
       # Get specific column type
@@ -52,16 +52,16 @@ defmodule Lotus.Storage.SchemaCache do
 
   ## Examples
 
-      {:ok, schema} = SchemaCache.get_table_schema(adapter, "public", "users")
+      {:ok, schema} = SchemaCache.describe_table(adapter, "public", "users")
       schema["id"]
       # => %{type: "uuid", nullable: false, default: nil, primary_key: true}
   """
-  @spec get_table_schema(
+  @spec describe_table(
           adapter :: Adapter.t(),
           schema :: String.t() | nil,
           table :: String.t()
         ) :: {:ok, %{String.t() => column_info()}} | {:error, term()}
-  def get_table_schema(%Adapter{} = adapter, schema, table) do
+  def describe_table(%Adapter{} = adapter, schema, table) do
     cache_key = cache_key(adapter, schema, table)
     ttl_ms = get_ttl_ms()
 
@@ -104,7 +104,7 @@ defmodule Lotus.Storage.SchemaCache do
           column :: String.t()
         ) :: {:ok, String.t()} | :not_found
   def get_column_type(%Adapter{} = adapter, schema, table, column) do
-    case get_table_schema(adapter, schema, table) do
+    case describe_table(adapter, schema, table) do
       {:ok, table_schema} ->
         case Map.get(table_schema, column) do
           nil -> :not_found
@@ -148,7 +148,7 @@ defmodule Lotus.Storage.SchemaCache do
         ) :: :ok
   def warm_cache(%Adapter{} = adapter, tables) do
     Enum.each(tables, fn {schema, table} ->
-      case get_table_schema(adapter, schema, table) do
+      case describe_table(adapter, schema, table) do
         {:ok, _} ->
           Logger.debug("Warmed schema cache for #{adapter.name}.#{schema}.#{table}")
 
@@ -168,7 +168,7 @@ defmodule Lotus.Storage.SchemaCache do
   end
 
   defp fetch_schema_from_db(%Adapter{} = adapter, schema, table) do
-    case Adapter.get_table_schema(adapter, schema, table) do
+    case Adapter.describe_table(adapter, schema, table) do
       {:ok, columns} ->
         Enum.into(columns, %{}, fn column ->
           {column.name, Map.take(column, [:type, :nullable, :default, :primary_key])}

@@ -3,7 +3,8 @@ defmodule Lotus.Test.NoOpAdapter do
   @behaviour Lotus.Source.Adapter
 
   @impl true
-  def extract_accessed_resources(_state, _query, _params, _opts), do: :skip
+  def extract_accessed_resources(_state, _statement),
+    do: {:unrestricted, "test no-op adapter"}
 
   @impl true
   def execute_query(_state, _sql, _params, _opts), do: {:error, "not implemented"}
@@ -14,21 +15,17 @@ defmodule Lotus.Test.NoOpAdapter do
   @impl true
   def list_tables(_state, _schemas, _opts), do: {:ok, []}
   @impl true
-  def get_table_schema(_state, _schema, _table), do: {:ok, []}
+  def describe_table(_state, _schema, _table), do: {:ok, []}
   @impl true
-  def resolve_table_schema(_state, _table, _schemas), do: {:ok, nil}
+  def resolve_table_namespace(_state, _table, _schemas), do: {:ok, nil}
   @impl true
   def quote_identifier(_state, id), do: ~s("#{id}")
   @impl true
-  def param_placeholder(_state, index, _var, _type), do: "$#{index}"
+  def apply_filters(_state, statement, _filters), do: statement
   @impl true
-  def limit_offset_placeholders(_state, li, oi), do: {"$#{li}", "$#{oi}"}
+  def apply_sorts(_state, statement, _sorts), do: statement
   @impl true
-  def apply_filters(_state, sql, params, _filters), do: {sql, params}
-  @impl true
-  def apply_sorts(_state, sql, _sorts), do: sql
-  @impl true
-  def explain_plan(_state, _sql, _params, _opts), do: {:ok, ""}
+  def query_plan(_state, _sql, _params, _opts), do: {:ok, ""}
   @impl true
   def builtin_denies(_state), do: []
   @impl true
@@ -69,21 +66,17 @@ defmodule Lotus.Test.StubAdapter do
   @impl true
   def list_tables(_state, _schemas, _opts), do: {:ok, []}
   @impl true
-  def get_table_schema(_state, _schema, _table), do: {:ok, []}
+  def describe_table(_state, _schema, _table), do: {:ok, []}
   @impl true
-  def resolve_table_schema(_state, _table, _schemas), do: {:ok, nil}
+  def resolve_table_namespace(_state, _table, _schemas), do: {:ok, nil}
   @impl true
   def quote_identifier(_state, id), do: ~s("#{id}")
   @impl true
-  def param_placeholder(_state, index, _var, _type), do: "$#{index}"
+  def apply_filters(_state, statement, _filters), do: statement
   @impl true
-  def limit_offset_placeholders(_state, li, oi), do: {"$#{li}", "$#{oi}"}
+  def apply_sorts(_state, statement, _sorts), do: statement
   @impl true
-  def apply_filters(_state, sql, params, _filters), do: {sql, params}
-  @impl true
-  def apply_sorts(_state, sql, _sorts), do: sql
-  @impl true
-  def explain_plan(_state, _sql, _params, _opts), do: {:ok, ""}
+  def query_plan(_state, _sql, _params, _opts), do: {:ok, ""}
   @impl true
   def builtin_denies(_state), do: []
   @impl true

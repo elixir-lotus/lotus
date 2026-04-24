@@ -10,7 +10,7 @@ defmodule Lotus.Config do
   Lotus requires a storage repository where it will store query definitions:
 
       config :lotus,
-        ecto_repo: MyApp.Repo  # Where Lotus stores its query definitions
+        storage_repo: MyApp.Repo  # Where Lotus stores its query definitions
 
   ## Data Sources Configuration
 
@@ -22,9 +22,6 @@ defmodule Lotus.Config do
           "analytics" => MyApp.AnalyticsRepo,
           "warehouse" => MyApp.WarehouseRepo
         }
-
-  > **Deprecation**: The `:data_repos` config key still works but emits a warning.
-  > Use `:data_sources` in new code.
 
   ## Visibility Configuration
 
@@ -76,10 +73,8 @@ defmodule Lotus.Config do
         read_only: false               # Defaults to true; set to false to allow writes
   """
 
-  require Logger
-
   @type t :: %{
-          ecto_repo: module(),
+          storage_repo: module(),
           read_only: boolean(),
           unique_names: boolean(),
           data_sources: %{String.t() => module() | map()},
@@ -105,7 +100,7 @@ defmodule Lotus.Config do
         }
 
   @schema [
-    ecto_repo: [
+    storage_repo: [
       type: :atom,
       required: true,
       doc: "The Ecto repository where Lotus will store its query definitions."
@@ -115,6 +110,20 @@ defmodule Lotus.Config do
       default: true,
       doc:
         "When true (default), blocks write operations (INSERT, UPDATE, DELETE, DDL) at the application level. Set to false to allow write queries."
+    ],
+    allow_unrestricted_resources: [
+      type: :boolean,
+      default: false,
+      doc: """
+      Global opt-in for adapters that return `{:unrestricted, _}` from
+      `extract_accessed_resources/2`. When `false` (default), preflight blocks
+      such statements with an error. When `true`, Lotus trusts the adapter
+      (or its engine's own access control layer) to enforce visibility —
+      useful for non-SQL adapters like Elasticsearch that gate access at
+      the index level. A per-source opt-in via `allow_unrestricted_resources: true`
+      in a `data_sources` entry's config map overrides this flag for that
+      source only.
+      """
     ],
     data_sources: [
       type: {:map, :string, {:or, [:atom, :map]}},
@@ -215,6 +224,20 @@ defmodule Lotus.Config do
       doc:
         "List of external adapter modules implementing `Lotus.Source.Adapter` with `can_handle?/1` and `wrap/2`."
     ],
+    trusted_source_adapters: [
+      type: {:list, :atom},
+      default: [],
+      doc: """
+      Adapter modules whose `ai_context/1` output Lotus plumbs through
+      to the LLM prompt unchanged. The built-in `Lotus.Source.Adapters.Ecto`
+      (and its per-dialect wrappers) are always trusted; listing a
+      module here trusts an external adapter the same way.
+
+      For untrusted adapters, only `:language` reaches the prompt;
+      `:syntax_notes` and `:error_patterns` are discarded to bound the
+      prompt-injection blast radius.
+      """
+    ],
     source_resolver: [
       type: :atom,
       default: Lotus.Source.Resolvers.Static,
@@ -236,7 +259,7 @@ defmodule Lotus.Config do
       Format: %{event => [{Module, opts}]}
 
       Events: :before_query, :after_query, :after_list_schemas, :after_list_tables,
-      :after_get_table_schema, :after_list_relations, :after_discover
+      :after_describe_table, :after_list_relations, :after_discover
 
       ## Example
 
@@ -356,12 +379,11 @@ defmodule Lotus.Config do
   defp get_lotus_config do
     Application.get_all_env(:lotus)
     |> Keyword.take([
-      :ecto_repo,
+      :storage_repo,
       :read_only,
+      :allow_unrestricted_resources,
       :unique_names,
-      :data_repos,
       :data_sources,
-      :default_repo,
       :default_source,
       :default_page_size,
       :table_visibility,
@@ -370,45 +392,18 @@ defmodule Lotus.Config do
       :cache,
       :ai,
       :source_adapters,
+      :trusted_source_adapters,
       :source_resolver,
       :visibility_resolver,
       :middleware
     ])
-    |> normalize_deprecated_keys()
-  end
-
-  defp normalize_deprecated_keys(opts) do
-    opts
-    |> normalize_key(:data_repos, :data_sources)
-    |> normalize_key(:default_repo, :default_source)
-  end
-
-  defp normalize_key(opts, old_key, new_key) do
-    has_old = Keyword.has_key?(opts, old_key)
-    has_new = Keyword.has_key?(opts, new_key)
-
-    cond do
-      has_old and has_new ->
-        raise ArgumentError,
-              "Cannot configure both :#{old_key} and :#{new_key}. " <>
-                "Use :#{new_key} only — :#{old_key} is deprecated."
-
-      has_old ->
-        Logger.warning("Lotus config :#{old_key} is deprecated. Use :#{new_key} instead.")
-
-        value = Keyword.fetch!(opts, old_key)
-        opts |> Keyword.delete(old_key) |> Keyword.put(new_key, value)
-
-      true ->
-        opts
-    end
   end
 
   @doc """
   Returns the configured Ecto repository.
   """
   @spec repo!() :: module()
-  def repo!, do: load!()[:ecto_repo]
+  def repo!, do: load!()[:storage_repo]
 
   @doc """
   Returns whether unique query names are enforced.
@@ -421,6 +416,29 @@ defmodule Lotus.Config do
   """
   @spec read_only?() :: boolean()
   def read_only?, do: load!()[:read_only]
+
+  @doc """
+  Returns whether the given source is allowed to return
+  `{:unrestricted, _}` from `extract_accessed_resources/2` without being
+  blocked by preflight.
+
+  Resolution order:
+
+    1. If the source's `data_sources` entry is a config map and has
+       `allow_unrestricted_resources: true`, returns `true` for that
+       source regardless of the global flag.
+    2. Falls back to the top-level `:allow_unrestricted_resources` flag.
+
+  Used by `Lotus.Preflight.authorize/3` to gate non-SQL adapters whose
+  engines enforce visibility at a layer Lotus can't introspect.
+  """
+  @spec allow_unrestricted_resources?(String.t()) :: boolean()
+  def allow_unrestricted_resources?(name) when is_binary(name) do
+    case Map.get(data_sources(), name) do
+      %{allow_unrestricted_resources: true} -> true
+      _ -> load!()[:allow_unrestricted_resources]
+    end
+  end
 
   @doc """
   Returns the configured data sources.
@@ -513,43 +531,6 @@ defmodule Lotus.Config do
   @spec column_rules_for_source_name(String.t()) :: list()
   def column_rules_for_source_name(source_name),
     do: visibility_rules_for(:column_visibility, source_name)
-
-  # ── Deprecated aliases ──────────────────────────────────────────────────────
-
-  @doc false
-  @deprecated "Use data_sources/0 instead. Will be removed in v1.0"
-  @spec data_repos() :: %{String.t() => module() | map()}
-  def data_repos, do: data_sources()
-
-  @doc false
-  @deprecated "Use get_data_source!/1 instead. Will be removed in v1.0"
-  @spec get_data_repo!(String.t()) :: module() | map()
-  def get_data_repo!(name), do: get_data_source!(name)
-
-  @doc false
-  @deprecated "Use list_data_source_names/0 instead. Will be removed in v1.0"
-  @spec list_data_repo_names() :: [String.t()]
-  def list_data_repo_names, do: list_data_source_names()
-
-  @doc false
-  @deprecated "Use default_data_source/0 instead. Will be removed in v1.0"
-  @spec default_data_repo() :: {String.t(), module()}
-  def default_data_repo, do: default_data_source()
-
-  @doc false
-  @deprecated "Use rules_for_source_name/1 instead. Will be removed in v1.0"
-  @spec rules_for_repo_name(String.t()) :: keyword()
-  def rules_for_repo_name(name), do: rules_for_source_name(name)
-
-  @doc false
-  @deprecated "Use schema_rules_for_source_name/1 instead. Will be removed in v1.0"
-  @spec schema_rules_for_repo_name(String.t()) :: keyword()
-  def schema_rules_for_repo_name(name), do: schema_rules_for_source_name(name)
-
-  @doc false
-  @deprecated "Use column_rules_for_source_name/1 instead. Will be removed in v1.0"
-  @spec column_rules_for_repo_name(String.t()) :: list()
-  def column_rules_for_repo_name(name), do: column_rules_for_source_name(name)
 
   # Shared lookup for source-keyed visibility maps. Matches the source name
   # string against map keys via `to_string/1`, then falls back to the
@@ -691,6 +672,27 @@ defmodule Lotus.Config do
   """
   @spec source_adapters() :: [module()]
   def source_adapters, do: load!()[:source_adapters]
+
+  @doc """
+  Return whether the given adapter module is trusted to contribute
+  free-form text (`:syntax_notes`, `:error_patterns`) to AI prompts.
+
+  Always-trusted: the built-in `Lotus.Source.Adapters.Ecto` and the
+  first-party per-dialect adapters it exposes via `builtin_adapters/0`
+  (Postgres, MySQL, SQLite3). Additional modules can be trusted via
+  `config :lotus, :trusted_source_adapters, [MyAdapter]`.
+
+  Untrusted adapters still supply a `:language` identifier to the
+  prompt — just not the free-form fields.
+  """
+  @spec trusted_source_adapter?(module()) :: boolean()
+  def trusted_source_adapter?(mod) when is_atom(mod) do
+    alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
+
+    mod == EctoAdapter or
+      mod in EctoAdapter.builtin_adapters() or
+      mod in load!()[:trusted_source_adapters]
+  end
 
   @doc """
   Returns the configured source resolver module.

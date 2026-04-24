@@ -1,8 +1,8 @@
-defmodule Lotus.SQL.FilterInjectorTest do
+defmodule Lotus.Source.Adapters.Ecto.SQL.FilterInjectorTest do
   use ExUnit.Case, async: true
 
   alias Lotus.Query.Filter
-  alias Lotus.SQL.FilterInjector
+  alias Lotus.Source.Adapters.Ecto.SQL.FilterInjector
 
   defp double_quote(id), do: ~s("#{id}")
   defp backtick_quote(id), do: "`#{id}`"

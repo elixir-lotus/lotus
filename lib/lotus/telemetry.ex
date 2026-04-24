@@ -110,7 +110,7 @@ defmodule Lotus.Telemetry do
   **Metadata:**
 
     * `:operation` - The introspection operation (e.g., `:list_schemas`, `:list_tables`,
-      `:get_table_schema`, `:get_table_stats`, `:list_relations`)
+      `:describe_table`, `:get_table_stats`, `:list_relations`)
     * `:repo` - The repo name
 
   ### `[:lotus, :schema, :introspection, :stop]`

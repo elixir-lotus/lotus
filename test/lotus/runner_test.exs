@@ -2,6 +2,7 @@ defmodule Lotus.RunnerTest do
   use Lotus.Case, async: true
 
   alias Lotus.Fixtures
+  alias Lotus.Query.Statement
   alias Lotus.Runner
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
   alias Lotus.Test.Repo
@@ -18,9 +19,12 @@ defmodule Lotus.RunnerTest do
   describe "run_statement/4 with real tables" do
     test "executes simple SELECT queries", %{users: %{kerouac: kerouac}} do
       result =
-        Runner.run_statement(@pg_adapter, "SELECT name, email FROM test_users WHERE id = $1", [
-          kerouac.id
-        ])
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new("SELECT name, email FROM test_users WHERE id = $1", [
+            kerouac.id
+          ])
+        )
 
       assert {:ok, %{columns: ["name", "email"], rows: [["Jack Kerouac", "jack@ontheroad.com"]]}} =
                result
@@ -30,7 +34,7 @@ defmodule Lotus.RunnerTest do
       users: %{kerouac: kerouac, thompson: thompson}
     } do
       sql = "SELECT name, age FROM test_users WHERE id IN ($1, $2) ORDER BY name"
-      result = Runner.run_statement(@pg_adapter, sql, [kerouac.id, thompson.id])
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql, [kerouac.id, thompson.id]))
 
       assert {:ok,
               %{
@@ -49,7 +53,7 @@ defmodule Lotus.RunnerTest do
       ORDER BY p.view_count DESC
       """
 
-      result = Runner.run_statement(@pg_adapter, sql, [kerouac.id])
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql, [kerouac.id]))
 
       assert {:ok,
               %{
@@ -71,7 +75,7 @@ defmodule Lotus.RunnerTest do
       WHERE published = true
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok,
               %{
@@ -92,7 +96,7 @@ defmodule Lotus.RunnerTest do
       ORDER BY u.name
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok,
               %{
@@ -107,7 +111,7 @@ defmodule Lotus.RunnerTest do
 
     test "handles JSON operations", %{users: %{kerouac: kerouac}} do
       sql = "SELECT name, metadata->>'role' as role FROM test_users WHERE id = $1"
-      result = Runner.run_statement(@pg_adapter, sql, [kerouac.id])
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql, [kerouac.id]))
       assert {:ok, %{columns: ["name", "role"], rows: [["Jack Kerouac", "admin"]]}} = result
     end
 
@@ -115,7 +119,7 @@ defmodule Lotus.RunnerTest do
       sql =
         "SELECT title, array_length(tags, 1) as tag_count FROM test_posts WHERE 'beat' = ANY(tags)"
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
       assert {:ok, %{columns: ["title", "tag_count"], rows: rows}} = result
       assert length(rows) == 2
     end
@@ -134,7 +138,7 @@ defmodule Lotus.RunnerTest do
       SELECT * FROM user_posts ORDER BY name
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok,
               %{
@@ -152,7 +156,7 @@ defmodule Lotus.RunnerTest do
       ORDER BY name
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok, %{columns: ["name", "email"], rows: rows}} = result
       assert length(rows) == 2
@@ -173,7 +177,7 @@ defmodule Lotus.RunnerTest do
       ORDER BY name
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok, %{columns: ["name", "age_group"], rows: rows}} = result
       assert ["Charles Bukowski", "Senior"] in rows
@@ -184,7 +188,9 @@ defmodule Lotus.RunnerTest do
 
   describe "whitelist validation" do
     test "allows SELECT queries" do
-      result = Runner.run_statement(@pg_adapter, "SELECT * FROM test_users LIMIT 1")
+      result =
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT * FROM test_users LIMIT 1"))
+
       assert {:ok, %{columns: columns, rows: _}} = result
       assert "id" in columns
     end
@@ -195,17 +201,19 @@ defmodule Lotus.RunnerTest do
       SELECT * FROM test
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
       assert {:ok, %{columns: ["num"], rows: [[1]]}} = result
     end
 
     test "allows VALUES queries" do
-      result = Runner.run_statement(@pg_adapter, "VALUES (1, 'a'), (2, 'b')")
+      result = Runner.run_statement(@pg_adapter, Statement.new("VALUES (1, 'a'), (2, 'b')"))
       assert {:ok, %{columns: ["column1", "column2"], rows: [[1, "a"], [2, "b"]]}} = result
     end
 
     test "allows EXPLAIN queries" do
-      result = Runner.run_statement(@pg_adapter, "EXPLAIN SELECT * FROM test_users")
+      result =
+        Runner.run_statement(@pg_adapter, Statement.new("EXPLAIN SELECT * FROM test_users"))
+
       assert {:ok, %{columns: ["QUERY PLAN"], rows: rows}} = result
       refute Enum.empty?(rows)
     end
@@ -214,92 +222,117 @@ defmodule Lotus.RunnerTest do
       result =
         Runner.run_statement(
           @pg_adapter,
-          "INSERT INTO test_users (name, email) VALUES ('test', 'test@example.com')"
+          Statement.new(
+            "INSERT INTO test_users (name, email) VALUES ('test', 'test@example.com')"
+          )
         )
 
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
     test "rejects UPDATE statements" do
-      result = Runner.run_statement(@pg_adapter, "UPDATE test_users SET name = 'Updated'")
+      result =
+        Runner.run_statement(@pg_adapter, Statement.new("UPDATE test_users SET name = 'Updated'"))
+
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
     test "rejects DELETE statements" do
-      result = Runner.run_statement(@pg_adapter, "DELETE FROM test_users WHERE id = 1")
+      result =
+        Runner.run_statement(@pg_adapter, Statement.new("DELETE FROM test_users WHERE id = 1"))
+
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
     test "rejects DROP statements" do
-      result = Runner.run_statement(@pg_adapter, "DROP TABLE test_users")
+      result = Runner.run_statement(@pg_adapter, Statement.new("DROP TABLE test_users"))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
     test "rejects CREATE statements" do
-      result = Runner.run_statement(@pg_adapter, "CREATE TABLE new_table (id int)")
+      result = Runner.run_statement(@pg_adapter, Statement.new("CREATE TABLE new_table (id int)"))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
     test "rejects ALTER statements" do
       result =
-        Runner.run_statement(@pg_adapter, "ALTER TABLE test_users ADD COLUMN new_field text")
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new("ALTER TABLE test_users ADD COLUMN new_field text")
+        )
 
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
     test "rejects TRUNCATE statements" do
-      result = Runner.run_statement(@pg_adapter, "TRUNCATE test_users")
+      result = Runner.run_statement(@pg_adapter, Statement.new("TRUNCATE test_users"))
       assert {:error, "Only read-only queries are allowed"} = result
     end
   end
 
   describe "deny list validation" do
     test "detects dangerous keywords in string literals" do
-      result = Runner.run_statement(@pg_adapter, "SELECT 'DROP TABLE users' as msg")
+      result =
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT 'DROP TABLE users' as msg"))
+
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
     test "detects dangerous keywords case-insensitively" do
-      result = Runner.run_statement(@pg_adapter, "SELECT 'InSeRt INTO users' as msg")
+      result =
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT 'InSeRt INTO users' as msg"))
+
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
     test "allows safe strings without dangerous keywords" do
-      result = Runner.run_statement(@pg_adapter, "SELECT 'This is a safe message' as msg")
+      result =
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT 'This is a safe message' as msg"))
+
       assert {:ok, %{columns: ["msg"], rows: [["This is a safe message"]]}} = result
     end
   end
 
   describe "single statement validation" do
     test "rejects multiple statements with semicolon" do
-      result = Runner.run_statement(@pg_adapter, "SELECT 1; SELECT 2")
+      result = Runner.run_statement(@pg_adapter, Statement.new("SELECT 1; SELECT 2"))
       assert {:error, "Only a single statement is allowed"} = result
     end
 
     test "allows statement with trailing semicolon" do
-      result = Runner.run_statement(@pg_adapter, "SELECT * FROM test_users;")
+      result = Runner.run_statement(@pg_adapter, Statement.new("SELECT * FROM test_users;"))
       assert {:ok, %{columns: columns, rows: rows}} = result
       refute Enum.empty?(columns)
       refute Enum.empty?(rows)
     end
 
     test "allows semicolon in string literals" do
-      result = Runner.run_statement(@pg_adapter, "SELECT 'test;value' as text")
+      result = Runner.run_statement(@pg_adapter, Statement.new("SELECT 'test;value' as text"))
       assert {:ok, %{columns: ["text"], rows: [["test;value"]]}} = result
     end
 
     test "allows semicolon in double-quoted identifiers" do
-      result = Runner.run_statement(@pg_adapter, ~s[SELECT 'test' as "col;name"])
+      result = Runner.run_statement(@pg_adapter, Statement.new(~s[SELECT 'test' as "col;name"]))
       assert {:ok, %{columns: ["col;name"], rows: [["test"]]}} = result
     end
 
     test "allows semicolon in line comments" do
-      result = Runner.run_statement(@pg_adapter, "SELECT 1 as num -- comment with ; semicolon")
+      result =
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new("SELECT 1 as num -- comment with ; semicolon")
+        )
+
       assert {:ok, %{columns: ["num"], rows: [[1]]}} = result
     end
 
     test "allows semicolon in block comments" do
-      result = Runner.run_statement(@pg_adapter, "SELECT /* comment ; with semicolon */ 1 as num")
+      result =
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new("SELECT /* comment ; with semicolon */ 1 as num")
+        )
+
       assert {:ok, %{columns: ["num"], rows: [[1]]}} = result
     end
 
@@ -307,7 +340,7 @@ defmodule Lotus.RunnerTest do
       result =
         Runner.run_statement(
           @pg_adapter,
-          "SELECT /* outer /* inner ; */ still outer ; */ 1 as num"
+          Statement.new("SELECT /* outer /* inner ; */ still outer ; */ 1 as num")
         )
 
       assert {:ok, %{columns: ["num"], rows: [[1]]}} = result
@@ -318,26 +351,27 @@ defmodule Lotus.RunnerTest do
       # comment tracking the parser would exit at the first `*/` and miss the
       # trailing `; SELECT 2` that sits outside the comment.
       result =
-        Runner.run_statement(
-          @pg_adapter,
-          "SELECT 1 /* /* nested */ */ ; SELECT 2"
-        )
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT 1 /* /* nested */ */ ; SELECT 2"))
 
       assert {:error, "Only a single statement is allowed"} = result
     end
 
     test "allows semicolon in PostgreSQL dollar-quoted strings" do
-      result = Runner.run_statement(@pg_adapter, "SELECT $$test;value$$ as text")
+      result = Runner.run_statement(@pg_adapter, Statement.new("SELECT $$test;value$$ as text"))
       assert {:ok, %{columns: ["text"], rows: [["test;value"]]}} = result
     end
 
     test "allows semicolon in tagged dollar-quoted strings" do
-      result = Runner.run_statement(@pg_adapter, "SELECT $tag$test;value$tag$ as text")
+      result =
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT $tag$test;value$tag$ as text"))
+
       assert {:ok, %{columns: ["text"], rows: [["test;value"]]}} = result
     end
 
     test "still rejects actual multiple statements" do
-      result = Runner.run_statement(@pg_adapter, "SELECT 'test;ok' as text; SELECT 2")
+      result =
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT 'test;ok' as text; SELECT 2"))
+
       assert {:error, "Only a single statement is allowed"} = result
     end
 
@@ -351,7 +385,7 @@ defmodule Lotus.RunnerTest do
       WHERE name = 'Jack Kerouac';
       """
 
-      result = Runner.run_statement(@pg_adapter, query)
+      result = Runner.run_statement(@pg_adapter, Statement.new(query))
       assert {:ok, %{columns: columns, rows: rows}} = result
       assert "col;name" in columns
       refute Enum.empty?(rows)
@@ -365,25 +399,33 @@ defmodule Lotus.RunnerTest do
       SELECT * FROM test
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
       assert {:ok, %{columns: ["id"], rows: [[1]]}} = result
     end
 
     test "respects read_only: false option" do
       result =
-        Runner.run_statement(@pg_adapter, "SELECT COUNT(*) FROM test_users", [], read_only: false)
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT COUNT(*) FROM test_users", []),
+          read_only: false
+        )
 
       assert {:ok, %{columns: ["count"], rows: [[3]]}} = result
     end
 
     test "respects custom statement timeout" do
-      result = Runner.run_statement(@pg_adapter, "SELECT 1", [], statement_timeout_ms: 100)
+      result =
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT 1", []),
+          statement_timeout_ms: 100
+        )
+
       assert {:ok, %{columns: ["?column?"], rows: [[1]]}} = result
     end
 
     test "respects custom database timeout" do
       result =
-        Runner.run_statement(@pg_adapter, "SELECT COUNT(*) FROM test_users", [], timeout: 1000)
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT COUNT(*) FROM test_users", []),
+          timeout: 1000
+        )
 
       assert {:ok, %{columns: ["count"], rows: [[3]]}} = result
     end
@@ -396,8 +438,10 @@ defmodule Lotus.RunnerTest do
       result =
         Runner.run_statement(
           @pg_adapter,
-          "INSERT INTO test_users (name, email, age, active, metadata, inserted_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, name, email",
-          ["Ada Lovelace", "ada@math.org", 36, true, %{}, now, now],
+          Statement.new(
+            "INSERT INTO test_users (name, email, age, active, metadata, inserted_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, name, email",
+            ["Ada Lovelace", "ada@math.org", 36, true, %{}, now, now]
+          ),
           read_only: false
         )
 
@@ -410,8 +454,10 @@ defmodule Lotus.RunnerTest do
       result =
         Runner.run_statement(
           @pg_adapter,
-          "UPDATE test_users SET age = age + 1 WHERE active = true RETURNING id, name, age",
-          [],
+          Statement.new(
+            "UPDATE test_users SET age = age + 1 WHERE active = true RETURNING id, name, age",
+            []
+          ),
           read_only: false
         )
 
@@ -423,8 +469,7 @@ defmodule Lotus.RunnerTest do
       result =
         Runner.run_statement(
           @pg_adapter,
-          "DELETE FROM test_users WHERE active = false RETURNING id",
-          [],
+          Statement.new("DELETE FROM test_users WHERE active = false RETURNING id", []),
           read_only: false
         )
 
@@ -436,7 +481,9 @@ defmodule Lotus.RunnerTest do
       result =
         Runner.run_statement(
           @pg_adapter,
-          "INSERT INTO test_users (name, email) VALUES ('test', 'test@example.com')"
+          Statement.new(
+            "INSERT INTO test_users (name, email) VALUES ('test', 'test@example.com')"
+          )
         )
 
       assert {:error, "Only read-only queries are allowed"} = result
@@ -446,8 +493,10 @@ defmodule Lotus.RunnerTest do
       result =
         Runner.run_statement(
           @pg_adapter,
-          "INSERT INTO test_users (name, email) VALUES ('a', 'a@a.com'); DELETE FROM test_users",
-          [],
+          Statement.new(
+            "INSERT INTO test_users (name, email) VALUES ('a', 'a@a.com'); DELETE FROM test_users",
+            []
+          ),
           read_only: false
         )
 
@@ -457,14 +506,16 @@ defmodule Lotus.RunnerTest do
 
   describe "error handling" do
     test "handles syntax errors gracefully" do
-      result = Runner.run_statement(@pg_adapter, "SELECT * FROM")
+      result = Runner.run_statement(@pg_adapter, Statement.new("SELECT * FROM"))
       assert {:error, msg} = result
       assert msg =~ "SQL syntax error:"
       assert msg =~ "syntax error at end of input" or msg =~ "syntax error at or near"
     end
 
     test "handles invalid table references" do
-      result = Runner.run_statement(@pg_adapter, "SELECT * FROM non_existent_table")
+      result =
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT * FROM non_existent_table"))
+
       assert {:error, msg} = result
       assert msg =~ "SQL error:"
       assert msg =~ "non_existent_table"
@@ -474,10 +525,9 @@ defmodule Lotus.RunnerTest do
       result =
         Runner.run_statement(
           @pg_adapter,
-          "SELECT non_existent_column FROM test_users WHERE id = $1",
-          [
+          Statement.new("SELECT non_existent_column FROM test_users WHERE id = $1", [
             kerouac.id
-          ]
+          ])
         )
 
       assert {:error, msg} = result
@@ -487,9 +537,12 @@ defmodule Lotus.RunnerTest do
 
     test "handles type mismatches" do
       result =
-        Runner.run_statement(@pg_adapter, "SELECT * FROM test_users WHERE id = $1", [
-          "not_an_integer"
-        ])
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new("SELECT * FROM test_users WHERE id = $1", [
+            "not_an_integer"
+          ])
+        )
 
       assert {:error, message} = result
       assert is_binary(message)
@@ -497,7 +550,12 @@ defmodule Lotus.RunnerTest do
     end
 
     test "handles empty result sets" do
-      result = Runner.run_statement(@pg_adapter, "SELECT * FROM test_users WHERE id = -999")
+      result =
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new("SELECT * FROM test_users WHERE id = -999")
+        )
+
       assert {:ok, %{columns: columns, rows: []}} = result
       assert "id" in columns
     end
@@ -506,22 +564,25 @@ defmodule Lotus.RunnerTest do
       user = Fixtures.insert_user(%{name: "Null Test", email: "null@test.com", age: nil})
 
       result =
-        Runner.run_statement(@pg_adapter, "SELECT name, age FROM test_users WHERE id = $1", [
-          user.id
-        ])
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new("SELECT name, age FROM test_users WHERE id = $1", [
+            user.id
+          ])
+        )
 
       assert {:ok, %{columns: ["name", "age"], rows: [["Null Test", nil]]}} = result
     end
 
     test "validates SQL string type" do
       assert_raise FunctionClauseError, fn ->
-        Runner.run_statement(@pg_adapter, 123, [])
+        Runner.run_statement(@pg_adapter, Statement.new(123, []))
       end
     end
 
     test "validates params list type" do
       assert_raise FunctionClauseError, fn ->
-        Runner.run_statement(@pg_adapter, "SELECT 1", "not_a_list")
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT 1", "not_a_list"))
       end
     end
   end
@@ -538,7 +599,7 @@ defmodule Lotus.RunnerTest do
       ORDER BY rank
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok, %{columns: ["title", "view_count", "rank"], rows: rows}} = result
       assert length(rows) == 3
@@ -553,7 +614,7 @@ defmodule Lotus.RunnerTest do
       ORDER BY name
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok, %{columns: ["name", "type"], rows: rows}} = result
       assert length(rows) > 3
@@ -569,7 +630,7 @@ defmodule Lotus.RunnerTest do
       LIMIT 1
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok, %{columns: ["name", "created_date", "year"], rows: [[_, _, year]]}} = result
       assert is_integer(year)
@@ -587,7 +648,7 @@ defmodule Lotus.RunnerTest do
       LIMIT 1
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok,
               %{
@@ -610,7 +671,7 @@ defmodule Lotus.RunnerTest do
       ORDER BY name
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok, %{columns: ["name"], rows: rows}} = result
       assert ["Jack Kerouac"] in rows
@@ -623,7 +684,7 @@ defmodule Lotus.RunnerTest do
       SELECT DISTINCT active FROM test_users ORDER BY active
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok, %{columns: ["active"], rows: [[false], [true]]}} = result
     end
@@ -635,7 +696,7 @@ defmodule Lotus.RunnerTest do
       LIMIT 2 OFFSET 1
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok, %{columns: ["name"], rows: rows}} = result
       assert length(rows) == 2
@@ -681,7 +742,7 @@ defmodule Lotus.RunnerTest do
       SELECT COUNT(*) FROM deleted_rows
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -695,7 +756,7 @@ defmodule Lotus.RunnerTest do
       SELECT * FROM inserted_users
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -709,7 +770,7 @@ defmodule Lotus.RunnerTest do
       SELECT COUNT(*) FROM updated_users
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -726,7 +787,7 @@ defmodule Lotus.RunnerTest do
       SELECT COUNT(*) FROM deleted_inactive
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -741,7 +802,7 @@ defmodule Lotus.RunnerTest do
       SELECT * FROM temp_data
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -753,7 +814,7 @@ defmodule Lotus.RunnerTest do
       SELECT 1
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -766,7 +827,7 @@ defmodule Lotus.RunnerTest do
       SELECT COUNT(*) FROM truncated
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -781,7 +842,7 @@ defmodule Lotus.RunnerTest do
       SELECT * FROM user_count
       """
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
       assert {:ok, %{columns: ["total"], rows: _}} = result
     end
   end
@@ -797,7 +858,7 @@ defmodule Lotus.RunnerTest do
       SELECT COUNT(*) FROM deleted_rows
       """
 
-      result = Runner.run_statement(@sqlite_adapter, sql)
+      result = Runner.run_statement(@sqlite_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -812,7 +873,7 @@ defmodule Lotus.RunnerTest do
       SELECT * FROM inserted_users
       """
 
-      result = Runner.run_statement(@sqlite_adapter, sql)
+      result = Runner.run_statement(@sqlite_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -827,7 +888,7 @@ defmodule Lotus.RunnerTest do
       SELECT COUNT(*) FROM updated_users
       """
 
-      result = Runner.run_statement(@sqlite_adapter, sql)
+      result = Runner.run_statement(@sqlite_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -845,7 +906,7 @@ defmodule Lotus.RunnerTest do
       SELECT COUNT(*) FROM deleted_inactive
       """
 
-      result = Runner.run_statement(@sqlite_adapter, sql)
+      result = Runner.run_statement(@sqlite_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -861,7 +922,7 @@ defmodule Lotus.RunnerTest do
       SELECT * FROM temp_data
       """
 
-      result = Runner.run_statement(@sqlite_adapter, sql)
+      result = Runner.run_statement(@sqlite_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -874,7 +935,7 @@ defmodule Lotus.RunnerTest do
       SELECT 1
       """
 
-      result = Runner.run_statement(@sqlite_adapter, sql)
+      result = Runner.run_statement(@sqlite_adapter, Statement.new(sql))
       assert {:error, "Only read-only queries are allowed"} = result
     end
 
@@ -890,7 +951,7 @@ defmodule Lotus.RunnerTest do
       SELECT * FROM user_count
       """
 
-      result = Runner.run_statement(@sqlite_adapter, sql)
+      result = Runner.run_statement(@sqlite_adapter, Statement.new(sql))
       assert {:ok, %{columns: ["total"], rows: _}} = result
     end
   end
@@ -928,7 +989,7 @@ defmodule Lotus.RunnerTest do
       sql =
         "SELECT id, name, email, age, active, metadata, inserted_at, updated_at FROM test_users"
 
-      result = Runner.run_statement(@pg_adapter, sql)
+      result = Runner.run_statement(@pg_adapter, Statement.new(sql))
 
       assert {:ok,
               %Lotus.Result{
@@ -986,10 +1047,9 @@ defmodule Lotus.RunnerTest do
       {:ok, result} =
         Runner.run_statement(
           @pg_adapter,
-          "SELECT id, name FROM test_uuid_records WHERE name = $1",
-          [
+          Statement.new("SELECT id, name FROM test_uuid_records WHERE name = $1", [
             "Record A"
-          ]
+          ])
         )
 
       assert %{columns: ["id", "name"], rows: [[id_bin, "Record A"]]} = result
@@ -1006,7 +1066,7 @@ defmodule Lotus.RunnerTest do
       {:ok, result} =
         Runner.run_statement(
           @pg_adapter,
-          "SELECT id, name, ref_id FROM test_uuid_records ORDER BY name"
+          Statement.new("SELECT id, name, ref_id FROM test_uuid_records ORDER BY name")
         )
 
       # to_encodable normalizes UUIDs to strings

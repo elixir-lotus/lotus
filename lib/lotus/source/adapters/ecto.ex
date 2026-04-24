@@ -34,9 +34,14 @@ defmodule Lotus.Source.Adapters.Ecto do
 
   @behaviour Lotus.Source.Adapter
 
+  alias Lotus.Query.Filter
+  alias Lotus.Query.OptionalClause
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
   alias Lotus.Source.Adapters.Ecto.Dialects
-  alias Lotus.SQL.Sanitizer
+  alias Lotus.Source.Adapters.Ecto.SQL.Identifier
+  alias Lotus.Source.Adapters.Ecto.SQL.Sanitizer
+  alias Lotus.Variables
 
   @default_dialect Dialects.Default
 
@@ -108,6 +113,7 @@ defmodule Lotus.Source.Adapters.Ecto do
       unquote(visibility_callbacks())
       unquote(lifecycle_callbacks())
       unquote(pipeline_callbacks())
+      unquote(validation_callbacks())
       unquote(identity_callbacks())
       unquote(presentation_callbacks())
       unquote(type_mapping_callbacks())
@@ -170,15 +176,15 @@ defmodule Lotus.Source.Adapters.Ecto do
       end
 
       @impl true
-      def get_table_schema(repo, schema, table) do
-        {:ok, @dialect.get_table_schema(repo, schema, table)}
+      def describe_table(repo, schema, table) do
+        {:ok, @dialect.describe_table(repo, schema, table)}
       rescue
         e -> {:error, Exception.message(e)}
       end
 
       @impl true
-      def resolve_table_schema(repo, table, schemas) do
-        {:ok, @dialect.resolve_table_schema(repo, table, schemas)}
+      def resolve_table_namespace(repo, table, schemas) do
+        {:ok, @dialect.resolve_table_namespace(repo, table, schemas)}
       rescue
         e -> {:error, Exception.message(e)}
       end
@@ -191,23 +197,15 @@ defmodule Lotus.Source.Adapters.Ecto do
       def quote_identifier(_repo, identifier), do: @dialect.quote_identifier(identifier)
 
       @impl true
-      def param_placeholder(_repo, index, var, type),
-        do: @dialect.param_placeholder(index, var, type)
+      def apply_filters(_repo, statement, filters),
+        do: @dialect.apply_filters(statement, filters)
 
       @impl true
-      def limit_offset_placeholders(_repo, limit_index, offset_index),
-        do: @dialect.limit_offset_placeholders(limit_index, offset_index)
+      def apply_sorts(_repo, statement, sorts), do: @dialect.apply_sorts(statement, sorts)
 
       @impl true
-      def apply_filters(_repo, sql, params, filters),
-        do: @dialect.apply_filters(sql, params, filters)
-
-      @impl true
-      def apply_sorts(_repo, sql, sorts), do: @dialect.apply_sorts(sql, sorts)
-
-      @impl true
-      def explain_plan(repo, sql, params, opts),
-        do: @dialect.explain_plan(repo, sql, params, opts)
+      def query_plan(repo, sql, params, opts),
+        do: @dialect.query_plan(repo, sql, params, opts)
     end
   end
 
@@ -243,20 +241,58 @@ defmodule Lotus.Source.Adapters.Ecto do
   defp pipeline_callbacks do
     quote do
       @impl true
-      def sanitize_query(_repo, query, opts), do: EctoAdapter.do_sanitize_query(query, opts)
+      def sanitize_query(_repo, statement, opts),
+        do: EctoAdapter.do_sanitize_query(statement, opts)
 
       @impl true
-      def transform_bound_query(_repo, query, params, _opts), do: {query, params}
+      def transform_bound_query(_repo, statement, _opts), do: statement
 
       @impl true
-      def extract_accessed_resources(repo, query, params, opts) do
-        EctoAdapter.do_extract_accessed_resources(__MODULE__, @dialect, repo, query, params, opts)
+      def extract_accessed_resources(repo, statement) do
+        EctoAdapter.do_extract_accessed_resources(@dialect, repo, statement)
       end
 
       @impl true
-      def apply_pagination(repo, query, params, pagination_opts) do
-        EctoAdapter.do_apply_pagination(@dialect, repo, query, params, pagination_opts)
+      def apply_pagination(repo, statement, pagination_opts) do
+        EctoAdapter.do_apply_pagination(@dialect, repo, statement, pagination_opts)
       end
+
+      @impl true
+      def needs_preflight?(_repo, statement),
+        do: EctoAdapter.do_needs_preflight?(@dialect, statement)
+
+      @impl true
+      def substitute_variable(_repo, statement, var_name, value, type),
+        do: EctoAdapter.do_substitute_variable(@dialect, statement, var_name, value, type)
+
+      @impl true
+      def substitute_list_variable(_repo, statement, var_name, values, type),
+        do: EctoAdapter.do_substitute_list_variable(@dialect, statement, var_name, values, type)
+    end
+  end
+
+  defp validation_callbacks do
+    quote do
+      @impl true
+      def validate_statement(repo, statement, opts),
+        do: EctoAdapter.do_validate_statement(@dialect, repo, statement, opts)
+
+      @impl true
+      def parse_qualified_name(_repo, name), do: EctoAdapter.do_parse_qualified_name(name)
+
+      @impl true
+      def validate_identifier(_repo, kind, value),
+        do: EctoAdapter.do_validate_identifier(kind, value)
+
+      @impl true
+      def supported_filter_operators(_repo), do: EctoAdapter.do_supported_filter_operators()
+
+      @impl true
+      def ai_context(_repo), do: EctoAdapter.do_ai_context(@dialect)
+
+      @impl true
+      def prepare_for_analysis(_repo, statement),
+        do: EctoAdapter.do_prepare_for_analysis(statement)
     end
   end
 
@@ -309,7 +345,9 @@ defmodule Lotus.Source.Adapters.Ecto do
     quote do
       @impl true
       def transform_statement(_repo, statement) do
-        EctoAdapter.dispatch_transform_statement(@dialect, statement)
+        if function_exported?(@dialect, :transform_statement, 1),
+          do: @dialect.transform_statement(statement),
+          else: statement
       end
 
       @impl true
@@ -452,15 +490,15 @@ defmodule Lotus.Source.Adapters.Ecto do
   end
 
   @impl true
-  def get_table_schema(repo, schema, table) do
-    {:ok, @default_dialect.get_table_schema(repo, schema, table)}
+  def describe_table(repo, schema, table) do
+    {:ok, @default_dialect.describe_table(repo, schema, table)}
   rescue
     e -> {:error, Exception.message(e)}
   end
 
   @impl true
-  def resolve_table_schema(repo, table, schemas) do
-    {:ok, @default_dialect.resolve_table_schema(repo, table, schemas)}
+  def resolve_table_namespace(repo, table, schemas) do
+    {:ok, @default_dialect.resolve_table_namespace(repo, table, schemas)}
   rescue
     e -> {:error, Exception.message(e)}
   end
@@ -475,28 +513,18 @@ defmodule Lotus.Source.Adapters.Ecto do
   end
 
   @impl true
-  def param_placeholder(_repo, index, var, type) do
-    @default_dialect.param_placeholder(index, var, type)
+  def apply_filters(_repo, statement, filters) do
+    @default_dialect.apply_filters(statement, filters)
   end
 
   @impl true
-  def limit_offset_placeholders(_repo, limit_index, offset_index) do
-    @default_dialect.limit_offset_placeholders(limit_index, offset_index)
+  def apply_sorts(_repo, statement, sorts) do
+    @default_dialect.apply_sorts(statement, sorts)
   end
 
   @impl true
-  def apply_filters(_repo, sql, params, filters) do
-    @default_dialect.apply_filters(sql, params, filters)
-  end
-
-  @impl true
-  def apply_sorts(_repo, sql, sorts) do
-    @default_dialect.apply_sorts(sql, sorts)
-  end
-
-  @impl true
-  def explain_plan(repo, sql, params, opts) do
-    @default_dialect.explain_plan(repo, sql, params, opts)
+  def query_plan(repo, sql, params, opts) do
+    @default_dialect.query_plan(repo, sql, params, opts)
   end
 
   # ---------------------------------------------------------------------------
@@ -554,20 +582,51 @@ defmodule Lotus.Source.Adapters.Ecto do
   @deny ~r/\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|VACUUM|ANALYZE|CALL|LOCK)\b/i
 
   @impl true
-  def sanitize_query(_repo, query, opts), do: do_sanitize_query(query, opts)
+  def sanitize_query(_repo, statement, opts), do: do_sanitize_query(statement, opts)
 
   @impl true
-  def transform_bound_query(_repo, query, params, _opts), do: {query, params}
+  def transform_bound_query(_repo, statement, _opts), do: statement
 
   @impl true
-  def extract_accessed_resources(repo, query, params, opts) do
-    do_extract_accessed_resources(__MODULE__, @default_dialect, repo, query, params, opts)
+  def extract_accessed_resources(repo, statement) do
+    do_extract_accessed_resources(@default_dialect, repo, statement)
   end
 
   @impl true
-  def apply_pagination(repo, query, params, pagination_opts) do
-    do_apply_pagination(@default_dialect, repo, query, params, pagination_opts)
+  def apply_pagination(repo, statement, pagination_opts) do
+    do_apply_pagination(@default_dialect, repo, statement, pagination_opts)
   end
+
+  @impl true
+  def needs_preflight?(_repo, statement),
+    do: do_needs_preflight?(@default_dialect, statement)
+
+  @impl true
+  def substitute_variable(_repo, statement, var_name, value, type),
+    do: do_substitute_variable(@default_dialect, statement, var_name, value, type)
+
+  @impl true
+  def substitute_list_variable(_repo, statement, var_name, values, type),
+    do: do_substitute_list_variable(@default_dialect, statement, var_name, values, type)
+
+  @impl true
+  def validate_statement(repo, statement, opts),
+    do: do_validate_statement(@default_dialect, repo, statement, opts)
+
+  @impl true
+  def parse_qualified_name(_repo, name), do: do_parse_qualified_name(name)
+
+  @impl true
+  def validate_identifier(_repo, kind, value), do: do_validate_identifier(kind, value)
+
+  @impl true
+  def supported_filter_operators(_repo), do: do_supported_filter_operators()
+
+  @impl true
+  def ai_context(_repo), do: do_ai_context(@default_dialect)
+
+  @impl true
+  def prepare_for_analysis(_repo, statement), do: do_prepare_for_analysis(statement)
 
   # ---------------------------------------------------------------------------
   # Callbacks — Source Identity
@@ -617,45 +676,6 @@ defmodule Lotus.Source.Adapters.Ecto do
   # Shared helpers (called by __using__ macro and this module's own callbacks)
   # ---------------------------------------------------------------------------
 
-  # Resolves a dialect's statement-rewrite callback. Prefers the new name
-  # (`transform_statement/1`) and falls back to the deprecated `transform_sql/1`
-  # with a one-time runtime warning so existing dialects keep working during
-  # the deprecation window. Returns the input unchanged if neither exists.
-  @doc false
-  def dispatch_transform_statement(dialect, statement) do
-    cond do
-      function_exported?(dialect, :transform_statement, 1) ->
-        dialect.transform_statement(statement)
-
-      function_exported?(dialect, :transform_sql, 1) ->
-        warn_deprecated_dialect_callback_once(dialect, :transform_sql, :transform_statement)
-        dialect.transform_sql(statement)
-
-      true ->
-        statement
-    end
-  end
-
-  defp warn_deprecated_dialect_callback_once(dialect, deprecated_name, new_name) do
-    key = {__MODULE__, :deprecated_dialect_warned, dialect, deprecated_name}
-
-    case :persistent_term.get(key, :none) do
-      :warned ->
-        :ok
-
-      :none ->
-        :persistent_term.put(key, :warned)
-
-        require Logger
-
-        Logger.warning(
-          "#{inspect(dialect)} implements deprecated " <>
-            "Lotus.Source.Adapters.Ecto.Dialect callback #{deprecated_name}/1. " <>
-            "Rename it to #{new_name}/1 — the old name will be removed in v1.0."
-        )
-    end
-  end
-
   @doc false
   def do_execute_query(dialect, repo, sql, params, opts) do
     timeout = Keyword.get(opts, :timeout, 15_000)
@@ -702,24 +722,31 @@ defmodule Lotus.Source.Adapters.Ecto do
   end
 
   @doc false
-  def do_sanitize_query(query, opts) do
+  def do_sanitize_query(%Statement{text: sql}, opts) do
     read_only = Keyword.get(opts, :read_only, true)
 
-    with :ok <- assert_single_statement(query) do
-      assert_not_denied(query, read_only)
+    with :ok <- assert_single_statement(sql) do
+      assert_not_denied(sql, read_only)
     end
   end
 
   @doc false
-  def do_extract_accessed_resources(_adapter_mod, dialect, repo, query, params, opts) do
-    if function_exported?(dialect, :extract_accessed_resources, 4),
-      do: dialect.extract_accessed_resources(repo, query, params, opts),
-      else: :skip
+  def do_extract_accessed_resources(dialect, repo, %Statement{} = statement) do
+    if function_exported?(dialect, :extract_accessed_resources, 2),
+      do: dialect.extract_accessed_resources(repo, statement),
+      else:
+        {:unrestricted,
+         "dialect #{inspect(dialect)} does not implement extract_accessed_resources/2"}
   end
 
   @doc false
-  def do_apply_pagination(dialect, _repo, query, params, pagination_opts) do
-    base_sql = Sanitizer.strip_trailing_semicolon(query)
+  def do_apply_pagination(
+        dialect,
+        _repo,
+        %Statement{text: sql, params: params, meta: meta} = statement,
+        pagination_opts
+      ) do
+    base_sql = Sanitizer.strip_trailing_semicolon(sql)
     limit = Keyword.fetch!(pagination_opts, :limit)
     offset = Keyword.get(pagination_opts, :offset, 0)
     count_mode = Keyword.get(pagination_opts, :count, :none)
@@ -747,8 +774,168 @@ defmodule Lotus.Source.Adapters.Ecto do
           nil
       end
 
-    {paged_sql, paged_params, count_spec}
+    new_meta =
+      case count_spec do
+        nil -> Map.delete(meta, :count_spec)
+        spec -> Map.put(meta, :count_spec, spec)
+      end
+
+    %{statement | text: paged_sql, params: paged_params, meta: new_meta}
   end
+
+  # SQL-specific preflight heuristic. Skips introspection statements
+  # (EXPLAIN, SHOW, PRAGMA) that do not touch visible relations. Dialects
+  # can override by implementing `needs_preflight?/1`.
+  @doc false
+  def do_needs_preflight?(dialect, %Statement{text: sql} = statement) do
+    cond do
+      function_exported?(dialect, :needs_preflight?, 1) ->
+        dialect.needs_preflight?(statement)
+
+      is_binary(sql) ->
+        s =
+          sql
+          |> String.replace(~r/--.*$/m, "")
+          |> String.replace(~r/\/\*[\s\S]*?\*\//, "")
+          |> String.trim_leading()
+          |> upcase_head(12)
+
+        not (String.starts_with?(s, "EXPLAIN") or
+               String.starts_with?(s, "PRAGMA") or
+               String.starts_with?(s, "SHOW"))
+
+      true ->
+        true
+    end
+  end
+
+  defp upcase_head(s, n) do
+    {head, tail} = String.split_at(s, n)
+    String.upcase(head) <> tail
+  end
+
+  # Scalar substitution for Ecto-backed adapters: append value to
+  # `statement.params`, replace the first `{{var_name}}` occurrence in
+  # `statement.text` with the dialect's placeholder at position `idx + 1`.
+  # Subsequent occurrences of the same variable are handled by further
+  # calls from the caller's reduce loop.
+  @doc false
+  def do_substitute_variable(
+        dialect,
+        %Statement{text: sql, params: params} = statement,
+        var_name,
+        value,
+        type
+      )
+      when is_binary(sql) do
+    idx = length(params) + 1
+    placeholder = dialect.param_placeholder(idx, var_name, type)
+    new_sql = String.replace(sql, "{{#{var_name}}}", placeholder, global: false)
+    {:ok, %{statement | text: new_sql, params: params ++ [value]}}
+  end
+
+  # List substitution: generate one placeholder per value, join with `, `,
+  # replace the first `{{var_name}}` occurrence with the group, and append
+  # all values to `statement.params` in order.
+  @doc false
+  def do_substitute_list_variable(
+        dialect,
+        %Statement{text: sql, params: params} = statement,
+        var_name,
+        values,
+        type
+      )
+      when is_binary(sql) and is_list(values) do
+    start_idx = length(params) + 1
+
+    placeholders =
+      values
+      |> Enum.with_index(start_idx)
+      |> Enum.map_join(", ", fn {_value, i} -> dialect.param_placeholder(i, var_name, type) end)
+
+    new_sql = String.replace(sql, "{{#{var_name}}}", placeholders, global: false)
+    {:ok, %{statement | text: new_sql, params: params ++ values}}
+  end
+
+  # Ecto adapters validate statements by running EXPLAIN (via query_plan)
+  # against the neutralized text. Callers pass a statement whose text may
+  # still contain Lotus template syntax; we strip optional clauses and
+  # replace {{var}} with NULL so the server can parse it.
+  @doc false
+  def do_validate_statement(
+        dialect,
+        repo,
+        %Statement{text: sql, params: params},
+        _opts
+      )
+      when is_binary(sql) do
+    neutralized =
+      sql
+      |> OptionalClause.strip_brackets()
+      |> Variables.neutralize("NULL")
+
+    case dialect.query_plan(repo, neutralized, params, []) do
+      {:ok, _plan} -> :ok
+      {:error, reason} when is_binary(reason) -> {:error, reason}
+      {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  # SQL qualified names: split on the first "." to produce `[schema, table]`
+  # or `[table]` when unqualified.
+  @doc false
+  def do_parse_qualified_name(name) when is_binary(name) do
+    {:ok, String.split(name, ".", parts: 2)}
+  end
+
+  # SQL identifier rules: `[a-zA-Z_][a-zA-Z0-9_]*` for all kinds. Dialects
+  # with stricter rules (reserved words, case sensitivity) can override
+  # via `defoverridable` in their own adapter module.
+  @doc false
+  def do_validate_identifier(kind, value) when is_binary(value) do
+    Identifier.validate_identifier(value, "#{kind} name")
+  end
+
+  # Ecto-backed adapters implement all `Lotus.Query.Filter` operators via
+  # `Lotus.Source.Adapters.Ecto.SQL.FilterInjector`. Dialects may override to declare a narrower
+  # set (e.g. if an engine lacks regex LIKE support).
+  @doc false
+  def do_supported_filter_operators, do: Filter.operators()
+
+  # Assemble the dialect's AI context. Dialects that implement the
+  # optional `ai_context/0` callback supply their own (Postgres/MySQL/
+  # SQLite with dialect-specific syntax notes + error patterns); dialects
+  # that don't get a generic-SQL context synthesized from `query_language/0`.
+  @doc false
+  def do_ai_context(dialect) do
+    if function_exported?(dialect, :ai_context, 0) do
+      dialect.ai_context()
+    else
+      {:ok,
+       %{
+         language: dialect.query_language(),
+         example_query: "SELECT column1 FROM table_name LIMIT 10",
+         syntax_notes: "Use standard SQL.",
+         error_patterns: []
+       }}
+    end
+  end
+
+  # Resolve Lotus template syntax so the statement is parseable by the
+  # dialect's EXPLAIN variant without bound params. SQL gets "NULL" for
+  # `{{var}}` placeholders; `[[...]]` optional blocks are kept (inner
+  # content retained so all clauses are visible to the planner).
+  @doc false
+  def do_prepare_for_analysis(%Statement{text: sql} = statement) when is_binary(sql) do
+    prepared =
+      sql
+      |> OptionalClause.strip_brackets()
+      |> Variables.neutralize("NULL")
+
+    {:ok, %{statement | text: prepared, params: []}}
+  end
+
+  def do_prepare_for_analysis(_statement), do: {:error, :non_text_statement}
 
   # ---------------------------------------------------------------------------
   # Private helpers

@@ -1,7 +1,7 @@
 defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3TypePipelineTest do
   @moduledoc """
   End-to-end tests for the SQLite type-detection pipeline:
-  `get_table_schema/3` (extractor) → `db_type_to_lotus_type/1` (mapper).
+  `describe_table/3` (extractor) → `db_type_to_lotus_type/1` (mapper).
 
   Unit tests on the mapper alone pass hand-rolled strings and miss the case
   where a user hand-writes a CREATE TABLE with types like `BOOLEAN`,
@@ -45,7 +45,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3TypePipelineTest do
   end
 
   defp raw_type(table, column) do
-    {:ok, columns} = Adapter.get_table_schema(@adapter, nil, table)
+    {:ok, columns} = Adapter.describe_table(@adapter, nil, table)
     found = Enum.find(columns, &(&1.name == column))
     refute is_nil(found), "expected #{inspect(column)} in #{table}"
     found.type

@@ -5,9 +5,10 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   require Logger
 
   alias __MODULE__.EditorConfig
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
-  alias Lotus.SQL.FilterInjector
-  alias Lotus.SQL.SortInjector
+  alias Lotus.Source.Adapters.Ecto.SQL.FilterInjector
+  alias Lotus.Source.Adapters.Ecto.SQL.SortInjector
 
   @default_statement_timeout_ms 5_000
 
@@ -190,6 +191,35 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   def query_language, do: "sql:mysql"
 
   @impl true
+  def ai_context do
+    {:ok,
+     %{
+       language: query_language(),
+       example_query:
+         "SELECT * FROM users WHERE created_at > DATE_SUB(NOW(), INTERVAL 7 DAY) ORDER BY created_at DESC LIMIT 10",
+       syntax_notes:
+         "Use backtick-quoted identifiers (`table`, `column`). JSON support is limited — prefer JSON functions over direct operators. No array type. Date helpers: DATE_FORMAT, DATE_SUB, TIMESTAMPDIFF.",
+       error_patterns: [
+         %{
+           pattern: ~r/Table '[^']+' doesn't exist/i,
+           hint:
+             "Table doesn't exist. Use list_tables() to see available tables or schema-qualified names (e.g. `dbname.users`)."
+         },
+         %{
+           pattern: ~r/Unknown column '[^']+' in/i,
+           hint:
+             "Column doesn't exist. Use describe_table() to list real columns before retrying."
+         },
+         %{
+           pattern: ~r/You have an error in your SQL syntax/i,
+           hint:
+             "MySQL parser rejected the query. Check backtick quoting, comma placement, and reserved-word usage."
+         }
+       ]
+     }}
+  end
+
+  @impl true
   def limit_query(statement, limit) do
     "SELECT * FROM (#{statement}) AS limited_query LIMIT #{limit}"
   end
@@ -293,7 +323,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   end
 
   @impl true
-  def get_table_schema(repo, schema, table) do
+  def describe_table(repo, schema, table) do
     # COLUMN_TYPE carries the full declaration (e.g. "tinyint(1)", "binary(16)",
     # "varchar(255)", "decimal(10,2)") that db_type_to_lotus_type/1 pattern-matches
     # on. DATA_TYPE strips the precision/length, which would silently make the
@@ -324,7 +354,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   end
 
   @impl true
-  def explain_plan(repo, sql, params, _opts) do
+  def query_plan(repo, sql, params, _opts) do
     explain_sql = "EXPLAIN FORMAT=JSON " <> sql
 
     case repo.query(explain_sql, params) do
@@ -337,9 +367,9 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   end
 
   @impl true
-  def resolve_table_schema(_repo, _table, []), do: nil
+  def resolve_table_namespace(_repo, _table, []), do: nil
 
-  def resolve_table_schema(repo, table, schemas) do
+  def resolve_table_namespace(repo, table, schemas) do
     placeholders = Enum.map_join(1..length(schemas), ",", fn _ -> "?" end)
 
     sql = """
@@ -365,19 +395,23 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   end
 
   @impl true
-  def apply_filters(sql, params, filters) do
-    FilterInjector.apply(sql, params, filters, &quote_identifier/1, fn _idx -> "?" end)
+  def apply_filters(%Statement{text: sql, params: params} = statement, filters) do
+    {new_sql, new_params} =
+      FilterInjector.apply(sql, params, filters, &quote_identifier/1, fn _idx -> "?" end)
+
+    %{statement | text: new_sql, params: new_params}
   end
 
   @impl true
-  def apply_sorts(sql, sorts) do
-    SortInjector.apply(sql, sorts, &quote_identifier/1)
+  def apply_sorts(%Statement{text: sql} = statement, sorts) do
+    %{statement | text: SortInjector.apply(sql, sorts, &quote_identifier/1)}
   end
 
   alias Lotus.Source.Adapters.Ecto, as: EctoHelpers
 
   @impl true
-  def extract_accessed_resources(repo, sql, params, opts) do
+  def extract_accessed_resources(repo, %Statement{text: sql, params: params, meta: meta}) do
+    opts = Map.to_list(meta)
     alias_map = EctoHelpers.parse_alias_map(sql)
     explain = "EXPLAIN FORMAT=JSON " <> sql
 
@@ -493,12 +527,15 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   end
 
   @impl true
-  def transform_statement(sql) do
-    alias Lotus.SQL.Transformer
+  def transform_statement(%Statement{text: sql} = statement) do
+    alias Lotus.Source.Adapters.Ecto.SQL.Transformer
 
-    sql
-    |> Transformer.transform_wildcards(:concat_fn)
-    |> Transformer.strip_quoted_variables()
+    new_sql =
+      sql
+      |> Transformer.transform_wildcards(:concat_fn)
+      |> Transformer.strip_quoted_variables()
+
+    %{statement | text: new_sql}
   end
 
   @impl true

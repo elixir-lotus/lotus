@@ -4,10 +4,11 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   @behaviour Lotus.Source.Adapters.Ecto.Dialect
 
   alias __MODULE__.EditorConfig
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
-  alias Lotus.SQL.FilterInjector
-  alias Lotus.SQL.Identifier
-  alias Lotus.SQL.SortInjector
+  alias Lotus.Source.Adapters.Ecto.SQL.FilterInjector
+  alias Lotus.Source.Adapters.Ecto.SQL.Identifier
+  alias Lotus.Source.Adapters.Ecto.SQL.SortInjector
 
   @default_statement_timeout_ms 5_000
 
@@ -103,6 +104,40 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   def query_language, do: "sql:postgres"
 
   @impl true
+  def ai_context do
+    {:ok,
+     %{
+       language: query_language(),
+       example_query:
+         "SELECT * FROM users WHERE created_at > NOW() - INTERVAL '7 days' ORDER BY created_at DESC LIMIT 10",
+       syntax_notes:
+         "Use double-quoted identifiers (\"table\", \"column\"). Arrays, JSONB, CTEs, and window functions are available. Date helpers: DATE_TRUNC, EXTRACT, NOW(), INTERVAL.",
+       error_patterns: [
+         %{
+           pattern: ~r/relation "[^"]+" does not exist/i,
+           hint:
+             "The referenced table or view doesn't exist. Use list_tables() or schema-qualified names (e.g. \"public.users\")."
+         },
+         %{
+           pattern: ~r/column "[^"]+" does not exist/i,
+           hint:
+             "The referenced column doesn't exist. Use describe_table() to list real columns before retrying."
+         },
+         %{
+           pattern: ~r/syntax error at or near/i,
+           hint:
+             "Postgres parser rejected the query. Check quoting (double quotes for identifiers, single for strings), commas, and keyword placement."
+         },
+         %{
+           pattern: ~r/function [a-z0-9_]+\(.*\) does not exist/i,
+           hint:
+             "Postgres function signature mismatch. Cast arguments explicitly (e.g. `value::integer`) or use the documented Postgres function name."
+         }
+       ]
+     }}
+  end
+
+  @impl true
   def limit_query(statement, limit) do
     "SELECT * FROM (#{statement}) AS limited_query LIMIT #{limit}"
   end
@@ -188,7 +223,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   end
 
   @impl true
-  def get_table_schema(repo, schema, table) do
+  def describe_table(repo, schema, table) do
     # Use EXISTS for the PK check rather than LEFT JOIN against
     # key_column_usage: a column participating in multiple constraints
     # (PK + UNIQUE index, FK + unique composite, etc.) would appear once
@@ -233,7 +268,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   end
 
   @impl true
-  def explain_plan(repo, sql, params, opts) do
+  def query_plan(repo, sql, params, opts) do
     explain_sql = "EXPLAIN (FORMAT JSON) " <> sql
     search_path = Keyword.get(opts, :search_path)
 
@@ -269,7 +304,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   end
 
   @impl true
-  def resolve_table_schema(repo, table, schemas) do
+  def resolve_table_namespace(repo, table, schemas) do
     sql = """
     SELECT table_schema
     FROM information_schema.tables
@@ -291,20 +326,23 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   end
 
   @impl true
-  def apply_filters(sql, params, filters) do
-    FilterInjector.apply(sql, params, filters, &quote_identifier/1, &placeholder/1)
+  def apply_filters(%Statement{text: sql, params: params} = statement, filters) do
+    {new_sql, new_params} =
+      FilterInjector.apply(sql, params, filters, &quote_identifier/1, &placeholder/1)
+
+    %{statement | text: new_sql, params: new_params}
   end
 
   defp placeholder(idx), do: "$#{idx}"
 
   @impl true
-  def apply_sorts(sql, sorts) do
-    SortInjector.apply(sql, sorts, &quote_identifier/1)
+  def apply_sorts(%Statement{text: sql} = statement, sorts) do
+    %{statement | text: SortInjector.apply(sql, sorts, &quote_identifier/1)}
   end
 
   @impl true
-  def extract_accessed_resources(repo, sql, params, opts) do
-    search_path = Keyword.get(opts, :search_path)
+  def extract_accessed_resources(repo, %Statement{text: sql, params: params, meta: meta}) do
+    search_path = Map.get(meta, :search_path)
     explain = "EXPLAIN (VERBOSE, FORMAT JSON) " <> sql
 
     result =
@@ -389,13 +427,16 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   defp format_postgres_type(type, _, _, _), do: type
 
   @impl true
-  def transform_statement(sql) do
-    alias Lotus.SQL.Transformer
+  def transform_statement(%Statement{text: sql} = statement) do
+    alias Lotus.Source.Adapters.Ecto.SQL.Transformer
 
-    sql
-    |> Transformer.transform_pg_intervals()
-    |> Transformer.transform_wildcards(:pipe)
-    |> Transformer.strip_quoted_variables()
+    new_sql =
+      sql
+      |> Transformer.transform_pg_intervals()
+      |> Transformer.transform_wildcards(:pipe)
+      |> Transformer.strip_quoted_variables()
+
+    %{statement | text: new_sql}
   end
 
   @impl true

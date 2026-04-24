@@ -13,7 +13,7 @@ defmodule Lotus.AI.Tool do
   ## Examples
 
       # Build a tool from an action, hiding data_source from the LLM
-      tool = Tool.from_action(GetTableSchema, bind: %{data_source: "postgres"})
+      tool = Tool.from_action(DescribeTable, bind: %{data_source: "postgres"})
 
       # Run the tool-calling loop
       {:ok, response} = Tool.run("openai:gpt-4o", context, tools, api_key: "sk-...")
