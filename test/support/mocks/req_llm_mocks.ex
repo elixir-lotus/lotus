@@ -47,7 +47,7 @@ defmodule Lotus.ReqLLMMocks do
       {:ok, build_response(plain_sql_response())}
     end)
 
-    expect(Lotus.SQL.Validator, :validate, fn _sql, _ds -> :ok end)
+    expect(Lotus.Source.Adapter, :validate_statement, fn _adapter, _statement, _opts -> :ok end)
   end
 
   @doc """

@@ -1,7 +1,7 @@
-defmodule Lotus.SQL.IdentifierTest do
+defmodule Lotus.Source.Adapters.Ecto.SQL.IdentifierTest do
   use ExUnit.Case, async: true
 
-  alias Lotus.SQL.Identifier
+  alias Lotus.Source.Adapters.Ecto.SQL.Identifier
 
   describe "parse_table_name/1" do
     test "parses unqualified table name" do

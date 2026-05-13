@@ -8,7 +8,9 @@ defmodule Lotus.AI.Actions.ValidateSQL do
 
   @behaviour Lotus.AI.Action
 
-  alias Lotus.SQL.Validator
+  alias Lotus.Query.Statement
+  alias Lotus.Source
+  alias Lotus.Source.Adapter
 
   @impl true
   def name, do: "validate_sql"
@@ -16,14 +18,14 @@ defmodule Lotus.AI.Actions.ValidateSQL do
   @impl true
   def description,
     do:
-      "Validate SQL syntax against the database without executing it. " <>
+      "Validate a query statement against the data source without executing it. " <>
         "Use this to check your query for syntax errors before returning it. " <>
         "Variables ({{var}}) and optional clauses ([[...]]) are handled automatically."
 
   @impl true
   def schema do
     [
-      sql: [type: :string, required: true, doc: "The SQL query to validate"],
+      sql: [type: :string, required: true, doc: "The query statement to validate"],
       data_source: [
         type: :string,
         required: true,
@@ -34,7 +36,10 @@ defmodule Lotus.AI.Actions.ValidateSQL do
 
   @impl true
   def run(params, _context) do
-    case Validator.validate(params.sql, params.data_source) do
+    adapter = Source.resolve!(params.data_source, nil)
+    statement = Statement.new(params.sql)
+
+    case Adapter.validate_statement(adapter, statement, []) do
       :ok ->
         {:ok, %{valid: true}}
 

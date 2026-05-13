@@ -1,7 +1,7 @@
 defmodule Lotus.AI.ToolTest do
   use Lotus.AICase, async: true
 
-  alias Lotus.AI.Actions.{GetTableSchema, ListSchemas, ListTables}
+  alias Lotus.AI.Actions.{DescribeTable, ListSchemas, ListTables}
   alias Lotus.AI.Tool
 
   describe "from_action/2" do
@@ -18,7 +18,7 @@ defmodule Lotus.AI.ToolTest do
     end
 
     test "strips bound params from the parameter schema" do
-      tool = Tool.from_action(GetTableSchema, bind: %{data_source: "postgres"})
+      tool = Tool.from_action(DescribeTable, bind: %{data_source: "postgres"})
 
       # data_source should not be exposed to the LLM
       refute Map.has_key?(tool.parameter_schema["properties"], "data_source")
@@ -30,7 +30,7 @@ defmodule Lotus.AI.ToolTest do
     end
 
     test "exposes all params when no bind is provided" do
-      tool = Tool.from_action(GetTableSchema)
+      tool = Tool.from_action(DescribeTable)
 
       assert Map.has_key?(tool.parameter_schema["properties"], "data_source")
       assert Map.has_key?(tool.parameter_schema["properties"], "table_name")
@@ -50,11 +50,11 @@ defmodule Lotus.AI.ToolTest do
     end
 
     test "callback handles LLM args with string keys" do
-      stub(Lotus.Schema, :get_table_schema, fn _source, _table ->
+      stub(Lotus.Schema, :describe_table, fn _source, _table ->
         {:ok, [%{name: "id", type: "integer", nullable: false, primary_key: true}]}
       end)
 
-      tool = Tool.from_action(GetTableSchema, bind: %{data_source: "postgres"})
+      tool = Tool.from_action(DescribeTable, bind: %{data_source: "postgres"})
 
       assert {:ok, json} = tool.callback.(%{"table_name" => "users"})
       assert {:ok, decoded} = Lotus.JSON.decode(json)

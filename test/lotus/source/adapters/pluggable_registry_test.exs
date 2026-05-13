@@ -35,21 +35,17 @@ defmodule Lotus.Source.Adapters.PluggableRegistryTest do
     @impl true
     def list_tables(_, _, _), do: {:ok, []}
     @impl true
-    def get_table_schema(_, _, _), do: {:ok, []}
+    def describe_table(_, _, _), do: {:ok, []}
     @impl true
-    def resolve_table_schema(_, _, _), do: {:ok, nil}
+    def resolve_table_namespace(_, _, _), do: {:ok, nil}
     @impl true
     def quote_identifier(_, id), do: ~s("#{id}")
     @impl true
-    def param_placeholder(_, i, _, _), do: "$#{i}"
+    def apply_filters(_, statement, _), do: statement
     @impl true
-    def limit_offset_placeholders(_, l, o), do: {"$#{l}", "$#{o}"}
+    def apply_sorts(_, statement, _), do: statement
     @impl true
-    def apply_filters(_, sql, params, _), do: {sql, params}
-    @impl true
-    def apply_sorts(_, sql, _), do: sql
-    @impl true
-    def explain_plan(_, _, _, _), do: {:ok, "plan"}
+    def query_plan(_, _, _, _), do: {:ok, "plan"}
     @impl true
     def builtin_denies(_), do: []
     @impl true
@@ -205,24 +201,25 @@ defmodule Lotus.Source.Adapters.PluggableRegistryTest do
     @impl true
     def list_tables(_, _, _), do: {:ok, [{nil, "messages"}]}
     @impl true
-    def get_table_schema(_, _, _), do: {:ok, []}
+    def describe_table(_, _, _), do: {:ok, []}
     @impl true
-    def resolve_table_schema(_, _, _), do: {:ok, nil}
+    def resolve_table_namespace(_, _, _), do: {:ok, nil}
 
     # SQL-generation stubs — trivial because the pipeline runs them even for
     # non-SQL adapters when no filters/sorts are supplied.
     @impl true
     def quote_identifier(_, id), do: id
     @impl true
-    def param_placeholder(_, i, _, _), do: "$#{i}"
+    def apply_filters(_, statement, _), do: statement
     @impl true
-    def limit_offset_placeholders(_, l, o), do: {"$#{l}", "$#{o}"}
+    def apply_sorts(_, statement, _), do: statement
     @impl true
-    def apply_filters(_, sql, params, _), do: {sql, params}
+    def query_plan(_, _, _, _), do: {:ok, "echo-plan"}
+
+    # Echo adapter has no real relations — return an empty set so preflight
+    # passes without needing the :allow_unrestricted_resources opt-in.
     @impl true
-    def apply_sorts(_, sql, _), do: sql
-    @impl true
-    def explain_plan(_, _, _, _), do: {:ok, "echo-plan"}
+    def extract_accessed_resources(_, _statement), do: {:ok, MapSet.new()}
     @impl true
     def builtin_denies(_), do: []
     @impl true

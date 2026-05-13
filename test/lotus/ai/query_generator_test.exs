@@ -1,7 +1,7 @@
-defmodule Lotus.AI.SQLGeneratorTest do
+defmodule Lotus.AI.QueryGeneratorTest do
   use Lotus.AICase, async: true
 
-  alias Lotus.AI.SQLGenerator
+  alias Lotus.AI.QueryGenerator
 
   describe "generate_sql/2" do
     setup do
@@ -17,7 +17,7 @@ defmodule Lotus.AI.SQLGeneratorTest do
       mock_successful_generation()
 
       assert {:ok, response} =
-               SQLGenerator.generate_sql("openai:gpt-4o",
+               QueryGenerator.generate_sql("openai:gpt-4o",
                  prompt: "Show active users",
                  data_source: "postgres",
                  api_key: "sk-test"
@@ -36,7 +36,7 @@ defmodule Lotus.AI.SQLGeneratorTest do
       end)
 
       assert {:ok, _} =
-               SQLGenerator.generate_sql("openai:gpt-3.5-turbo",
+               QueryGenerator.generate_sql("openai:gpt-3.5-turbo",
                  prompt: "Test",
                  data_source: "postgres",
                  api_key: "sk-test"
@@ -49,7 +49,7 @@ defmodule Lotus.AI.SQLGeneratorTest do
       end)
 
       assert {:ok, _} =
-               SQLGenerator.generate_sql("openai:gpt-4o",
+               QueryGenerator.generate_sql("openai:gpt-4o",
                  prompt: "Test",
                  data_source: "postgres",
                  api_key: "sk-test"
@@ -62,7 +62,7 @@ defmodule Lotus.AI.SQLGeneratorTest do
       end)
 
       assert {:ok, _} =
-               SQLGenerator.generate_sql("openai:gpt-4o",
+               QueryGenerator.generate_sql("openai:gpt-4o",
                  prompt: "Test",
                  data_source: "postgres",
                  api_key: "sk-test123"
@@ -77,13 +77,13 @@ defmodule Lotus.AI.SQLGeneratorTest do
         tool_names = Enum.map(tools, & &1.name)
         assert "list_schemas" in tool_names
         assert "list_tables" in tool_names
-        assert "get_table_schema" in tool_names
+        assert "describe_table" in tool_names
         assert "get_column_values" in tool_names
         assert "validate_sql" in tool_names
       end)
 
       assert {:ok, _} =
-               SQLGenerator.generate_sql("openai:gpt-4o",
+               QueryGenerator.generate_sql("openai:gpt-4o",
                  prompt: "Test",
                  data_source: "postgres",
                  api_key: "sk-test"
@@ -94,7 +94,7 @@ defmodule Lotus.AI.SQLGeneratorTest do
       mock_plain_sql()
 
       assert {:ok, response} =
-               SQLGenerator.generate_sql("anthropic:claude-opus-4",
+               QueryGenerator.generate_sql("anthropic:claude-opus-4",
                  prompt: "Count users",
                  data_source: "postgres",
                  api_key: "sk-ant-test"
@@ -111,7 +111,7 @@ defmodule Lotus.AI.SQLGeneratorTest do
       mock_complex_sql()
 
       assert {:ok, response} =
-               SQLGenerator.generate_sql("google:gemini-2.0-flash-exp",
+               QueryGenerator.generate_sql("google:gemini-2.0-flash-exp",
                  prompt: "Top products by revenue",
                  data_source: "postgres",
                  api_key: "AIzaSyTest"
@@ -129,7 +129,7 @@ defmodule Lotus.AI.SQLGeneratorTest do
       mock_unable_to_generate()
 
       assert {:error, {:unable_to_generate, reason}} =
-               SQLGenerator.generate_sql("openai:gpt-4o",
+               QueryGenerator.generate_sql("openai:gpt-4o",
                  prompt: "What's the weather?",
                  data_source: "postgres",
                  api_key: "sk-test"
@@ -142,7 +142,7 @@ defmodule Lotus.AI.SQLGeneratorTest do
       mock_api_error("Invalid API key")
 
       assert {:error, %Lotus.AI.Error.ServiceError{}} =
-               SQLGenerator.generate_sql("openai:gpt-4o",
+               QueryGenerator.generate_sql("openai:gpt-4o",
                  prompt: "Test",
                  data_source: "postgres",
                  api_key: "sk-invalid"
@@ -153,7 +153,7 @@ defmodule Lotus.AI.SQLGeneratorTest do
       mock_timeout()
 
       assert {:error, %Lotus.AI.Error.ServiceError{}} =
-               SQLGenerator.generate_sql("openai:gpt-4o",
+               QueryGenerator.generate_sql("openai:gpt-4o",
                  prompt: "Test",
                  data_source: "postgres",
                  api_key: "sk-test"
@@ -164,7 +164,7 @@ defmodule Lotus.AI.SQLGeneratorTest do
       mock_sql_with_variables()
 
       assert {:ok, response} =
-               SQLGenerator.generate_sql("openai:gpt-4o",
+               QueryGenerator.generate_sql("openai:gpt-4o",
                  prompt: "Show orders with a status dropdown",
                  data_source: "postgres",
                  api_key: "sk-test"
@@ -183,7 +183,7 @@ defmodule Lotus.AI.SQLGeneratorTest do
       mock_successful_generation()
 
       assert {:ok, response} =
-               SQLGenerator.generate_sql("openai:gpt-4o",
+               QueryGenerator.generate_sql("openai:gpt-4o",
                  prompt: "Show active users",
                  data_source: "postgres",
                  api_key: "sk-test"
@@ -196,7 +196,7 @@ defmodule Lotus.AI.SQLGeneratorTest do
       mock_plain_sql()
 
       assert {:ok, response} =
-               SQLGenerator.generate_sql("openai:gpt-4o",
+               QueryGenerator.generate_sql("openai:gpt-4o",
                  prompt: "Count users",
                  data_source: "postgres",
                  api_key: "sk-test"

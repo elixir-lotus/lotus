@@ -3,32 +3,29 @@ defmodule Lotus.AI.Prompts.OptimizationTest do
 
   alias Lotus.AI.Prompts.Optimization
 
+  defp pg_context do
+    %{
+      language: "sql:postgres",
+      syntax_notes: "Postgres uses EXPLAIN (FORMAT JSON). Look for Seq Scan in the plan.",
+      example_query: "SELECT * FROM users LIMIT 10",
+      error_patterns: []
+    }
+  end
+
   describe "system_prompt/1" do
-    test "includes database type" do
-      prompt = Optimization.system_prompt(:postgres)
-      assert prompt =~ "postgres"
+    test "includes the language identifier" do
+      prompt = Optimization.system_prompt(pg_context())
+      assert prompt =~ "sql:postgres"
     end
 
-    test "includes postgres-specific notes" do
-      prompt = Optimization.system_prompt(:postgres)
+    test "emits adapter-supplied syntax_notes" do
+      prompt = Optimization.system_prompt(pg_context())
       assert prompt =~ "Seq Scan"
       assert prompt =~ "EXPLAIN (FORMAT JSON)"
     end
 
-    test "includes mysql-specific notes" do
-      prompt = Optimization.system_prompt(:mysql)
-      assert prompt =~ "access_type"
-      assert prompt =~ "EXPLAIN FORMAT=JSON"
-    end
-
-    test "includes sqlite-specific notes" do
-      prompt = Optimization.system_prompt(:sqlite)
-      assert prompt =~ "SCAN TABLE"
-      assert prompt =~ "EXPLAIN QUERY PLAN"
-    end
-
     test "describes expected response format" do
-      prompt = Optimization.system_prompt(:postgres)
+      prompt = Optimization.system_prompt(pg_context())
       assert prompt =~ "type"
       assert prompt =~ "impact"
       assert prompt =~ "suggestion"
@@ -54,15 +51,15 @@ defmodule Lotus.AI.Prompts.OptimizationTest do
       refute prompt =~ "## Execution Plan"
     end
 
-    test "includes schema context when provided" do
+    test "includes source context when provided" do
       prompt = Optimization.user_prompt("SELECT * FROM users", nil, "users: id, name, email")
-      assert prompt =~ "## Schema Context"
+      assert prompt =~ "## Source Context"
       assert prompt =~ "users: id, name, email"
     end
 
-    test "omits schema context when nil" do
+    test "omits source context when nil" do
       prompt = Optimization.user_prompt("SELECT * FROM users", nil, nil)
-      refute prompt =~ "## Schema Context"
+      refute prompt =~ "## Source Context"
     end
   end
 

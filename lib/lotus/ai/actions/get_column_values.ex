@@ -8,7 +8,8 @@ defmodule Lotus.AI.Actions.GetColumnValues do
 
   @behaviour Lotus.AI.Action
 
-  alias Lotus.SQL.Identifier
+  alias Lotus.Source
+  alias Lotus.Source.Adapter
 
   @impl true
   def name, do: "get_column_values"
@@ -43,11 +44,37 @@ defmodule Lotus.AI.Actions.GetColumnValues do
 
   @impl true
   def run(params, _context) do
-    {schema, table} = Identifier.parse_table_name(params.table_name)
+    adapter = Source.resolve!(params.data_source, nil)
 
-    with :ok <- Identifier.validate_table_parts(schema, table),
-         :ok <- Identifier.validate_identifier(params.column_name, "column name") do
+    with {:ok, {schema, table}} <- parse_name(adapter, params.table_name),
+         :ok <- validate_parts(adapter, schema, table),
+         :ok <- Adapter.validate_identifier(adapter, :column, params.column_name) do
       execute_query(schema, table, params)
+    end
+  end
+
+  defp parse_name(adapter, table_name) do
+    case Adapter.parse_qualified_name(adapter, table_name) do
+      {:ok, [schema, table]} ->
+        {:ok, {schema, table}}
+
+      {:ok, [table]} ->
+        {:ok, {nil, table}}
+
+      {:ok, parts} ->
+        {:error, "Unexpected hierarchy depth for #{inspect(table_name)}: #{inspect(parts)}"}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp validate_parts(adapter, nil, table),
+    do: Adapter.validate_identifier(adapter, :table, table)
+
+  defp validate_parts(adapter, schema, table) do
+    with :ok <- Adapter.validate_identifier(adapter, :schema, schema) do
+      Adapter.validate_identifier(adapter, :table, table)
     end
   end
 

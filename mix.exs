@@ -139,6 +139,7 @@ defmodule Lotus.MixProject do
       "guides/custom-resolvers.md",
       "guides/caching.md",
       "guides/telemetry.md",
+      "guides/upgrading-to-v1.md",
       "guides/contributing.md"
     ]
   end

@@ -93,13 +93,13 @@ defmodule Lotus.AI.QueryExplainerTest do
                )
     end
 
-    test "includes get_table_schema tool" do
+    test "includes describe_table tool" do
       mock_with_assertion(fn _model, _context, opts ->
         tools = opts[:tools]
         assert length(tools) == 1
 
         tool_names = Enum.map(tools, & &1.name)
-        assert "get_table_schema" in tool_names
+        assert "describe_table" in tool_names
       end)
 
       assert {:ok, _} =

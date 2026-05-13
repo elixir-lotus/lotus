@@ -1,7 +1,7 @@
 defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQLTypePipelineTest do
   @moduledoc """
   End-to-end tests for the MySQL type-detection pipeline:
-  `get_table_schema/3` (extractor) → `db_type_to_lotus_type/1` (mapper) →
+  `describe_table/3` (extractor) → `db_type_to_lotus_type/1` (mapper) →
   `TypeCaster.cast_value/3` (caster).
 
   Unit tests on the mapper in isolation pass hand-rolled strings and cannot
@@ -23,7 +23,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQLTypePipelineTest do
 
   # Returns the raw type string the extractor emits for a column.
   defp column_type(table, column) do
-    {:ok, columns} = Adapter.get_table_schema(@mysql_adapter, @mysql_database, table)
+    {:ok, columns} = Adapter.describe_table(@mysql_adapter, @mysql_database, table)
     found = Enum.find(columns, &(&1.name == column))
     refute is_nil(found), "expected column #{inspect(column)} in #{table}"
     found.type

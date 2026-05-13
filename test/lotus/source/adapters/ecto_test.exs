@@ -1,6 +1,8 @@
 defmodule Lotus.Source.Adapters.EctoTest do
   use Lotus.Case, async: true
 
+  alias Lotus.Query.Filter
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
   alias Lotus.Test.Repo
@@ -74,15 +76,15 @@ defmodule Lotus.Source.Adapters.EctoTest do
       assert is_list(tables)
     end
 
-    test "get_table_schema/3 returns {:ok, _} tuple" do
+    test "describe_table/3 returns {:ok, _} tuple" do
       adapter = EctoAdapter.wrap("main", Repo)
-      assert {:ok, columns} = Adapter.get_table_schema(adapter, "public", "lotus_queries")
+      assert {:ok, columns} = Adapter.describe_table(adapter, "public", "lotus_queries")
       assert is_list(columns)
     end
 
-    test "resolve_table_schema/3 returns {:ok, _} tuple" do
+    test "resolve_table_namespace/3 returns {:ok, _} tuple" do
       adapter = EctoAdapter.wrap("main", Repo)
-      assert {:ok, schema} = Adapter.resolve_table_schema(adapter, "lotus_queries", ["public"])
+      assert {:ok, schema} = Adapter.resolve_table_namespace(adapter, "lotus_queries", ["public"])
       assert schema == "public"
     end
   end
@@ -91,16 +93,6 @@ defmodule Lotus.Source.Adapters.EctoTest do
     test "quote_identifier/1 uses Postgres double-quoting" do
       adapter = EctoAdapter.wrap("main", Repo)
       assert ~s("users") == Adapter.quote_identifier(adapter, "users")
-    end
-
-    test "param_placeholder/3 uses Postgres positional params" do
-      adapter = EctoAdapter.wrap("main", Repo)
-      assert "$1" == Adapter.param_placeholder(adapter, 1, "id", nil)
-    end
-
-    test "limit_offset_placeholders/2 uses Postgres positional params" do
-      adapter = EctoAdapter.wrap("main", Repo)
-      assert {"$1", "$2"} == Adapter.limit_offset_placeholders(adapter, 1, 2)
     end
   end
 
@@ -183,42 +175,51 @@ defmodule Lotus.Source.Adapters.EctoTest do
   describe "sanitize_query/3" do
     test "allows a single SELECT statement" do
       adapter = EctoAdapter.wrap("main", Repo)
-      assert :ok = Adapter.sanitize_query(adapter, "SELECT 1", [])
+      assert :ok = Adapter.sanitize_query(adapter, Statement.new("SELECT 1"), [])
     end
 
     test "rejects multiple statements" do
       adapter = EctoAdapter.wrap("main", Repo)
 
       assert {:error, "Only a single statement is allowed"} =
-               Adapter.sanitize_query(adapter, "SELECT 1; DROP TABLE users", [])
+               Adapter.sanitize_query(adapter, Statement.new("SELECT 1; DROP TABLE users"), [])
     end
 
     test "blocks DML when read_only is true" do
       adapter = EctoAdapter.wrap("main", Repo)
 
       assert {:error, "Only read-only queries are allowed"} =
-               Adapter.sanitize_query(adapter, "INSERT INTO users VALUES (1)", read_only: true)
+               Adapter.sanitize_query(
+                 adapter,
+                 Statement.new("INSERT INTO users VALUES (1)"),
+                 read_only: true
+               )
     end
 
     test "allows DML when read_only is false" do
       adapter = EctoAdapter.wrap("main", Repo)
 
       assert :ok =
-               Adapter.sanitize_query(adapter, "INSERT INTO users VALUES (1)", read_only: false)
+               Adapter.sanitize_query(
+                 adapter,
+                 Statement.new("INSERT INTO users VALUES (1)"),
+                 read_only: false
+               )
     end
 
     test "defaults to read_only: true" do
       adapter = EctoAdapter.wrap("main", Repo)
 
       assert {:error, "Only read-only queries are allowed"} =
-               Adapter.sanitize_query(adapter, "DELETE FROM users", [])
+               Adapter.sanitize_query(adapter, Statement.new("DELETE FROM users"), [])
     end
   end
 
-  describe "transform_bound_query/4" do
-    test "passes through query and params unchanged" do
+  describe "transform_bound_query/3" do
+    test "passes through statement unchanged" do
       adapter = EctoAdapter.wrap("main", Repo)
-      assert {"SELECT 1", [42]} = Adapter.transform_bound_query(adapter, "SELECT 1", [42], [])
+      statement = Statement.new("SELECT 1", [42])
+      assert ^statement = Adapter.transform_bound_query(adapter, statement, [])
     end
   end
 
@@ -226,17 +227,21 @@ defmodule Lotus.Source.Adapters.EctoTest do
     test "applies dialect-level statement rewriting" do
       # Postgres's transform_statement rewrites interval syntax, among other things.
       adapter = EctoAdapter.wrap("main", Repo)
-      out = Adapter.transform_statement(adapter, "SELECT 1")
-      assert is_binary(out)
+      out = Adapter.transform_statement(adapter, Statement.new("SELECT 1"))
+      assert %Statement{text: text} = out
+      assert is_binary(text)
     end
   end
 
-  describe "extract_accessed_resources/4" do
+  describe "extract_accessed_resources/2" do
     test "extracts postgres relations via EXPLAIN" do
       adapter = EctoAdapter.wrap("main", Repo)
 
       assert {:ok, relations} =
-               Adapter.extract_accessed_resources(adapter, "SELECT * FROM lotus_queries", [], [])
+               Adapter.extract_accessed_resources(
+                 adapter,
+                 Statement.new("SELECT * FROM lotus_queries")
+               )
 
       assert MapSet.member?(relations, {"public", "lotus_queries"})
     end
@@ -247,51 +252,52 @@ defmodule Lotus.Source.Adapters.EctoTest do
       assert {:error, _reason} =
                Adapter.extract_accessed_resources(
                  adapter,
-                 "SELECT * FROM nonexistent_xyz",
-                 [],
-                 []
+                 Statement.new("SELECT * FROM nonexistent_xyz")
                )
     end
   end
 
-  describe "apply_pagination/4" do
+  describe "apply_pagination/3" do
     test "wraps query with LIMIT/OFFSET for postgres" do
       adapter = EctoAdapter.wrap("main", Repo)
 
-      {paged_sql, paged_params, count_spec} =
-        Adapter.apply_pagination(adapter, "SELECT * FROM users", [], limit: 10, offset: 0)
+      paged =
+        Adapter.apply_pagination(adapter, Statement.new("SELECT * FROM users"),
+          limit: 10,
+          offset: 0
+        )
 
-      assert paged_sql =~ "LIMIT"
-      assert paged_sql =~ "OFFSET"
-      assert paged_params == [10, 0]
-      assert count_spec == nil
+      assert paged.text =~ "LIMIT"
+      assert paged.text =~ "OFFSET"
+      assert paged.params == [10, 0]
+      refute Map.has_key?(paged.meta, :count_spec)
     end
 
-    test "returns a count_spec when count: :exact" do
+    test "places a count_spec in meta when count: :exact" do
       adapter = EctoAdapter.wrap("main", Repo)
 
-      {_paged_sql, _paged_params, count_spec} =
-        Adapter.apply_pagination(adapter, "SELECT * FROM users", [],
+      paged =
+        Adapter.apply_pagination(adapter, Statement.new("SELECT * FROM users"),
           limit: 10,
           offset: 0,
           count: :exact
         )
 
-      assert %{query: count_query, params: []} = count_spec
+      assert %{query: count_query, params: []} = paged.meta[:count_spec]
       assert count_query =~ "COUNT(*)"
     end
 
-    test "returns nil count_spec when count: :none" do
+    test "no count_spec in meta when count: :none" do
       adapter = EctoAdapter.wrap("main", Repo)
 
-      {_paged_sql, _paged_params, count_spec} =
-        Adapter.apply_pagination(adapter, "SELECT * FROM users", [],
+      paged =
+        Adapter.apply_pagination(adapter, Statement.new("SELECT * FROM users"),
           limit: 10,
           offset: 0,
           count: :none
         )
 
-      assert count_spec == nil
+      refute Map.has_key?(paged.meta, :count_spec)
     end
   end
 
@@ -304,7 +310,7 @@ defmodule Lotus.Source.Adapters.EctoTest do
         source_type: :other
       }
 
-      assert :ok = Adapter.sanitize_query(adapter, "anything", [])
+      assert :ok = Adapter.sanitize_query(adapter, Statement.new("anything"), [])
     end
 
     test "transform_bound_query passes through for adapter without the callback" do
@@ -315,10 +321,11 @@ defmodule Lotus.Source.Adapters.EctoTest do
         source_type: :other
       }
 
-      assert {"SELECT 1", []} = Adapter.transform_bound_query(adapter, "SELECT 1", [], [])
+      statement = Statement.new("SELECT 1")
+      assert ^statement = Adapter.transform_bound_query(adapter, statement, [])
     end
 
-    test "extract_accessed_resources returns :skip for adapter without the callback" do
+    test "extract_accessed_resources returns {:unrestricted, _} for adapter without the callback" do
       adapter = %Adapter{
         name: "stub",
         module: Lotus.Test.StubAdapter,
@@ -326,7 +333,8 @@ defmodule Lotus.Source.Adapters.EctoTest do
         source_type: :other
       }
 
-      assert :skip = Adapter.extract_accessed_resources(adapter, "SELECT 1", [], [])
+      assert {:unrestricted, _reason} =
+               Adapter.extract_accessed_resources(adapter, Statement.new("SELECT 1"))
     end
 
     test "apply_pagination passes through for adapter without the callback" do
@@ -337,7 +345,8 @@ defmodule Lotus.Source.Adapters.EctoTest do
         source_type: :other
       }
 
-      assert {"SELECT 1", [], nil} = Adapter.apply_pagination(adapter, "SELECT 1", [], [])
+      statement = Statement.new("SELECT 1")
+      assert ^statement = Adapter.apply_pagination(adapter, statement, [])
     end
   end
 
@@ -353,6 +362,160 @@ defmodule Lotus.Source.Adapters.EctoTest do
       errors = Adapter.handled_errors(adapter)
       assert is_list(errors)
       assert Postgrex.Error in errors
+    end
+  end
+
+  describe "validate_statement/3" do
+    test "returns :ok for a parseable SQL statement" do
+      adapter = EctoAdapter.wrap("main", Repo)
+      assert :ok = Adapter.validate_statement(adapter, Statement.new("SELECT 1"), [])
+    end
+
+    test "returns {:error, reason} for syntactically invalid SQL" do
+      adapter = EctoAdapter.wrap("main", Repo)
+
+      assert {:error, reason} =
+               Adapter.validate_statement(adapter, Statement.new("SELEC 1"), [])
+
+      assert is_binary(reason)
+    end
+
+    test "neutralizes {{var}} placeholders so the raw template validates" do
+      adapter = EctoAdapter.wrap("main", Repo)
+
+      # Unbound {{id}} → NULL during validation.
+      assert :ok =
+               Adapter.validate_statement(
+                 adapter,
+                 Statement.new("SELECT * FROM test_users WHERE id = {{id}}"),
+                 []
+               )
+    end
+
+    test "strips [[...]] optional clauses so the template validates" do
+      adapter = EctoAdapter.wrap("main", Repo)
+
+      assert :ok =
+               Adapter.validate_statement(
+                 adapter,
+                 Statement.new("SELECT * FROM test_users [[WHERE name = {{name}}]]"),
+                 []
+               )
+    end
+  end
+
+  describe "parse_qualified_name/2" do
+    test "splits a schema-qualified name into [schema, table]" do
+      adapter = EctoAdapter.wrap("main", Repo)
+      assert {:ok, ["public", "users"]} = Adapter.parse_qualified_name(adapter, "public.users")
+    end
+
+    test "returns [name] for an unqualified name" do
+      adapter = EctoAdapter.wrap("main", Repo)
+      assert {:ok, ["users"]} = Adapter.parse_qualified_name(adapter, "users")
+    end
+  end
+
+  describe "validate_identifier/3" do
+    setup do
+      {:ok, adapter: EctoAdapter.wrap("main", Repo)}
+    end
+
+    test "accepts a simple ASCII identifier", %{adapter: adapter} do
+      assert :ok = Adapter.validate_identifier(adapter, :table, "users")
+      assert :ok = Adapter.validate_identifier(adapter, :schema, "public")
+      assert :ok = Adapter.validate_identifier(adapter, :column, "email_address")
+    end
+
+    test "rejects identifiers with spaces or punctuation", %{adapter: adapter} do
+      assert {:error, msg} = Adapter.validate_identifier(adapter, :table, "users table")
+      assert msg =~ "Invalid table name"
+    end
+
+    test "rejects identifiers starting with a digit", %{adapter: adapter} do
+      assert {:error, _msg} = Adapter.validate_identifier(adapter, :column, "1col")
+    end
+
+    test "accepts identifiers with underscores and digits (after first char)", %{adapter: adapter} do
+      assert :ok = Adapter.validate_identifier(adapter, :column, "col_1")
+      assert :ok = Adapter.validate_identifier(adapter, :column, "_private")
+    end
+  end
+
+  describe "supported_filter_operators/1" do
+    test "returns the full Lotus.Query.Filter operator set" do
+      adapter = EctoAdapter.wrap("main", Repo)
+      ops = Adapter.supported_filter_operators(adapter)
+
+      assert is_list(ops)
+      assert Enum.sort(ops) == Enum.sort(Filter.operators())
+    end
+
+    @tag :sqlite
+    test "SQLite dialect reports the same set" do
+      adapter = EctoAdapter.wrap("sqlite", Lotus.Test.SqliteRepo)
+      ops = Adapter.supported_filter_operators(adapter)
+
+      assert Enum.sort(ops) == Enum.sort(Filter.operators())
+    end
+
+    @tag :mysql
+    test "MySQL dialect reports the same set" do
+      adapter = EctoAdapter.wrap("mysql", Lotus.Test.MysqlRepo)
+      ops = Adapter.supported_filter_operators(adapter)
+
+      assert Enum.sort(ops) == Enum.sort(Filter.operators())
+    end
+  end
+
+  describe "prepare_for_analysis/2" do
+    test "neutralizes {{var}} placeholders to NULL" do
+      adapter = EctoAdapter.wrap("main", Repo)
+
+      assert {:ok, %Statement{text: prepared}} =
+               Adapter.prepare_for_analysis(
+                 adapter,
+                 Statement.new("SELECT * FROM test_users WHERE id = {{id}}")
+               )
+
+      assert prepared =~ "id = NULL"
+      refute prepared =~ "{{id}}"
+    end
+
+    test "strips [[...]] brackets while keeping inner content visible to the planner" do
+      adapter = EctoAdapter.wrap("main", Repo)
+
+      assert {:ok, %Statement{text: prepared}} =
+               Adapter.prepare_for_analysis(
+                 adapter,
+                 Statement.new("SELECT * FROM test_users [[WHERE name = {{name}}]]")
+               )
+
+      assert prepared =~ "WHERE name = NULL"
+      refute prepared =~ "[["
+      refute prepared =~ "]]"
+    end
+
+    test "empties :params — the prepared statement carries no bound values" do
+      adapter = EctoAdapter.wrap("main", Repo)
+
+      assert {:ok, %Statement{params: []}} =
+               Adapter.prepare_for_analysis(
+                 adapter,
+                 Statement.new("SELECT 1", [1, 2, 3])
+               )
+    end
+
+    test "returns the prepared statement validatable by query_plan/4" do
+      adapter = EctoAdapter.wrap("main", Repo)
+
+      {:ok, prepared} =
+        Adapter.prepare_for_analysis(
+          adapter,
+          Statement.new("SELECT id FROM test_users WHERE id = {{id}} [[AND name = {{name}}]]")
+        )
+
+      assert {:ok, _plan} = Adapter.query_plan(adapter, prepared.text, prepared.params, [])
     end
   end
 end

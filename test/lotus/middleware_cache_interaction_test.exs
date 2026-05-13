@@ -7,7 +7,7 @@ defmodule Lotus.MiddlewareCacheInteractionTest do
   2. Context-sensitive middleware sees each per-call context, even on cache hits.
   3. The adapter is still cached across calls (called only once).
 
-  Coverage spans :list_tables, :list_schemas, :get_table_schema, and :list_relations.
+  Coverage spans :list_tables, :list_schemas, :describe_table, and :list_relations.
   """
 
   use Lotus.CacheCase
@@ -213,20 +213,20 @@ defmodule Lotus.MiddlewareCacheInteractionTest do
   end
 
   # ─────────────────────────────────────────────────
-  # get_table_schema
+  # describe_table
   # ─────────────────────────────────────────────────
 
-  describe "get_table_schema with cache" do
+  describe "describe_table with cache" do
     test "middleware runs on every call, not only on cache miss" do
       Lotus.Source.Adapter
-      |> stub(:resolve_table_schema, fn _a, _t, _s -> {:ok, "public"} end)
-      |> stub(:get_table_schema, fn _a, "public", "users" -> {:ok, @fake_columns} end)
+      |> stub(:resolve_table_namespace, fn _a, _t, _s -> {:ok, "public"} end)
+      |> stub(:describe_table, fn _a, "public", "users" -> {:ok, @fake_columns} end)
 
-      Middleware.compile(%{after_get_table_schema: [{CountingPlug, []}]})
+      Middleware.compile(%{after_describe_table: [{CountingPlug, []}]})
 
-      {:ok, _} = Lotus.get_table_schema("test_source", "users")
-      {:ok, _} = Lotus.get_table_schema("test_source", "users")
-      {:ok, _} = Lotus.get_table_schema("test_source", "users")
+      {:ok, _} = Lotus.describe_table("test_source", "users")
+      {:ok, _} = Lotus.describe_table("test_source", "users")
+      {:ok, _} = Lotus.describe_table("test_source", "users")
 
       assert_received :middleware_ran
       assert_received :middleware_ran
@@ -235,13 +235,13 @@ defmodule Lotus.MiddlewareCacheInteractionTest do
 
     test "context-sensitive middleware sees each per-call context, even on cache hits" do
       Lotus.Source.Adapter
-      |> stub(:resolve_table_schema, fn _a, _t, _s -> {:ok, "public"} end)
-      |> stub(:get_table_schema, fn _a, "public", "users" -> {:ok, @fake_columns} end)
+      |> stub(:resolve_table_namespace, fn _a, _t, _s -> {:ok, "public"} end)
+      |> stub(:describe_table, fn _a, "public", "users" -> {:ok, @fake_columns} end)
 
-      Middleware.compile(%{after_get_table_schema: [{ContextCapturePlug, []}]})
+      Middleware.compile(%{after_describe_table: [{ContextCapturePlug, []}]})
 
-      {:ok, _} = Lotus.get_table_schema("test_source", "users", context: %{tenant: "acme"})
-      {:ok, _} = Lotus.get_table_schema("test_source", "users", context: %{tenant: "globex"})
+      {:ok, _} = Lotus.describe_table("test_source", "users", context: %{tenant: "acme"})
+      {:ok, _} = Lotus.describe_table("test_source", "users", context: %{tenant: "globex"})
 
       assert_received {:middleware_context, %{tenant: "acme"}}
       assert_received {:middleware_context, %{tenant: "globex"}}
@@ -251,25 +251,25 @@ defmodule Lotus.MiddlewareCacheInteractionTest do
       test_pid = self()
 
       Lotus.Source.Adapter
-      |> stub(:resolve_table_schema, fn _a, _t, _s ->
+      |> stub(:resolve_table_namespace, fn _a, _t, _s ->
         send(test_pid, :resolve_called)
         {:ok, "public"}
       end)
-      |> stub(:get_table_schema, fn _a, "public", "users" ->
+      |> stub(:describe_table, fn _a, "public", "users" ->
         send(test_pid, :adapter_called)
         {:ok, @fake_columns}
       end)
 
       Middleware.compile(%{})
 
-      {:ok, cols1} = Lotus.get_table_schema("test_source", "users")
-      {:ok, cols2} = Lotus.get_table_schema("test_source", "users")
-      {:ok, cols3} = Lotus.get_table_schema("test_source", "users")
+      {:ok, cols1} = Lotus.describe_table("test_source", "users")
+      {:ok, cols2} = Lotus.describe_table("test_source", "users")
+      {:ok, cols3} = Lotus.describe_table("test_source", "users")
 
       assert cols1 == cols2
       assert cols2 == cols3
 
-      # Both resolve and get_table_schema cached after first call
+      # Both resolve and describe_table cached after first call
       assert_received :resolve_called
       refute_received :resolve_called
       assert_received :adapter_called

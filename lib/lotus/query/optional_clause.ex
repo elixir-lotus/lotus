@@ -1,12 +1,16 @@
-defmodule Lotus.SQL.OptionalClause do
+defmodule Lotus.Query.OptionalClause do
   @moduledoc """
-  Processes `[[...]]` optional clause syntax in SQL queries.
+  Processes `[[...]]` optional clause syntax in any text-based query language.
 
   Clauses wrapped in double brackets are stripped entirely when the enclosed
   variables have no value, making them optional. When all variables inside a
   block have values, the brackets are removed and the content is kept.
 
-  ## Example
+  The `[[ ... ]]` / `{{var}}` template syntax is language-agnostic — it works
+  on SQL, JSON DSLs, Cypher, or any other textual query format. Adapters that
+  work on AST representations should apply this before serialization.
+
+  ## Example (SQL)
 
       SELECT * FROM users
       WHERE 1=1
@@ -64,7 +68,7 @@ defmodule Lotus.SQL.OptionalClause do
 
   ## Examples
 
-      iex> Lotus.SQL.OptionalClause.strip_brackets("WHERE 1=1 [[AND status = 'active']]")
+      iex> Lotus.Query.OptionalClause.strip_brackets("WHERE 1=1 [[AND status = 'active']]")
       "WHERE 1=1 AND status = 'active'"
   """
   @spec strip_brackets(String.t()) :: String.t()

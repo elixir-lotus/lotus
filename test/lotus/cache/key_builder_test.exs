@@ -171,5 +171,77 @@ defmodule Lotus.Cache.KeyBuilderTest do
 
       assert key_a == key_b
     end
+
+    test "accepts a map as statement text (non-SQL adapter payload)" do
+      # Elasticsearch-style adapter-native payload — the body is a parsed
+      # JSON object held as an Elixir map. The default key builder must
+      # serialize any term shape, not just iodata.
+      es_body = %{
+        "query" => %{"match" => %{"status" => "active"}},
+        "size" => 10
+      }
+
+      opts = [data_source: "search", lotus_version: "1.0.0"]
+
+      key = Default.result_key(es_body, %{}, opts, nil)
+
+      assert Regex.match?(~r/^result:search:[a-f0-9]{64}$/, key)
+    end
+
+    test "map-text key is stable across identical calls" do
+      es_body = %{"query" => %{"term" => %{"id" => 1}}, "from" => 0, "size" => 20}
+      opts = [data_source: "search", lotus_version: "1.0.0"]
+
+      key_a = Default.result_key(es_body, %{}, opts, nil)
+      key_b = Default.result_key(es_body, %{}, opts, nil)
+
+      assert key_a == key_b
+    end
+
+    test "different map-text bodies produce different keys" do
+      opts = [data_source: "search", lotus_version: "1.0.0"]
+      body_a = %{"query" => %{"match" => %{"status" => "active"}}}
+      body_b = %{"query" => %{"match" => %{"status" => "pending"}}}
+
+      refute Default.result_key(body_a, %{}, opts, nil) ==
+               Default.result_key(body_b, %{}, opts, nil)
+    end
+
+    test "SQL and map-text with same semantic content still produce distinct keys" do
+      # A string "foo" and a map %{q: "foo"} are genuinely different payloads
+      # — the key builder shouldn't collapse them to the same digest even if
+      # one could be read as a serialization of the other.
+      opts = [data_source: "primary", lotus_version: "1.0.0"]
+
+      key_sql = Default.result_key("foo", %{}, opts, nil)
+      key_map = Default.result_key(%{q: "foo"}, %{}, opts, nil)
+
+      refute key_sql == key_map
+    end
+
+    test "accepts other non-iodata terms (tuples, atoms) as statement text" do
+      # Adapter authors are free to use any term() for statement text. The
+      # key builder must not crash on tuples, atoms, nested structures, etc.
+      opts = [data_source: "custom", lotus_version: "1.0.0"]
+
+      key_tuple = Default.result_key({:select, "users", [:id, :name]}, %{}, opts, nil)
+      key_atom = Default.result_key(:ping, %{}, opts, nil)
+      key_nested = Default.result_key(%{op: :scan, filters: [{:eq, "x", 1}]}, %{}, opts, nil)
+
+      for key <- [key_tuple, key_atom, key_nested] do
+        assert Regex.match?(~r/^result:custom:[a-f0-9]{64}$/, key)
+      end
+
+      assert key_tuple != key_atom
+      assert key_tuple != key_nested
+    end
+
+    test "bound params still differentiate keys when text is a map" do
+      opts = [data_source: "search", lotus_version: "1.0.0"]
+      body = %{"query" => %{"match_all" => %{}}}
+
+      refute Default.result_key(body, %{status: "active"}, opts, nil) ==
+               Default.result_key(body, %{status: "pending"}, opts, nil)
+    end
   end
 end

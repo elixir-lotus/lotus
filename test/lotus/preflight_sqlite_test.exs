@@ -2,6 +2,7 @@ defmodule Lotus.PreflightSqliteTest do
   use Lotus.Case
   use Mimic
   alias Lotus.Preflight
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
 
   @moduletag :sqlite
@@ -10,10 +11,13 @@ defmodule Lotus.PreflightSqliteTest do
 
   describe "SQLite preflight authorization" do
     test "allows queries against regular tables" do
-      assert :ok = Preflight.authorize(@sqlite_adapter, "SELECT 1", [])
+      assert :ok = Preflight.authorize(@sqlite_adapter, Statement.new("SELECT 1", []))
 
       assert :ok =
-               Preflight.authorize(@sqlite_adapter, "SELECT * FROM products LIMIT 1", [])
+               Preflight.authorize(
+                 @sqlite_adapter,
+                 Statement.new("SELECT * FROM products LIMIT 1", [])
+               )
     end
 
     test "allows complex queries with JOINs" do
@@ -26,19 +30,21 @@ defmodule Lotus.PreflightSqliteTest do
         LIMIT 10
       """
 
-      assert :ok = Preflight.authorize(@sqlite_adapter, sql, [])
+      assert :ok = Preflight.authorize(@sqlite_adapter, Statement.new(sql, []))
     end
 
     test "allows simple queries" do
       assert :ok =
                Preflight.authorize(
                  @sqlite_adapter,
-                 "SELECT * FROM orders WHERE status = 'pending'",
-                 []
+                 Statement.new("SELECT * FROM orders WHERE status = 'pending'", [])
                )
 
       assert :ok =
-               Preflight.authorize(@sqlite_adapter, "SELECT COUNT(*) FROM products", [])
+               Preflight.authorize(
+                 @sqlite_adapter,
+                 Statement.new("SELECT COUNT(*) FROM products", [])
+               )
     end
 
     test "allows subqueries and CTEs" do
@@ -48,7 +54,7 @@ defmodule Lotus.PreflightSqliteTest do
         WHERE id IN (SELECT product_id FROM order_items WHERE quantity > 1)
       """
 
-      assert :ok = Preflight.authorize(@sqlite_adapter, sql, [])
+      assert :ok = Preflight.authorize(@sqlite_adapter, Statement.new(sql, []))
 
       # CTE
       sql = """
@@ -61,27 +67,26 @@ defmodule Lotus.PreflightSqliteTest do
         SELECT * FROM product_stats WHERE order_count > 0
       """
 
-      assert :ok = Preflight.authorize(@sqlite_adapter, sql, [])
+      assert :ok = Preflight.authorize(@sqlite_adapter, Statement.new(sql, []))
     end
 
     test "handles parameterized queries" do
       assert :ok =
                Preflight.authorize(
                  @sqlite_adapter,
-                 "SELECT * FROM products WHERE id = ?",
-                 [1]
+                 Statement.new("SELECT * FROM products WHERE id = ?", [1])
                )
 
       assert :ok =
                Preflight.authorize(
                  @sqlite_adapter,
-                 "SELECT * FROM orders WHERE total_amount > ?",
-                 [10.0]
+                 Statement.new("SELECT * FROM orders WHERE total_amount > ?", [10.0])
                )
     end
 
     test "handles syntax errors gracefully" do
-      {:error, _msg} = Preflight.authorize(@sqlite_adapter, "INVALID SQL SYNTAX", [])
+      {:error, _msg} =
+        Preflight.authorize(@sqlite_adapter, Statement.new("INVALID SQL SYNTAX", []))
     end
   end
 
@@ -90,8 +95,7 @@ defmodule Lotus.PreflightSqliteTest do
       {:error, msg} =
         Preflight.authorize(
           @sqlite_adapter,
-          "SELECT * FROM lotus_sqlite_schema_migrations",
-          []
+          Statement.new("SELECT * FROM lotus_sqlite_schema_migrations", [])
         )
 
       assert msg =~ "blocked table"
@@ -100,7 +104,7 @@ defmodule Lotus.PreflightSqliteTest do
 
     test "blocks queries against lotus_queries" do
       {:error, msg} =
-        Preflight.authorize(@sqlite_adapter, "SELECT * FROM lotus_queries", [])
+        Preflight.authorize(@sqlite_adapter, Statement.new("SELECT * FROM lotus_queries", []))
 
       assert msg =~ "blocked table"
       assert msg =~ "lotus_queries"
@@ -113,7 +117,7 @@ defmodule Lotus.PreflightSqliteTest do
         JOIN lotus_sqlite_schema_migrations sm ON 1=1
       """
 
-      {:error, msg} = Preflight.authorize(@sqlite_adapter, sql, [])
+      {:error, msg} = Preflight.authorize(@sqlite_adapter, Statement.new(sql, []))
       assert msg =~ "blocked table"
       assert msg =~ "schema_migrations"
     end
@@ -136,11 +140,15 @@ defmodule Lotus.PreflightSqliteTest do
     end
 
     test "blocks queries against tables matching bare string deny rules" do
-      {:error, msg} = Preflight.authorize(@sqlite_adapter, "SELECT * FROM products", [])
+      {:error, msg} =
+        Preflight.authorize(@sqlite_adapter, Statement.new("SELECT * FROM products", []))
+
       assert msg =~ "blocked table"
       assert msg =~ "products"
 
-      {:error, msg} = Preflight.authorize(@sqlite_adapter, "SELECT * FROM order_items", [])
+      {:error, msg} =
+        Preflight.authorize(@sqlite_adapter, Statement.new("SELECT * FROM order_items", []))
+
       assert msg =~ "blocked table"
       assert msg =~ "order_items"
     end
@@ -153,14 +161,14 @@ defmodule Lotus.PreflightSqliteTest do
         JOIN products p ON oi.product_id = p.id
       """
 
-      {:error, msg} = Preflight.authorize(@sqlite_adapter, sql, [])
+      {:error, msg} = Preflight.authorize(@sqlite_adapter, Statement.new(sql, []))
       assert msg =~ "blocked table"
       assert msg =~ "products"
       assert msg =~ "order_items"
     end
 
     test "allows queries against tables not in deny list" do
-      assert :ok = Preflight.authorize(@sqlite_adapter, "SELECT * FROM orders", [])
+      assert :ok = Preflight.authorize(@sqlite_adapter, Statement.new("SELECT * FROM orders", []))
     end
   end
 end

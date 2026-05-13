@@ -52,7 +52,7 @@ defmodule Lotus.Cache.ScopeInvalidationTest do
       tag_a = "scope:#{KeyBuilder.scope_digest(scope_a)}"
 
       Cache.put("scoped_key", "scoped_value", 5000, tags: [tag_a])
-      Cache.put("unscoped_key", "unscoped_value", 5000, tags: ["repo:test"])
+      Cache.put("unscoped_key", "unscoped_value", 5000, tags: ["source:test"])
 
       assert :ok = Cache.invalidate_scope(scope_a)
 
@@ -89,7 +89,7 @@ defmodule Lotus.Cache.ScopeInvalidationTest do
       tag = "scope:#{KeyBuilder.scope_digest(scope)}"
 
       Cache.put("result:primary:abc123:#{KeyBuilder.scope_digest(scope)}", "result_data", 5000,
-        tags: [tag, "repo:primary"]
+        tags: [tag, "source:primary"]
       )
 
       assert {:ok, "result_data"} =
@@ -105,10 +105,10 @@ defmodule Lotus.Cache.ScopeInvalidationTest do
       tag = "scope:#{KeyBuilder.scope_digest(scope)}"
 
       Cache.put("result:primary:abc123:#{KeyBuilder.scope_digest(scope)}", "scoped", 5000,
-        tags: [tag, "repo:primary"]
+        tags: [tag, "source:primary"]
       )
 
-      Cache.put("result:primary:def456", "unscoped", 5000, tags: ["repo:primary"])
+      Cache.put("result:primary:def456", "unscoped", 5000, tags: ["source:primary"])
 
       assert :ok = Cache.invalidate_scope(scope)
 
@@ -125,7 +125,7 @@ defmodule Lotus.Cache.ScopeInvalidationTest do
       )
 
       Cache.put("result:primary:def456:#{KeyBuilder.scope_digest(scope)}", "results", 5000,
-        tags: [tag, "repo:primary"]
+        tags: [tag, "source:primary"]
       )
 
       assert :ok = Cache.invalidate_scope(scope)
@@ -140,13 +140,13 @@ defmodule Lotus.Cache.ScopeInvalidationTest do
       scope = %{tenant_id: 1}
       tag = "scope:#{KeyBuilder.scope_digest(scope)}"
 
-      Cache.put("result:primary:samehash", "unscoped_result", 5000, tags: ["repo:primary"])
+      Cache.put("result:primary:samehash", "unscoped_result", 5000, tags: ["source:primary"])
 
       Cache.put(
         "result:primary:samehash:#{KeyBuilder.scope_digest(scope)}",
         "scoped_result",
         5000,
-        tags: [tag, "repo:primary"]
+        tags: [tag, "source:primary"]
       )
 
       assert :ok = Cache.invalidate_scope(scope)

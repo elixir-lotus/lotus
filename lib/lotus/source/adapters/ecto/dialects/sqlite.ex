@@ -6,9 +6,10 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   require Logger
 
   alias __MODULE__.EditorConfig
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
-  alias Lotus.SQL.FilterInjector
-  alias Lotus.SQL.SortInjector
+  alias Lotus.Source.Adapters.Ecto.SQL.FilterInjector
+  alias Lotus.Source.Adapters.Ecto.SQL.SortInjector
 
   @impl true
   def source_type, do: :sqlite
@@ -109,6 +110,35 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   def query_language, do: "sql:sqlite"
 
   @impl true
+  def ai_context do
+    {:ok,
+     %{
+       language: query_language(),
+       example_query:
+         "SELECT * FROM users WHERE created_at > datetime('now', '-7 days') ORDER BY created_at DESC LIMIT 10",
+       syntax_notes:
+         "Use double-quoted identifiers (\"table\", \"column\"). Dynamic typing — column types are hints, not enforced. Date helpers: date(), datetime(), strftime(). Older versions lack window functions; prefer subqueries.",
+       error_patterns: [
+         %{
+           pattern: ~r/no such table/i,
+           hint:
+             "Table doesn't exist. SQLite is schema-flat — use list_tables() to see what's available."
+         },
+         %{
+           pattern: ~r/no such column/i,
+           hint:
+             "Column doesn't exist. Use describe_table() to list real columns before retrying."
+         },
+         %{
+           pattern: ~r/near ".*": syntax error/i,
+           hint:
+             "SQLite parser rejected the query near a specific token. Check quoting and keyword order."
+         }
+       ]
+     }}
+  end
+
+  @impl true
   def limit_query(statement, limit) do
     "SELECT * FROM (#{statement}) AS limited_query LIMIT #{limit}"
   end
@@ -175,7 +205,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def get_table_schema(repo, _schema, table_name) do
+  def describe_table(repo, _schema, table_name) do
     # Use quote_identifier/1 (double-quote + escaped internal quotes) rather
     # than the strict identifier validator — list_tables/3 returns SQLite
     # names verbatim from sqlite_master, which accepts legal names the
@@ -200,7 +230,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def explain_plan(repo, sql, params, _opts) do
+  def query_plan(repo, sql, params, _opts) do
     explain_sql = "EXPLAIN QUERY PLAN " <> sql
 
     case repo.query(explain_sql, params) do
@@ -216,7 +246,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def resolve_table_schema(_repo, _table, _schemas) do
+  def resolve_table_namespace(_repo, _table, _schemas) do
     nil
   end
 
@@ -227,19 +257,23 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def apply_filters(sql, params, filters) do
-    FilterInjector.apply(sql, params, filters, &quote_identifier/1, fn _idx -> "?" end)
+  def apply_filters(%Statement{text: sql, params: params} = statement, filters) do
+    {new_sql, new_params} =
+      FilterInjector.apply(sql, params, filters, &quote_identifier/1, fn _idx -> "?" end)
+
+    %{statement | text: new_sql, params: new_params}
   end
 
   @impl true
-  def apply_sorts(sql, sorts) do
-    SortInjector.apply(sql, sorts, &quote_identifier/1)
+  def apply_sorts(%Statement{text: sql} = statement, sorts) do
+    %{statement | text: SortInjector.apply(sql, sorts, &quote_identifier/1)}
   end
 
   alias Lotus.Source.Adapters.Ecto, as: EctoHelpers
 
   @impl true
-  def extract_accessed_resources(repo, sql, params, opts) do
+  def extract_accessed_resources(repo, %Statement{text: sql, params: params, meta: meta}) do
+    opts = Map.to_list(meta)
     alias_map = EctoHelpers.parse_alias_map(sql)
     explain = "EXPLAIN QUERY PLAN " <> sql
 
@@ -306,12 +340,15 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def transform_statement(sql) do
-    alias Lotus.SQL.Transformer
+  def transform_statement(%Statement{text: sql} = statement) do
+    alias Lotus.Source.Adapters.Ecto.SQL.Transformer
 
-    sql
-    |> Transformer.transform_wildcards(:pipe)
-    |> Transformer.strip_quoted_variables()
+    new_sql =
+      sql
+      |> Transformer.transform_wildcards(:pipe)
+      |> Transformer.strip_quoted_variables()
+
+    %{statement | text: new_sql}
   end
 
   # SQLite accepts any declared type string; prefix-match on the type name so

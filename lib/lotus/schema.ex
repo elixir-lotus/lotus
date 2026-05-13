@@ -88,7 +88,7 @@ defmodule Lotus.Schema do
     start_time = Telemetry.schema_introspection_start(:list_schemas, adapter.name)
 
     key = schema_key(:list_schemas, adapter.name, scope)
-    tags = ["repo:#{adapter.name}", "schema:list_schemas"] ++ scope_tags(scope)
+    tags = ["source:#{adapter.name}", "schema:list_schemas"] ++ scope_tags(scope)
 
     profile =
       if is_list(opts[:cache]) do
@@ -196,7 +196,7 @@ defmodule Lotus.Schema do
               scope
             )
 
-          tags = ["repo:#{adapter.name}", "schema:list_tables"] ++ scope_tags(scope)
+          tags = ["source:#{adapter.name}", "schema:list_tables"] ++ scope_tags(scope)
 
           profile =
             if is_list(opts[:cache]) do
@@ -257,43 +257,43 @@ defmodule Lotus.Schema do
   end
 
   @doc """
-  Gets the schema information for a specific table.
+  Describes a specific table (column definitions).
 
   Returns a list of column definitions with their types and constraints.
 
   ## Options
 
-  - `:schema` - Look for table in specific schema
-  - `:schemas` - Search for table in multiple schemas (first match wins)
+  - `:schema` - Look for table in specific namespace
+  - `:schemas` - Search for table in multiple namespaces (first match wins)
   - `:search_path` - Use PostgreSQL search_path to resolve table location
   - `:cache` - Cache options (profile, ttl_ms, etc.)
-  - `:context` - Opaque value passed to the `:after_get_table_schema` and
+  - `:context` - Opaque value passed to the `:after_describe_table` and
     `:after_discover` middleware events (see `Lotus.Middleware`)
   - `:scope` - Opaque value passed to the visibility resolver and hashed
     into the cache key. Different scopes produce independent cached entries.
 
   ## Examples
 
-      {:ok, schema} = Lotus.Schema.get_table_schema(MyApp.Repo, "users")
-      # Returns schema for public.users
+      {:ok, columns} = Lotus.Schema.describe_table(MyApp.Repo, "users")
+      # Column definitions for public.users
 
-      {:ok, schema} = Lotus.Schema.get_table_schema("postgres", "customers", schema: "reporting")
-      # Returns schema for reporting.customers
+      {:ok, columns} = Lotus.Schema.describe_table("postgres", "customers", schema: "reporting")
+      # Column definitions for reporting.customers
 
-      {:ok, schema} = Lotus.Schema.get_table_schema("postgres", "customers", search_path: "reporting, public")
+      {:ok, columns} = Lotus.Schema.describe_table("postgres", "customers", search_path: "reporting, public")
       # Finds customers table using search_path resolution
   """
-  @spec get_table_schema(module() | String.t(), String.t(), keyword()) ::
+  @spec describe_table(module() | String.t(), String.t(), keyword()) ::
           {:ok, [map()]} | {:error, term()}
-  def get_table_schema(repo_or_name, table_name, opts \\ []) do
+  def describe_table(repo_or_name, table_name, opts \\ []) do
     adapter = Source.resolve!(repo_or_name, nil)
     context = Keyword.get(opts, :context)
     scope = Keyword.get(opts, :scope)
-    start_time = Telemetry.schema_introspection_start(:get_table_schema, adapter.name)
+    start_time = Telemetry.schema_introspection_start(:describe_table, adapter.name)
     schemas = effective_schemas(adapter, opts)
 
     cache_result =
-      case resolve_table_schema_with_cache(
+      case resolve_table_namespace_with_cache(
              adapter,
              table_name,
              schemas,
@@ -302,7 +302,7 @@ defmodule Lotus.Schema do
            ) do
         nil when schemas == [] ->
           # Schema-less database (SQLite) - nil is expected, proceed with nil schema
-          {nil, get_table_schema_cached(adapter, table_name, nil, scope, opts)}
+          {nil, describe_table_cached(adapter, table_name, nil, scope, opts)}
 
         nil ->
           {nil,
@@ -313,7 +313,7 @@ defmodule Lotus.Schema do
 
         resolved_schema ->
           {resolved_schema,
-           get_table_schema_cached(adapter, table_name, resolved_schema, scope, opts)}
+           describe_table_cached(adapter, table_name, resolved_schema, scope, opts)}
       end
 
     result =
@@ -323,7 +323,7 @@ defmodule Lotus.Schema do
 
         {resolved_schema, {:ok, annotated}} ->
           with {:ok, columns} <-
-                 run_after_discover(:after_get_table_schema, :columns, %{
+                 run_after_discover(:after_describe_table, :columns, %{
                    source: adapter.name,
                    table_name: table_name,
                    schema: resolved_schema,
@@ -332,7 +332,7 @@ defmodule Lotus.Schema do
                    context: context
                  }) do
             run_after_discover_unified(
-              :get_table_schema,
+              :describe_table,
               adapter.name,
               columns,
               scope,
@@ -343,7 +343,7 @@ defmodule Lotus.Schema do
 
     Telemetry.schema_introspection_stop(
       start_time,
-      :get_table_schema,
+      :describe_table,
       adapter.name,
       result_status(result)
     )
@@ -351,13 +351,13 @@ defmodule Lotus.Schema do
     result
   end
 
-  defp get_table_schema_cached(adapter, table_name, resolved_schema, scope, opts) do
-    key = schema_key(:get_table_schema, adapter.name, resolved_schema, table_name, scope)
+  defp describe_table_cached(adapter, table_name, resolved_schema, scope, opts) do
+    key = schema_key(:describe_table, adapter.name, resolved_schema, table_name, scope)
 
     tags =
       [
-        "repo:#{adapter.name}",
-        "schema:get_table_schema",
+        "source:#{adapter.name}",
+        "schema:describe_table",
         "table:#{if resolved_schema, do: "#{resolved_schema}.#{table_name}", else: table_name}"
       ] ++ scope_tags(scope)
 
@@ -378,7 +378,7 @@ defmodule Lotus.Schema do
   end
 
   defp fetch_and_annotate_columns(adapter, resolved_schema, table_name, scope) do
-    case Adapter.get_table_schema(adapter, resolved_schema, table_name) do
+    case Adapter.describe_table(adapter, resolved_schema, table_name) do
       {:ok, cols} ->
         annotated =
           annotate_columns_with_visibility(cols, adapter.name, resolved_schema, table_name, scope)
@@ -443,7 +443,7 @@ defmodule Lotus.Schema do
     schemas = effective_schemas(adapter, opts)
 
     result =
-      case resolve_table_schema_with_cache(
+      case resolve_table_namespace_with_cache(
              adapter,
              table_name,
              schemas,
@@ -478,7 +478,7 @@ defmodule Lotus.Schema do
 
     tags =
       [
-        "repo:#{adapter.name}",
+        "source:#{adapter.name}",
         "schema:get_table_stats",
         "table:#{if resolved_schema, do: "#{resolved_schema}.#{table_name}", else: table_name}"
       ] ++ scope_tags(scope)
@@ -520,10 +520,10 @@ defmodule Lotus.Schema do
   end
 
   @doc """
-  Lists all relations (tables with schema information) in the given repository.
+  Lists all relations (tables with namespace information) in the given repository.
 
   Similar to list_tables/2 but returns {schema, table} tuples instead of just table names.
-  Useful for UIs that need to display schema information.
+  Useful for UIs that need to display the full namespace-qualified list.
 
   ## Options
 
@@ -563,7 +563,7 @@ defmodule Lotus.Schema do
         scope
       )
 
-    tags = ["repo:#{adapter.name}", "schema:list_relations"] ++ scope_tags(scope)
+    tags = ["source:#{adapter.name}", "schema:list_relations"] ++ scope_tags(scope)
 
     profile =
       if is_list(opts[:cache]) do
@@ -654,7 +654,7 @@ defmodule Lotus.Schema do
     do: sp |> String.split(",") |> Enum.map(&String.trim/1)
 
   # Returns: String.t() (resolved schema) | nil (not found) | {:error, term()} (adapter error)
-  defp resolve_table_schema_with_cache(
+  defp resolve_table_namespace_with_cache(
          adapter,
          table,
          schemas,
@@ -662,8 +662,8 @@ defmodule Lotus.Schema do
          default_profile
        ) do
     search_key = Enum.join(schemas, ",")
-    key = schema_key(:resolve_table_schema, adapter.name, search_key, table, nil)
-    tags = ["repo:#{adapter.name}", "schema:resolve_table_schema", "table:#{table}"]
+    key = schema_key(:resolve_table_namespace, adapter.name, search_key, table, nil)
+    tags = ["source:#{adapter.name}", "schema:resolve_table_namespace", "table:#{table}"]
 
     profile =
       if is_list(cache_opts),
@@ -672,7 +672,7 @@ defmodule Lotus.Schema do
 
     cache_result =
       exec_with_cache(cache_opts, profile, key, tags, fn ->
-        case Adapter.resolve_table_schema(adapter, table, schemas) do
+        case Adapter.resolve_table_namespace(adapter, table, schemas) do
           {:ok, nil} -> {:ok, :not_found}
           {:ok, schema} -> {:ok, {:found, schema}}
           {:error, reason} -> {:error, reason}

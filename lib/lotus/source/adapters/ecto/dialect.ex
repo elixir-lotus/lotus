@@ -1,6 +1,8 @@
 defmodule Lotus.Source.Adapters.Ecto.Dialect do
   @moduledoc false
 
+  alias Lotus.Query.Statement
+
   @type repo :: Ecto.Repo.t()
 
   # ---------------------------------------------------------------------------
@@ -34,16 +36,16 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
               {limit_placeholder :: String.t(), offset_placeholder :: String.t()}
 
   @callback apply_filters(
-              sql :: String.t(),
-              params :: list(),
+              statement :: Statement.t(),
               filters :: [Lotus.Query.Filter.t()]
             ) ::
-              {String.t(), list()}
+              Statement.t()
 
-  @callback apply_sorts(sql :: String.t(), sorts :: [Lotus.Query.Sort.t()]) :: String.t()
+  @callback apply_sorts(statement :: Statement.t(), sorts :: [Lotus.Query.Sort.t()]) ::
+              Statement.t()
 
-  @callback explain_plan(repo, sql :: String.t(), params :: list(), opts :: keyword()) ::
-              {:ok, String.t()} | {:error, term()}
+  @callback query_plan(repo, sql :: String.t(), params :: list(), opts :: keyword()) ::
+              {:ok, String.t() | nil} | {:error, term()}
 
   # ---------------------------------------------------------------------------
   # Required callbacks — Safety & visibility
@@ -65,7 +67,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
   @callback list_tables(repo, schemas :: [String.t()], include_views? :: boolean()) ::
               [{schema :: String.t() | nil, table :: String.t()}]
 
-  @callback get_table_schema(repo, schema :: String.t() | nil, table :: String.t()) ::
+  @callback describe_table(repo, schema :: String.t() | nil, table :: String.t()) ::
               [
                 %{
                   name: String.t(),
@@ -76,7 +78,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
                 }
               ]
 
-  @callback resolve_table_schema(repo, table :: String.t(), schemas :: [String.t()]) ::
+  @callback resolve_table_namespace(repo, table :: String.t(), schemas :: [String.t()]) ::
               String.t() | nil
 
   # ---------------------------------------------------------------------------
@@ -93,11 +95,13 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
   # ---------------------------------------------------------------------------
 
   @callback editor_config() :: %{
-              language: String.t(),
-              keywords: [String.t()],
-              types: [String.t()],
-              functions: [%{name: String.t(), detail: String.t(), args: String.t()}],
-              context_boundaries: [String.t()]
+              required(:language) => String.t(),
+              required(:keywords) => [String.t()],
+              required(:types) => [String.t()],
+              required(:functions) => [%{name: String.t(), detail: String.t(), args: String.t()}],
+              required(:context_boundaries) => [String.t()],
+              optional(:dialect_spec) => Lotus.Source.Adapter.dialect_spec(),
+              optional(:context_schema) => Lotus.Source.Adapter.context_schema()
             }
 
   @callback supports_feature?(feature :: atom()) :: boolean()
@@ -109,42 +113,45 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Extract the set of tables/relations a query will access.
+  Extract the set of tables/relations a statement will access.
 
   Used by `Lotus.Preflight` to check visibility rules before execution.
   Return `{:ok, MapSet}` with `{schema, table}` tuples, `{:error, reason}`,
-  or `:skip` to allow the query without checking.
+  or `{:unrestricted, reason}` when the dialect cannot enforce visibility
+  at this layer.
 
-  Default (when not implemented): `:skip`.
+  Default (when not implemented): `{:unrestricted, ...}`.
   """
-  @callback extract_accessed_resources(
-              repo,
-              query :: String.t(),
-              params :: list(),
-              opts :: keyword()
-            ) ::
-              {:ok, MapSet.t({String.t() | nil, String.t()})} | {:error, term()} | :skip
+  @callback extract_accessed_resources(repo, statement :: Statement.t()) ::
+              {:ok, MapSet.t({String.t() | nil, String.t()})}
+              | {:error, term()}
+              | {:unrestricted, String.t()}
 
   # ---------------------------------------------------------------------------
   # Optional callbacks — Statement transformation & type mapping
   # ---------------------------------------------------------------------------
 
   @doc """
-  Rewrite the raw statement text before variables are extracted and bound.
+  Rewrite the statement before variables are extracted and bound.
 
   Fires in `Lotus.Storage.Query.to_sql_params/2` before `{{var}}` placeholders
   are resolved. Use for dialect-specific syntax rewrites (wildcard handling,
   INTERVAL, CONCAT vs `||`, etc.). Return the rewritten statement.
 
-  Default (when not implemented): returns the statement unchanged.
+  Default (when not implemented): statement unchanged.
   """
-  @callback transform_statement(statement :: String.t()) :: String.t()
+  @callback transform_statement(statement :: Statement.t()) :: Statement.t()
 
-  # Deprecated in favor of transform_statement/1. The Ecto adapter's macro
-  # forwards old-name implementations with a runtime warning during the
-  # deprecation window.
-  @doc false
-  @callback transform_sql(sql :: String.t()) :: String.t()
+  @doc """
+  Whether the statement needs the visibility preflight check before execution.
+
+  Used by the Ecto adapter's built-in `needs_preflight?/2` default to skip
+  introspection statements (`EXPLAIN`, `SHOW`, `PRAGMA`) that don't access
+  visible relations. Dialects may override with a language-specific check.
+
+  Default (when not implemented): `true` (always preflight).
+  """
+  @callback needs_preflight?(statement :: Statement.t()) :: boolean()
 
   @doc """
   Map a database-specific column type string to a Lotus internal type atom.
@@ -156,14 +163,28 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
   """
   @callback db_type_to_lotus_type(db_type :: String.t()) :: atom()
 
+  @doc """
+  Return the adapter-shaped AI context for this dialect.
+
+  Supplies the four `Lotus.Source.Adapter.ai_context_map` keys —
+  `:language`, `:example_query`, `:syntax_notes`, `:error_patterns` —
+  with dialect-specific content. The built-in SQL dialects populate
+  Postgres / MySQL / SQLite quirks here.
+
+  Default (when not implemented): generic-SQL context synthesized from
+  `query_language/0`, with an empty error-pattern list.
+  """
+  @callback ai_context() :: {:ok, Lotus.Source.Adapter.ai_context_map()} | {:error, term()}
+
   @optional_callbacks [
     supports_feature?: 1,
     hierarchy_label: 0,
     example_query: 2,
-    extract_accessed_resources: 4,
+    extract_accessed_resources: 2,
     transform_statement: 1,
-    transform_sql: 1,
+    needs_preflight?: 1,
     db_type_to_lotus_type: 1,
-    editor_config: 0
+    editor_config: 0,
+    ai_context: 0
   ]
 end

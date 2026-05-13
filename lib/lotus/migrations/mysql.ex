@@ -13,7 +13,7 @@ defmodule Lotus.Migrations.MySQL do
       add(:description, :text)
       add(:statement, :text, null: false)
       add(:variables, :json, null: false, default: fragment("('[]')"))
-      add(:data_repo, :string, size: 255)
+      add(:data_source, :string, size: 255)
       add(:search_path, :string, size: 255)
       add(:inserted_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
       add(:updated_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))

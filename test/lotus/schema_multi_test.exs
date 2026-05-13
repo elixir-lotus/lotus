@@ -48,9 +48,9 @@ defmodule Lotus.SchemaMultiTest do
   end
 
   describe "schema-aware table schema inspection" do
-    test "get_table_schema resolves table using search_path" do
+    test "describe_table resolves table using search_path" do
       {:ok, schema} =
-        Lotus.get_table_schema("postgres", "customers", search_path: "reporting, public")
+        Lotus.describe_table("postgres", "customers", search_path: "reporting, public")
 
       assert is_list(schema)
       refute Enum.empty?(schema)
@@ -60,8 +60,8 @@ defmodule Lotus.SchemaMultiTest do
       assert "email" in column_names
     end
 
-    test "get_table_schema with explicit schema works" do
-      {:ok, schema} = Lotus.get_table_schema("postgres", "customers", schema: "reporting")
+    test "describe_table with explicit schema works" do
+      {:ok, schema} = Lotus.describe_table("postgres", "customers", schema: "reporting")
 
       assert is_list(schema)
       column_names = Enum.map(schema, & &1.name)
@@ -69,14 +69,14 @@ defmodule Lotus.SchemaMultiTest do
       assert "email" in column_names
     end
 
-    test "get_table_schema fails when table not in specified schema" do
-      {:error, msg} = Lotus.get_table_schema("postgres", "test_users", schema: "reporting")
+    test "describe_table fails when table not in specified schema" do
+      {:error, msg} = Lotus.describe_table("postgres", "test_users", schema: "reporting")
 
       assert msg =~ "not found in schemas"
     end
 
-    test "get_table_schema defaults to public schema when no opts given" do
-      {:ok, schema} = Lotus.get_table_schema("postgres", "test_users")
+    test "describe_table defaults to public schema when no opts given" do
+      {:ok, schema} = Lotus.describe_table("postgres", "test_users")
 
       assert is_list(schema)
       column_names = Enum.map(schema, & &1.name)

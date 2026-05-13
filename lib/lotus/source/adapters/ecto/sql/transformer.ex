@@ -1,8 +1,9 @@
-defmodule Lotus.SQL.Transformer do
+defmodule Lotus.Source.Adapters.Ecto.SQL.Transformer do
   @moduledoc """
   Shared SQL transformation utilities used by dialect implementations.
 
-  Dialect modules call these helpers from their `transform_sql/1` callback.
+  Dialect modules call these helpers from their `transform_statement/1`
+  callback to normalize SQL before variables are bound.
   """
 
   @doc """

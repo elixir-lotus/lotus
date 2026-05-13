@@ -1,7 +1,7 @@
 defmodule Lotus.Source.Adapters.Ecto.Dialects.PostgresTypePipelineTest do
   @moduledoc """
   End-to-end tests for the Postgres type-detection pipeline:
-  `get_table_schema/3` (extractor) → `db_type_to_lotus_type/1` (mapper) →
+  `describe_table/3` (extractor) → `db_type_to_lotus_type/1` (mapper) →
   `TypeCaster.cast_value/3` (caster).
 
   Unit tests on the mapper alone pass hand-rolled strings and cannot catch
@@ -20,7 +20,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.PostgresTypePipelineTest do
   @adapter EctoAdapter.wrap("postgres", Lotus.Test.Repo)
 
   defp raw_type(table, column) do
-    {:ok, columns} = Adapter.get_table_schema(@adapter, "public", table)
+    {:ok, columns} = Adapter.describe_table(@adapter, "public", table)
     found = Enum.find(columns, &(&1.name == column))
     refute is_nil(found), "expected column #{inspect(column)} in #{table}"
     found.type

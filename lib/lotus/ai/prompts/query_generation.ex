@@ -1,69 +1,77 @@
-defmodule Lotus.AI.Prompts.SQLGeneration do
+defmodule Lotus.AI.Prompts.QueryGeneration do
   @moduledoc """
-  System prompts for SQL query generation.
+  System prompts for query generation.
 
-  Prompts focus on:
-  - Clear instructions for SQL generation
-  - Handling non-SQL questions gracefully
-  - Database-specific considerations
-  - Security guidelines (read-only, limits, etc.)
+  Prompts are assembled in a fixed order so that **core Lotus rules** (the
+  `{{var}}` / `[[...]]` template DSL, the response contract, the workflow
+  instructions) always precede **adapter-contributed content** (the
+  `ai_context.syntax_notes` and `:example_query`). Untrusted adapters have
+  their free-form fields stripped upstream in
+  `Lotus.Source.Adapter.ai_context/1`; placing core content first means a
+  compromised adapter cannot override the Lotus DSL rules through later
+  text.
   """
 
   alias Lotus.AI.Prompts.Variables
 
   @doc """
-  Generate system prompt for SQL query generation.
+  Generate system prompt for query generation.
 
-  Creates a comprehensive prompt instructing the LLM to generate SQL queries
-  based on available database tables, with clear guidelines for handling
-  non-SQL questions and security best practices.
+  ## Composition order
+
+  Each section is emitted in this order to establish the trust boundary:
+
+    1. System role (core)
+    2. Read-only / write-only instructions (core)
+    3. Available tables (core, schema context)
+    4. Tools + workflow (core)
+    5. Lotus template DSL rules (core, immutable — `lotus_template_notes/0` + `Variables.system_docs/0`)
+    6. Adapter `syntax_notes` (filtered if untrusted, truncated at 1 KB)
+    7. Adapter `example_query` (bounded at 2 KB)
+    8. Output contract examples (core)
 
   ## Parameters
 
-  - `database_type` - Database type (e.g., :postgres, :mysql, :sqlite)
-  - `table_names` - List of available table names in the database
-  - `opts` - Optional keyword list:
-    - `:read_only` - When `true` (default), instructs the LLM to only generate
-      read-only queries. When `false`, allows write queries (INSERT, UPDATE, DELETE, DDL).
-
-  ## Returns
-
-  String containing the complete system prompt.
-
-  ## Example
-
-      iex> SQLGeneration.system_prompt(:postgres, ["users", "posts"])
-      "You are a specialized SQL query generator for postgres databases..."
+    * `ai_context` — the sanitized map returned by
+      `Lotus.Source.Adapter.ai_context/1` (`:language`, `:example_query`,
+      `:syntax_notes`, `:error_patterns`).
+    * `table_names` — list of available table names.
+    * `opts` — keyword list:
+      * `:read_only` — when `true` (default), instruct the LLM to stick to
+        read-only statements.
   """
-  @spec system_prompt(atom(), [String.t()], keyword()) :: String.t()
-  def system_prompt(database_type, table_names, opts \\ []) do
+  @spec system_prompt(map(), [String.t()], keyword()) :: String.t()
+  def system_prompt(ai_context, table_names, opts \\ []) do
     read_only = Keyword.get(opts, :read_only, true)
+    language = Map.get(ai_context, :language, "sql")
+    syntax_notes = Map.get(ai_context, :syntax_notes, "")
+    example = Map.get(ai_context, :example_query, "")
 
     """
-    You are a specialized SQL query generator for #{database_type} databases.
+    You are a specialized query generator for the "#{language}" query language.
     #{read_only_instructions(read_only)}
 
     ## Available Tables:
     #{Enum.join(table_names, ", ")}
 
     Note: Table names may be schema-qualified (e.g., "public.users", "reporting.customers").
-    Always use the full schema-qualified name in your SQL queries when provided.
+    Always use the full schema-qualified name in your statements when provided.
 
     ## Tools:
     - `list_schemas()` - Get list of all database schemas
     - `list_tables()` - Get full table list with schema names
-    - `get_table_schema(table_name)` - Get columns for a table (use schema-qualified name if available)
+    - `describe_table(table_name)` - Get columns for a table (use schema-qualified name if available)
     - `get_column_values(table_name, column_name)` - Get distinct values for a column (e.g., status codes, categories)
-    - `validate_sql(sql)` - Check SQL syntax against the database without executing it
+    - `validate_sql(sql)` - Check statement syntax against the data source without executing it
 
     ## Workflow:
     1. Identify relevant tables for the question
-    2. Use `get_table_schema()` for those tables (with schema-qualified names)
+    2. Use `describe_table()` for those tables (with schema-qualified names)
     3. **IMPORTANT:** For queries involving specific values (status, type, category), use `get_column_values()` to discover actual values
     4. Validate required data exists
-    5. Generate SQL and use `validate_sql()` to verify syntax before returning
+    5. Generate the statement and use `validate_sql()` to verify syntax before returning
     6. If invalid, fix errors and re-validate
-    7. If the question cannot be answered with SQL, respond UNABLE_TO_GENERATE
+    7. If the question cannot be answered, respond UNABLE_TO_GENERATE
 
     ## Best Practices:
     - When query mentions terms like "outstanding", "active", "pending" - use `get_column_values()` to find actual status values
@@ -71,18 +79,20 @@ defmodule Lotus.AI.Prompts.SQLGeneration do
     - Don't assume enum values - always verify with the tool
 
     ## Guidelines:
-    - Return ONLY SQL in ```sql blocks
+    - Return ONLY the statement in ```sql blocks
     - Use full schema-qualified table names (e.g., SELECT * FROM reporting.customers)
     - Use JOINs for multi-table queries
     - Add LIMIT for safety (unless explicitly asked for all results)
-    - Use proper identifier quoting for #{database_type}
     - Prefer explicit column names over SELECT *
 
-    ## Database-Specific Notes:
-    #{database_specific_notes(database_type)}
-
     #{Variables.system_docs()}
-    #{sql_variable_notes()}
+    #{lotus_template_notes()}
+
+    ## Language-Specific Notes (from adapter):
+    #{syntax_notes}
+
+    ## Example Statement:
+    #{example}
 
     ## Examples:
     - "Active users in last 7 days" → Query users table if it has created_at/status
@@ -221,45 +231,30 @@ defmodule Lotus.AI.Prompts.SQLGeneration do
   defp normalize_type(%{"type" => _} = var), do: Map.put(var, "type", "text")
   defp normalize_type(var), do: Map.put(var, "type", "text")
 
-  defp sql_variable_notes do
+  # Core Lotus template DSL rules. Language-agnostic — they describe the
+  # Lotus preprocessing layer (`substitute_variable`, `OptionalClause`),
+  # not any specific query language. Emitted in every prompt regardless
+  # of adapter or trust level.
+  defp lotus_template_notes do
     """
-    **SQL-specific variable notes:**
-    - For `list: true` variables, just use `{{variable}}` directly — e.g., `IN ({{names}})` or `= ANY({{ids}})`. Do NOT wrap the variable in conversion functions like `STRING_TO_ARRAY()`, `SPLIT()`, or similar. The framework expands `{{variable}}` into the correct number of parameter placeholders automatically.
-    - For optional filters, wrap clauses in `[[...]]` — e.g., `WHERE 1=1 [[AND status = {{status}}]]`. The block is removed when the variable has no value. Always use `WHERE 1=1` as the base when using optional clauses so that removing all `[[...]]` blocks still produces valid SQL.
-    """
-  end
+    ## Lotus Template DSL (applies to every query language):
 
-  defp database_specific_notes(:postgres) do
-    """
-    - Use double quotes for identifiers: "table_name", "column_name"
-    - Support for arrays, JSON, and advanced data types
-    - CTEs (WITH) and window functions available
-    - Use PostgreSQL-specific functions when appropriate (e.g., EXTRACT, DATE_TRUNC)
-    """
-  end
+    **`{{variable_name}}` substitution.** Lotus replaces `{{name}}` with a
+    language-appropriate form at execution time — a placeholder for
+    prepared-statement drivers, a properly-escaped literal for JSON / DSL
+    engines. You write `{{name}}` and let Lotus handle the shape.
 
-  defp database_specific_notes(:mysql) do
-    """
-    - Use backticks for identifiers: `table_name`, `column_name`
-    - Limited JSON support (use JSON functions carefully)
-    - No array support
-    - Date functions: DATE_FORMAT, TIMESTAMPDIFF, etc.
-    """
-  end
+    **List variables (`list: true`).** Write `{{variable}}` once in the
+    position where the multiple values should appear. Do NOT wrap it in
+    conversion functions like `STRING_TO_ARRAY()`, `SPLIT()`, etc. — Lotus
+    expands it into the right shape for the target language (a grouped
+    placeholder list for SQL, a JSON array for JSON DSLs).
 
-  defp database_specific_notes(:sqlite) do
-    """
-    - Use double quotes for identifiers: "table_name", "column_name"
-    - Limited data type system (dynamic typing)
-    - No advanced window functions in older versions
-    - Simple date functions: date(), datetime(), strftime()
-    """
-  end
-
-  defp database_specific_notes(_other) do
-    """
-    - Use standard SQL syntax
-    - Check database documentation for specific features
+    **`[[...]]` optional blocks.** Clauses inside double brackets are
+    removed entirely when the variables they reference have no value.
+    Structure the surrounding query so it stays syntactically valid when
+    a block is stripped — the `Example Statement` below demonstrates the
+    correct idiom for the target language.
     """
   end
 

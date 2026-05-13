@@ -1,4 +1,4 @@
-defmodule Lotus.SQL.FilterInjector do
+defmodule Lotus.Source.Adapters.Ecto.SQL.FilterInjector do
   @moduledoc ~S"""
   Shared helpers for SQL-based sources to inject filter conditions into queries.
 
@@ -10,16 +10,16 @@ defmodule Lotus.SQL.FilterInjector do
 
       quote_fn = fn id -> ~s("#{id}") end
       placeholder_fn = fn idx -> "$#{idx}" end
-      Lotus.SQL.FilterInjector.apply("SELECT * FROM users", [25], [
+      Lotus.Source.Adapters.Ecto.SQL.FilterInjector.apply("SELECT * FROM users", [25], [
         %Lotus.Query.Filter{column: "region", op: :eq, value: "US"}
       ], quote_fn, placeholder_fn)
       #=> {~s(WITH _base AS (SELECT * FROM users) SELECT * FROM _base WHERE "region" = $2), [25, "US"]}
   """
 
   alias Lotus.Query.Filter
-  alias Lotus.SQL.Identifier
+  alias Lotus.Source.Adapters.Ecto.SQL.Identifier
 
-  import Lotus.SQL.Sanitizer, only: [strip_trailing_semicolon: 1]
+  import Lotus.Source.Adapters.Ecto.SQL.Sanitizer, only: [strip_trailing_semicolon: 1]
 
   @doc """
   Wraps the given SQL in a CTE and appends parameterized WHERE clauses for each filter.

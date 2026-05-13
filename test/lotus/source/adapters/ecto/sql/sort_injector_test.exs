@@ -1,8 +1,8 @@
-defmodule Lotus.SQL.SortInjectorTest do
+defmodule Lotus.Source.Adapters.Ecto.SQL.SortInjectorTest do
   use ExUnit.Case, async: true
 
   alias Lotus.Query.Sort
-  alias Lotus.SQL.SortInjector
+  alias Lotus.Source.Adapters.Ecto.SQL.SortInjector
 
   defp double_quote(id), do: ~s("#{id}")
   defp backtick_quote(id), do: "`#{id}`"

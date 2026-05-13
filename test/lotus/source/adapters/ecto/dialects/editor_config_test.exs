@@ -193,4 +193,26 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.EditorConfigTest do
       end
     end
   end
+
+  describe "built-in dialects return only required editor_config keys" do
+    # The built-in Ecto dialects don't set :dialect_spec or
+    # :context_schema — their tokenizer comes from the CM6 built-in
+    # grammars on the web side, and they're SQL (not JSON DSL) so
+    # :context_schema has no meaning for them.
+    test "Default / Postgres / MySQL / SQLite3 omit the optional fields" do
+      for mod <- [Default, Postgres, MySQL, SQLite3] do
+        config = mod.editor_config()
+
+        for key <- @required_keys do
+          assert Map.has_key?(config, key), "#{inspect(mod)} missing required key #{key}"
+        end
+
+        refute Map.has_key?(config, :dialect_spec),
+               "#{inspect(mod)} unexpectedly defined :dialect_spec"
+
+        refute Map.has_key?(config, :context_schema),
+               "#{inspect(mod)} unexpectedly defined :context_schema"
+      end
+    end
+  end
 end

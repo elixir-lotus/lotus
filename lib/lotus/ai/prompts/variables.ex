@@ -4,7 +4,7 @@ defmodule Lotus.AI.Prompts.Variables do
 
   Describes the Lotus variable framework (syntax, widget types, list expansion,
   config fields) independently of any query language. Query-language-specific
-  prompt modules (e.g. `SQLGeneration`) call into this module and may append
+  prompt modules (e.g. `QueryGeneration`) call into this module and may append
   language-specific notes.
   """
 
@@ -61,11 +61,13 @@ defmodule Lotus.AI.Prompts.Variables do
     and the clause is kept.
 
     **Rules:**
-    - Always use a `WHERE 1=1` base so optional `[[AND ...]]` clauses can be safely removed
+    - Structure the surrounding query so it stays syntactically valid when `[[...]]` blocks
+      are stripped. The idiom is language-specific — follow the `Example Statement` supplied
+      by the target adapter
     - Each `[[...]]` block is independent — one block being removed does not affect others
     - A block with multiple variables requires ALL of them to have values; otherwise the block is removed
     - Variables can appear both inside and outside `[[...]]` blocks — outside variables are always required
-    - Only wrap the filter clause, not the entire WHERE — e.g., `[[AND status = {{status}}]]`
+    - Only wrap the conditional fragment, not the entire surrounding clause
     - Use optional variables when the user asks for "optional filters", "dynamic filters",
       "filters that can be left empty", or similar phrasing
 

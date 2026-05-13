@@ -2,112 +2,538 @@
 
 ## [Unreleased]
 
-### Deprecated
+> **v1.0 is a large rewrite and not a drop-in upgrade from the v0.16.x
+> line.** The motivating goal was to stop assuming every data source is
+> SQL-on-Ecto: Lotus now wraps every source behind a uniform
+> `Lotus.Source.Adapter` contract, threads an opaque `%Statement{}` through
+> the pipeline (SQL text for Ecto, JSON / DSL / AST for everything else),
+> lets each adapter own its own variable substitution, visibility
+> extraction, and AI context, and renames the public surface away from
+> `*_repo*` language to reflect that sources are no longer just repos.
+> Configuration keys, middleware and telemetry payload shapes, DB column
+> names, cache tags, and a chunk of the public API all moved. There is
+> no `@deprecated` compatibility layer — pre-v1 apps must port deliberately.
+> See the [Upgrading to v1.0](guides/upgrading-to-v1.md) guide for the
+> step-by-step migration.
 
-- **Renamed `apply_window/4` adapter callback to `apply_pagination/4` with a clean return contract.** The old name read as "SQL window functions" (`OVER(...)`), but the callback only ever did pagination — renamed for honesty and symmetry with `apply_filters/4` / `apply_sorts/3`. The return shape also changed: `{paged_query, paged_params, count_spec | nil}` where `count_spec :: %{query: String.t(), params: list()}`. The old grab-bag `window_meta` map (which leaked an internal `:adapter` field and forced the Ecto adapter to fabricate a synthetic `"__window__"` source name for count queries) is gone. Lotus core now assembles its own pagination metadata from the real adapter it already has in scope. External adapters implementing the old callback keep working during the deprecation window — the dispatch helper detects them, emits a one-time `Logger.warning` per adapter module, and translates their legacy `window_meta` return into the new `count_spec` shape. The old names will be removed in v1.0.
-- **Renamed adapter transformation callbacks to language-agnostic names.** `Lotus.Source.Adapter` now prefers `transform_statement/2` over `transform_sql/2` and `transform_bound_query/4` over `transform_query/4`; `Lotus.Source.Adapters.Ecto.Dialect` prefers `transform_statement/1` over `transform_sql/1`. The old names still work during the deprecation window — dispatch helpers and the Ecto macro fall back to them and emit a one-time `Logger.warning` per adapter module. The old names will be removed in v1.0. External adapters should rename at their convenience. The new names make the pipeline position explicit: `transform_statement` fires before variable binding on the raw statement text (any query language), `transform_bound_query` fires after binding with access to resolved params.
+### Breaking Changes
 
-### Changed
+#### Adapter contract
 
-- **Widened `data_sources` config to accept maps** — `data_sources` NimbleOptions type changed from `{:map, :string, :atom}` to `{:map, :string, {:or, [:atom, :map]}}`, allowing non-Ecto adapters to pass config maps (e.g. `%{adapter: :elasticsearch, url: "http://..."}`) alongside repo modules. `Lotus.Source.Resolvers.Static.source_module?/1` accepts any loaded module (checked via `Code.ensure_loaded?/1 + function_exported?(:module_info, 0)`) — typo'd atoms fall through to the fallback chain instead of committing to a failing module lookup
-- Extracted `Lotus.Source.Adapters.Ecto.Dialect` behaviour from the old `Lotus.Source` callbacks, adding `source_type/0` and `ecto_adapter/0` required callbacks (#193)
-- Consolidated three duplicated `@impls` maps (in `Lotus.Source`, `Lotus.Source.Adapters.Ecto`, and `Lotus.Sources`) into a single `@impls` in `Lotus.Source.Adapters.Ecto`, built dynamically from dialect modules' `ecto_adapter/0` callbacks (#193)
-- `Lotus.Source.Adapters.Ecto` now uses dialect modules under `Lotus.Source.Adapters.Ecto.Dialects.*` instead of `Lotus.Sources.*` (#193)
-- `Lotus.Source.Resolvers.Static` now supports pluggable adapter resolution via `can_handle?/1` and `wrap/2`, falling back to the built-in Ecto adapter (#193)
-- Built-in per-dialect adapters (`Lotus.Source.Adapters.Postgres`, `Lotus.Source.Adapters.MySQL`, `Lotus.Source.Adapters.SQLite3`) now use `use Lotus.Source.Adapters.Ecto, dialect: ...` — the same pattern external adapters use (#193)
-- Deleted `Lotus.Sources`, `Lotus.Sources.Postgres`, `Lotus.Sources.MySQL`, `Lotus.Sources.SQLite3`, `Lotus.Sources.Default` — replaced by the new adapter and dialect modules (#193)
-- Renamed `data_repos` config key to `data_sources` (old key still works with deprecation warning)
-- Renamed `default_repo` config key to `default_source` (old key still works with deprecation warning)
-- Renamed public functions: `data_repos/0` → `data_sources/0`, `get_data_repo!/1` → `get_data_source!/1`, `list_data_repo_names/0` → `list_data_source_names/0`, `default_data_repo/0` → `default_data_source/0`, `rules_for_repo_name/1` → `rules_for_source_name/1` (and schema/column variants)
-- Renamed `data_repo` field in `Lotus.Storage.Query` to `data_source` (DB column unchanged)
-- Renamed `@type repo` in `Lotus.Source` to `@type source_module`
-- Removed `FilterInjector.quote_value/1` — no longer needed since values are parameterized
-- Removed duplicated private `Lotus.trim_trailing_semicolon/1` in favor of `Lotus.SQL.Sanitizer.strip_trailing_semicolon/1`, eliminating code duplication and a redundant double-trim in the window pagination path (#155)
-- Extracted shared filter → sort → window → cache → execute pipeline from `Lotus.run_sql/3` and `Lotus.execute_query/5` into a single private `execute_with_options/7` helper. `run_sql/3` now reuses `build_cache_tags/3` and `determine_cache_profile/1` instead of inlining the same logic. No public API or behavior changes (#160)
-- Renamed `Lotus.run_sql/3` → `Lotus.run_statement/3` and `Lotus.Runner.run_sql/4` → `Lotus.Runner.run_statement/4`; `sql` parameter renamed to `statement` throughout (#211)
-- Migrated all internal callers (`Runner`, `Preflight`, `SQL.Validator`, `AI.QueryOptimizer`, `Storage.SchemaCache`, `Lotus`) from deprecated `Lotus.Source.*` dialect dispatch to `Lotus.Source.Adapter` dispatch helpers (#193)
-- Removed deprecated dispatch functions and `@dialect_impls` map from `Lotus.Source` — all dispatch now goes through `Lotus.Source.Adapter` (#193)
-- Deduplicated `@builtin_adapters` list — `Lotus.Source.Adapters.Ecto.builtin_adapters/0` is the single source of truth, referenced by `Lotus.Source.Resolvers.Static` (#193)
-- `Lotus.Source.Adapters.Ecto` direct callbacks now consistently delegate to `@default_dialect` for all identity callbacks (`source_type`, `supports_feature?`, `query_language`, etc.) (#193)
-- Deleted `Lotus.Storage.TypeMapper` — type mapping moved to dialect `db_type_to_lotus_type/1` callbacks (#193)
-- `Lotus.can_run?/2` now reuses the private `prepare_variables/2` helper instead of duplicating the default-merge logic inline. No behavior change (#156)
-- Extracted SQL sanitization (`assert_single_statement`, deny-list), EXPLAIN-based relation extraction, and window pagination SQL construction from `Runner`, `Preflight`, and `Lotus` into 4 new optional adapter callbacks (`sanitize_query/3`, `transform_query/4`, `extract_accessed_resources/4`, `apply_window/4`). `Runner` and `Preflight` now delegate to `Adapter` dispatch helpers with safe defaults for adapters that don't implement the optional callbacks. No public API or behavior changes (#208)
+- **Pluggable adapter architecture** — `Lotus.Source.Adapter` is the new
+  universal behaviour + struct wrapping every data source. `Lotus.Source`
+  is a public facade (not a behaviour) with `resolve!/2`, `list_sources/0`,
+  `get_source!/1`, `default_source/0`, `source_type/1`,
+  `supports_feature?/2`, `hierarchy_label/1`, `example_query/3`,
+  `query_language/1`, `limit_query/3`, `supported_filter_operators/1`,
+  `prepare_for_analysis/2`, `name_from_module!/1`. SQL-specific
+  callbacks moved to `Lotus.Source.Adapters.Ecto.Dialect`. The
+  `Lotus.Sources` module and all `Lotus.Sources.*` dialect modules
+  (`Postgres`, `MySQL`, `SQLite3`, `Default`) were deleted. Ecto-backed
+  adapters use `use Lotus.Source.Adapters.Ecto, dialect: MyDialect`;
+  per-dialect adapters (`Lotus.Source.Adapters.Postgres`, `MySQL`,
+  `SQLite3`) are built with the same macro. Registration uses optional
+  `can_handle?/1` + `wrap/2` callbacks driven by a new
+  `:source_adapters` config list. Host applications implementing
+  `@behaviour Lotus.Source` with a custom module will fail to compile
+  and must port (#193).
 
-### Deprecated
+- **`%Lotus.Query.Statement{}` is the pipeline carrier.** Pipeline
+  callbacks (`apply_filters/3`, `apply_sorts/3`, `apply_pagination/3`,
+  `transform_bound_query/3`, `transform_statement/2`) take and return
+  a `%Statement{}` with `:adapter` (module), `:text` (adapter-opaque
+  `term()`), `:params`, and `:meta`. Non-SQL adapters carry native
+  payloads (JSON maps, DSL ASTs) in `:text` without serializing to
+  strings. Constructor: `Lotus.Query.Statement.new(text, params \\ [])`.
+  `Lotus.Runner.run_statement/3` takes
+  `(%Adapter{}, %Statement{}, opts)`. `Lotus.Preflight.authorize/3`
+  takes `(%Adapter{}, %Statement{}, search_path)`. The `:sql`/`:params`
+  tuple shape is gone from the pipeline.
 
-- `:data_repos` config key — use `:data_sources` instead (will be removed in v1.0)
-- `:default_repo` config key — use `:default_source` instead (will be removed in v1.0)
-- `Lotus.data_repos/0` — use `Lotus.data_sources/0` (will be removed in v1.0)
-- `Lotus.get_data_repo!/1` — use `Lotus.get_data_source!/1` (will be removed in v1.0)
-- `Lotus.list_data_repo_names/0` — use `Lotus.list_data_source_names/0` (will be removed in v1.0)
-- `Lotus.default_data_repo/0` — use `Lotus.default_data_source/0` (will be removed in v1.0)
-- `Lotus.Config.rules_for_repo_name/1` — use `Lotus.Config.rules_for_source_name/1` (will be removed in v1.0)
-- `Lotus.Config.schema_rules_for_repo_name/1` — use `Lotus.Config.schema_rules_for_source_name/1` (will be removed in v1.0)
-- `Lotus.Config.column_rules_for_repo_name/1` — use `Lotus.Config.column_rules_for_source_name/1` (will be removed in v1.0)
-- `Lotus.run_sql/3` — use `Lotus.run_statement/3` (will be removed in v1.0) (#211)
-- `Lotus.Runner.run_sql/4` — use `Lotus.Runner.run_statement/4` (will be removed in v1.0) (#211)
+- **Pagination count queries moved into `statement.meta[:count_spec]`.**
+  `apply_pagination/3` returns a single `%Statement{}` whose `:meta`
+  carries the optional count spec instead of the old third tuple element.
 
-### Breaking
+- **Two pagination count strategies for `count: :exact`.** Adapters pick
+  how they surface the pre-pagination total. **Strategy A — inline
+  count:** `execute_query/4` returns the total via a new optional
+  `:total_count` key in its result map, for engines where the count
+  comes back as a side-effect of the main query (Elasticsearch's
+  `track_total_hits: true`, MongoDB's `$facet`). `apply_pagination/3`
+  does not set `:count_spec` in this mode. **Strategy B — separate count
+  query:** `apply_pagination/3` places a `count_spec` in
+  `statement.meta[:count_spec]` and Lotus core runs it through the same
+  adapter (standard for SQL). Precedence: if both channels are present,
+  the inline count wins and `count_spec` is not run. `Result.meta.total_mode`
+  now reflects what the caller requested (`:exact` | `:none`), not how
+  the adapter chose to fulfil it — so an adapter that cannot produce a
+  total still reports `:exact` honestly with `total_count: nil`.
+  `execute_query/4` typespec widened to include
+  `optional(:total_count) => non_neg_integer() | nil`; existing adapters
+  that omit the key are unaffected.
 
-- `Lotus.Source` is now a public facade instead of a behaviour. All facade functions previously on `Lotus.Sources` (`resolve!/2`, `list_sources/0`, `get_source!/1`, `default_source/0`, `source_type/1`, `supports_feature?/2`, `hierarchy_label/1`, `example_query/3`, `query_language/1`, `limit_query/3`, `name_from_module!/1`) are now on `Lotus.Source`. `Lotus.Sources` delegates for backward compatibility (#193)
-- `@behaviour Lotus.Source` callbacks have moved to `Lotus.Source.Adapters.Ecto.Dialect` (dialect-specific) and `Lotus.Source.Adapter` (universal). Host applications implementing `@behaviour Lotus.Source` with a custom module will fail to compile — migrate to either `use Lotus.Source.Adapters.Ecto, dialect: MyDialect` (for Ecto-backed adapters) or `@behaviour Lotus.Source.Adapter` (for non-Ecto adapters). Several callback arities changed in the move: SQL-generation callbacks (`param_placeholder`, `apply_filters`, `apply_sorts`, `quote_identifier`, `limit_offset_placeholders`) and error-handling callbacks (`format_error`, `handled_errors`) now take `state` as the first argument (#193)
-- `Lotus.SQL.Transformer.transform/2` removed — replaced by three focused functions: `strip_quoted_variables/1`, `transform_wildcards/2`, and `transform_pg_intervals/1`. Custom dialects previously routing through `Transformer.transform/2` should implement the new `transform_statement/1` dialect callback composed from these helpers (see the built-in dialects for examples)
-- `Lotus.Supervisor.start_link/1` now registers under the fixed name `Lotus.Supervisor` by default and collapses `{:error, {:already_started, pid}}` into `{:ok, pid}`. Host applications that started multiple unnamed Lotus supervisors in the same BEAM will now see the first call succeed and subsequent calls return the existing supervisor's pid. Pass `supervisor_name:` to run multiple named instances
-- `Lotus.Config.get_data_source!/1` return type widened from `module()` to `module() | map()` (and `data_sources/0` widened correspondingly) to accommodate non-Ecto adapter configs. Code that unconditionally pattern-matches the return as a module atom — e.g. `repo = Config.get_data_source!(name)` followed by `repo.query!(...)` — may now receive a map. Dialyzer will flag these call sites; runtime behaviour is preserved for the Ecto path
-- Dialect modules moved from `Lotus.Sources.*` to `Lotus.Source.Adapters.Ecto.Dialects.*`: `Postgres`, `MySQL`, `SQLite3`, `Default`. Old modules delegate for backward compatibility (#193)
-- Removed deprecated `Lotus.Source` dispatch functions (`execute_in_transaction`, `set_statement_timeout`, `set_search_path`, `list_schemas`, `list_tables`, `get_table_schema`, `resolve_table_schema`, `explain_plan`, `quote_identifier`, `param_placeholder`, `limit_offset_placeholders`, `apply_filters`, `apply_sorts`, `format_error`, `builtin_denies`, `builtin_schema_denies`, `default_schemas`). Use `Lotus.Source.Adapter` dispatch helpers instead (#193)
-- Removed `Lotus.Storage.TypeMapper` module — type mapping now happens via dialect `db_type_to_lotus_type/1` callbacks dispatched through `Lotus.Source.Adapter.db_type_to_lotus_type/2`, which takes an `%Adapter{}` struct as its first argument (#193)
-- `Lotus.Storage.TypeCaster` `column_info` map now uses `:adapter` (an `%Adapter{}` struct) instead of `:source_module` (a module atom) for dialect-aware type mapping. Callers that build `column_info` maps — e.g. custom `TypeHandler` users — must pass the resolved adapter struct (#193)
-- `FilterInjector.apply/3` is now `apply/5` — accepts `params` (existing parameter list) and `placeholder_fn` (database-specific placeholder generator), returns `{sql, params}` tuple instead of a plain SQL string
-- `Lotus.Source.apply_filters/2` callback is now `apply_filters/3` — accepts `params` list and returns `{sql, params}` tuple. All source adapters (Postgres, MySQL, SQLite3, Default) updated accordingly
-- `Lotus.Visibility.Resolver` callbacks now accept a second `scope` argument: `schema_rules_for/2`, `table_rules_for/2`, `column_rules_for/2`. Existing implementations must update their function signatures to accept `scope` (even if ignored). The default `Static` resolver accepts and ignores scope, so static config users are unaffected.
-- Middleware payload key `:repo` renamed to `:source` across all events (`:before_query`, `:after_query`, `:after_list_schemas`, `:after_list_tables`, `:after_get_table_schema`, `:after_list_relations`, `:after_discover`). The duplicate `:repo_name` key has been removed from discovery event payloads. Middleware modules that pattern-match on `%{repo: _}` or `%{repo_name: _}` must update to `%{source: _}`.
-- `Sources.resolve!/2` returns `%Lotus.Source.Adapter{}` struct instead of `{module, name}` tuple
-- `Runner.run_sql/4` first argument changed from repo module to `%Lotus.Source.Adapter{}`
-- `Preflight.authorize` accepts `%Lotus.Source.Adapter{}` instead of `(repo, repo_name)` tuple
-- Source behaviour SQL generation callbacks (`param_placeholder`, `apply_filters`, `apply_sorts`, `quote_identifier`, `limit_offset_placeholders`) now take `state` as first argument
-- Source behaviour error handling callbacks (`format_error`, `handled_errors`) now take `state` as first argument
-- `Lotus.Storage.Query.to_sql_params/2` now returns `{:ok, sql, params} | {:error, reason}` instead of returning `{sql, params}` and raising `ArgumentError` for missing variables, empty list variables, or invalid type-cast values. A new `Lotus.Storage.Query.to_sql_params!/2` preserves the previous raising behaviour for callers that prefer exceptions (#163).
+- **Variable substitution is adapter-owned.** Two universal callbacks —
+  `substitute_variable/5` and `substitute_list_variable/5` — let each
+  adapter pick its substitution strategy. SQL-prepared adapters add a
+  placeholder (`$1`, `?`, ...) to `statement.text` and push the value
+  into `statement.params`. JSON / DSL adapters (Elasticsearch, Mongo)
+  inline the value as a properly-escaped literal — they are the
+  injection boundary and must escape through the language's native
+  encoder. Adapters with no `{{var}}` mental model return
+  `{:error, :unsupported}`. `Lotus.Storage.Query.to_sql_params/2` is now
+  adapter-agnostic — it threads a `%Statement{}` through a reduce loop
+  and delegates to `Adapter.substitute_variable/5`, never touching
+  placeholders or param arrays directly. Removed: `FilterInjector.quote_value/1`
+  (values are now parameterized). Removed from the universal behaviour:
+  `param_placeholder/4` and `limit_offset_placeholders/3` — these were
+  SQL-prepared-statement primitives and now live on
+  `Lotus.Source.Adapters.Ecto.Dialect` as Ecto-internal.
+
+- **Visibility preflight returns
+  `{:ok, MapSet} | {:error, reason} | {:unrestricted, reason}`.**
+  `extract_accessed_resources/2` signals `{:unrestricted, reason}` when
+  visibility cannot be enforced at the adapter layer (e.g.
+  Elasticsearch's index-level access control). `Lotus.Preflight` gates
+  these statements behind the new `:allow_unrestricted_resources`
+  config (global + per-source). Opted-in sources pass; unopted sources
+  get an actionable error instructing the operator how to opt in.
+  Preflight no longer sniffs SQL prefixes — a new `needs_preflight?/2`
+  adapter callback controls the skip path (built-in Ecto adapter
+  retains the `EXPLAIN` / `SHOW` / `PRAGMA` heuristic internally).
+
+- **Callback renames — introspection "schema" double meaning.** The
+  word "schema" meant two things (namespace vs. column definitions).
+  Hard renames, no aliases: `get_table_schema/3` → `describe_table/3`,
+  `resolve_table_schema/3` → `resolve_table_namespace/3`,
+  `explain_plan/4` → `query_plan/4` (return widened to
+  `{:ok, String.t() | nil} | {:error, term()}` so non-SQL engines can
+  return `{:ok, nil}` without surfacing an error). Renames apply to
+  `Lotus.Source.Adapter`, `Lotus.Source.Adapters.Ecto.Dialect`, all
+  four built-in Ecto dialect impls, and the middle-layer
+  `Lotus.Schema.get_table_schema/3`. `list_schemas/1` and
+  `list_tables/3` are **unchanged** — "schemas" as namespaces is widely
+  understood adapter terminology and doesn't carry the column
+  double-meaning.
+
+- **Callback signatures take `state` as the first argument** for
+  SQL-generation (`quote_identifier/2`, `query_plan/4`) and
+  error-handling (`format_error/2`, `handled_errors/1`) callbacks.
+
+- **`execute_query/4` typespec widened** — `sql :: String.t()` →
+  `sql :: term()`. This is the driver boundary; adapters receive the
+  adapter-native statement payload. Dialyzer builds that pattern-matched
+  the old `String.t()` spec should relax.
+
+- **New universal callbacks** for feature-driven non-SQL parity:
+  `validate_statement/3` (SQL: EXPLAIN; ES: `_validate`; default `:ok`
+  trust-on-execute), `parse_qualified_name/2` (returns an ordered
+  hierarchy list), `validate_identifier/3` (per-kind identifier grammar),
+  `supported_filter_operators/1` (adapter declares which filter
+  operators its `apply_filters/3` handles — core raises
+  `Lotus.UnsupportedOperatorError` on mismatch, no silent degradation).
+  Filter/sort column names are validated via `validate_identifier/3`
+  before dispatch — unsafe identifiers raise `ArgumentError`.
+
+- **New `ai_context/1` + `prepare_for_analysis/2` callbacks.**
+  `ai_context/1` returns `{:ok, map}` with `:language` (must match
+  `^[a-z0-9]+:[a-z0-9_-]+$`), `:example_query` (≤ 2 KB),
+  `:syntax_notes` (≤ 1 KB), `:error_patterns` (≤ 20 entries of
+  `%{pattern: Regex.t(), hint: binary}`), and optional
+  `:capabilities` (`%{generation, optimization, explanation}` — each
+  `true | {false, reason}`). Returning `{:error, _}` opts the source
+  out of AI entirely. Size limits and language-regex enforced at the
+  dispatch layer with one-time `Logger.warning/1` per adapter.
+
+- **AI trust boundary.** The new `:trusted_source_adapters` config
+  allowlists adapter modules whose `ai_context/1` free-form fields
+  (and capability reasons) flow unchanged into the LLM prompt. Built-in
+  `Lotus.Source.Adapters.Ecto` + its per-dialect wrappers are always
+  trusted. Untrusted adapters supply only `:language`; free-form fields
+  are stripped and capability reasons are replaced with a generic
+  fallback to bound prompt-injection blast radius.
+
+#### Configuration
+
+- **Renamed config keys** — all hard renames, no alias. Validation fails
+  outright on the old names (no `normalize_deprecated_keys/1`):
+  - `:ecto_repo` → `:storage_repo` (accessor `Lotus.repo/0` unchanged)
+  - `:data_repos` → `:data_sources` (widened to
+    `{:map, :string, {:or, [:atom, :map]}}` so non-Ecto adapters can
+    pass config maps, e.g.
+    `%{adapter: :elasticsearch, url: "http://..."}`)
+  - `:default_repo` → `:default_source`
+
+- **New config keys:** `:source_adapters`, `:trusted_source_adapters`,
+  `:allow_unrestricted_resources`, `:source_resolver` (default
+  `Lotus.Source.Resolvers.Static`), `:visibility_resolver` (default
+  `Lotus.Visibility.Resolvers.Static`).
+
+- **`Lotus.Config.get_data_source!/1` return type widened** from
+  `module()` to `module() | map()` (and `data_sources/0` likewise).
+  Code that unconditionally pattern-matched the return as a module
+  atom — e.g. `repo = Config.get_data_source!(name); repo.query!(...)`
+  — may now receive a map. Dialyzer will flag these call sites; runtime
+  behaviour is preserved for the Ecto path.
+
+#### Public API
+
+- **Renamed / removed functions** (no aliases):
+  - `Lotus.run_sql/3` → `Lotus.run_statement/3`
+  - `Lotus.Runner.run_sql/4` → `Lotus.Runner.run_statement/3` (now
+    takes `%Adapter{}` + `%Statement{}`; `sql`/`params` replaced)
+  - `Lotus.get_table_schema/3` → `Lotus.describe_table/3`
+  - `Lotus.Schema.get_table_schema/3` → `Lotus.Schema.describe_table/3`
+  - Removed: `Lotus.data_repos/0`, `get_data_repo!/1`,
+    `list_data_repo_names/0`, `default_data_repo/0` — use
+    `Lotus.Source.list_sources/0`, `get_source!/1`,
+    `Lotus.list_data_source_names/0`, `Lotus.Source.default_source/0`.
+  - Removed: `Lotus.Config.data_repos/0`, `get_data_repo!/1`,
+    `list_data_repo_names/0`, `default_data_repo/0`,
+    `rules_for_repo_name/1`, `schema_rules_for_repo_name/1`,
+    `column_rules_for_repo_name/1` — use the `*_source*` variants.
+  - Removed: `Lotus.Source` deprecated dispatch functions
+    (`execute_in_transaction`, `set_statement_timeout`,
+    `set_search_path`, `list_schemas`, `list_tables`,
+    `explain_plan`, `quote_identifier`, `param_placeholder`,
+    `limit_offset_placeholders`, `apply_filters`, `apply_sorts`,
+    `format_error`, `builtin_denies`, `builtin_schema_denies`,
+    `default_schemas`). Use `Lotus.Source.Adapter` dispatch
+    helpers instead.
+  - Removed: `Lotus.Storage.TypeMapper` — type mapping now happens via
+    dialect `db_type_to_lotus_type/1` callbacks.
+
+- **`Lotus.Storage.Query.to_sql_params/2`** returns
+  `{:ok, sql, params} | {:error, reason}` instead of
+  `{sql, params}`-raising-on-failure. New
+  `Lotus.Storage.Query.to_sql_params!/2` preserves the raising variant
+  for callers that prefer exceptions (#163).
+
+- **`@type repo` in `Lotus.Source`** renamed to `@type source_module`.
+
+#### Storage
+
+- **DB column `data_repo` → `data_source`** in `lotus_queries`. New
+  installs get the updated column name directly from the migration
+  chain. Upgrading Postgres installs get a conditional
+  `ALTER TABLE ... RENAME COLUMN` via
+  `Lotus.Migrations.Postgres.V4` — run `mix ecto.migrate` after
+  upgrading. **MySQL / SQLite users must run the rename manually**
+  (`ALTER TABLE lotus_queries RENAME COLUMN data_repo TO data_source`)
+  before starting app code against the new schema.
+  `Lotus.Storage.Query.data_repo` field renamed (Elixir side) and the
+  `source: :data_repo` shim removed.
+
+- **`Lotus.Storage.TypeCaster` `column_info` map** now uses `:adapter`
+  (an `%Adapter{}` struct) instead of `:source_module` (a module atom)
+  for dialect-aware type mapping. Callers that build `column_info`
+  maps — e.g. custom `TypeHandler` users — must pass the resolved
+  adapter struct.
+
+#### Cache
+
+- **Cache tag prefix renamed** — `"repo:<name>"` → `"source:<name>"`.
+  Pre-v1 cached entries (discovery + result) won't be found after
+  upgrade; stale entries miss and re-seed on the next read (not a
+  correctness issue). Middleware and custom `Lotus.Cache.KeyBuilder`
+  implementations that tag cache entries must update their prefix.
+
+- **`Lotus.Cache.KeyBuilder` is now a behaviour.** `discovery_key/2`
+  + `result_key/4` callbacks plus a public `scope_digest/1` utility.
+  Configure via `cache: %{key_builder: MyApp.KeyBuilder}`. Default
+  implementation (`Lotus.Cache.KeyBuilder.Default`) preserves existing
+  key generation logic (#195).
+
+- **Scope-aware result cache keys.** `result_key/4` accepts an optional
+  `scope` parameter (default `nil`). When non-nil, the scope digest is
+  appended to the result cache key and a `"scope:<digest>"` tag is added
+  to the cache entry. `Lotus.invalidate_scope/1` clears both discovery
+  and result cache entries for the given scope (#196).
+
+#### Middleware and telemetry
+
+- **Payload key `:repo` → `:source`** across every middleware event
+  (`:before_query`, `:after_query`, `:after_list_schemas`,
+  `:after_list_tables`, `:after_describe_table`, `:after_list_relations`,
+  `:after_discover`). The duplicate `:repo_name` key was removed from
+  discovery event payloads. Modules that pattern-match on `%{repo: _}`
+  or `%{repo_name: _}` must update.
+
+- **Event `:after_get_table_schema` renamed** to `:after_describe_table`
+  — aligns with the `describe_table/3` callback rename.
+
+- **`:before_query` / `:after_query` carry `:statement`** (a
+  `%Lotus.Query.Statement{}`) instead of separate `:sql` / `:params`
+  keys. Extract via `statement.text` / `statement.params`.
+
+- **Telemetry `[:lotus, :query, :start | :stop | :exception]` metadata
+  carries `:statement`.** Handlers that indexed on `:sql` / `:params`
+  must switch. `:context` is also present (caller-supplied opaque
+  value, threaded from the `run_query/2` + `run_statement/3` options,
+  #175).
+
+#### Visibility
+
+- **`Lotus.Visibility.Resolver` callbacks gained a `scope` argument:**
+  `schema_rules_for/2`, `table_rules_for/2`, `column_rules_for/2`.
+  Existing custom resolvers must accept (and may ignore) the argument.
+  The shipped `Lotus.Visibility.Resolvers.Static` ignores scope, so
+  static-config users are unaffected.
+
+#### AI
+
+- **Prompts compose from `ai_context` — hardcoded dialect branches
+  gone.** `Lotus.AI.Prompts.QueryGeneration` and
+  `Lotus.AI.Prompts.Optimization` dropped their
+  `database_specific_notes(:postgres | :mysql | :sqlite)` switch. The
+  prompts assemble in a fixed order: core role + read-only / workflow
+  instructions + Lotus template DSL rules (`{{var}}`, `[[...]]`, list
+  expansion — language-agnostic, emitted via `lotus_template_notes/0`)
+  + adapter `syntax_notes` (filtered to a generic fallback for
+  untrusted adapters) + adapter `example_query` + response-contract
+  examples. Core content precedes adapter content so an untrusted
+  adapter can't override the Lotus DSL rules via later text.
+
+- **Module renames** (no aliases; internal but any host reaching into
+  them must update):
+  - `Lotus.AI.SQLGenerator` → `Lotus.AI.QueryGenerator`
+  - `Lotus.AI.Prompts.SQLGeneration` → `Lotus.AI.Prompts.QueryGeneration`
+  - `Lotus.AI.Actions.GetTableSchema` → `Lotus.AI.Actions.DescribeTable`
+    (LLM-visible tool name changed from `"get_table_schema"` to
+    `"describe_table"`).
+
+- **`Lotus.AI.suggest_optimizations/1` and
+  `Lotus.AI.QueryOptimizer.suggest_optimizations/2` take `:statement`
+  instead of `:sql`.** The `:statement` option accepts a
+  `%Lotus.Query.Statement{}`. Drops the `:params` and SQL-string
+  inputs — callers wrap their SQL via `Lotus.Query.Statement.new/2`.
+
+- **AI functions return
+  `{:error, {:ai_feature_unsupported, feature, reason}}`** when a
+  capability is disabled. `Lotus.AI.generate_query/1`,
+  `generate_query_with_context/1`, `suggest_optimizations/1`, and
+  `explain_query/1` check `ai_context.capabilities` before invoking the
+  model. Sources declaring `optimization: {false, reason}` now fail
+  fast at the AI entry point rather than surfacing a downstream error.
+
+- **Optimization suggestion type enum changed.** `@valid_types` in
+  `Lotus.AI.Prompts.Optimization` changed from
+  `~w(index rewrite schema configuration)` to
+  `~w(index rewrite structure configuration)`. LLM output contract
+  changed — JSON responses emitting `{"type": "schema", ...}` are
+  invalid. Host UIs rendering suggestion-type labels must add a
+  `"structure"` case.
+
+- **`Lotus.AI.Conversation.schema_context` struct field →
+  `source_context`.** Accessor `update_schema_context/2` renamed to
+  `update_source_context/2`. Host code reaching into
+  `conversation.schema_context` must migrate.
+
+- **`schema_context` parameter → `source_context`** in
+  `Lotus.AI.ErrorDetector.analyze_error/4` + `suggest_fixes/4`,
+  `Lotus.AI.Prompts.Explanation.user_prompt/2` + `fragment_prompt/3`,
+  and `Lotus.AI.Prompts.Optimization.user_prompt/3`. Rendered prompt
+  section heading `"## Schema Context"` → `"## Source Context"`.
+
+- **`Lotus.AI.ErrorDetector.analyze_error/4`** gained an optional 4th
+  `ai_context` argument. When present, adapter `:error_patterns` are
+  matched against the error message and each matching pattern's
+  `:hint` is prepended to the suggestions list. Untrusted adapters have
+  their patterns stripped upstream to `[]`.
+
+- **AI actions dispatch through the adapter contract.**
+  `Lotus.AI.Actions.ValidateSQL` calls `Adapter.validate_statement/3`;
+  `Lotus.AI.Actions.DescribeTable` and `GetColumnValues` call
+  `Adapter.parse_qualified_name/2` + `Adapter.validate_identifier/3`.
+  Action names and tool schemas unchanged; only the dispatch path
+  differs.
+
+#### Module reorganization
+
+- **`Lotus.SQL.*` → `Lotus.Source.Adapters.Ecto.SQL.*`.** Internal
+  SQL-specific modules relocated out of the universal code path:
+  `FilterInjector`, `SortInjector`, `Transformer`, `Sanitizer`,
+  `Validator`, `Identifier`. Universal code reaches the same
+  functionality through `Lotus.Source.Adapter` callbacks
+  (`validate_statement/3`, `validate_identifier/3`,
+  `parse_qualified_name/2`, `apply_filters/3`, `apply_sorts/3`).
+  `Lotus.SQL.Transformer.transform/2` was split into
+  `strip_quoted_variables/1`, `transform_wildcards/2`, and
+  `transform_pg_intervals/1`; custom dialects implement
+  `transform_statement/1` composed from those helpers. The old
+  `Lotus.SQL.*` paths no longer exist.
+
+- **`Lotus.SQL.OptionalClause` → `Lotus.Query.OptionalClause`**
+  (elevated, not hidden). The `[[ ... ]]` / `{{var}}` template syntax
+  is language-agnostic — SQL, JSON DSLs, Cypher, any textual format
+  — so it lives in the universal namespace now. Adapters with AST
+  representations apply this before serialization.
+
+- **`FilterInjector.apply/5`** (shared helper called by dialects)
+  accepts `params` (existing parameter list) and `placeholder_fn`
+  (database-specific placeholder generator), returns a `{sql, params}`
+  tuple.
+
+#### Supervisor
+
+- **`Lotus.Supervisor.start_link/1`** registers under the fixed name
+  `Lotus.Supervisor` by default and collapses
+  `{:error, {:already_started, pid}}` into `{:ok, pid}`. Host
+  applications that started multiple unnamed Lotus supervisors in the
+  same BEAM will now see the first call succeed and subsequent calls
+  return the existing supervisor's pid. Pass `supervisor_name:` to run
+  multiple named instances.
 
 ### Added
 
-- `Lotus.Source.Adapters.Ecto.Dialect` behaviour for SQL-specific callbacks (`source_type/0`, `ecto_adapter/0`, plus all existing dialect callbacks) (#193)
-- `can_handle?/1` and `wrap/2` optional callbacks on `Lotus.Source.Adapter` for pluggable adapter registration (#193)
-- `source_adapters` config option — list of external adapter modules with `can_handle?/1` and `wrap/2` (#193)
-- `use Lotus.Source.Adapters.Ecto, dialect: MyDialect` macro for Ecto-backed adapters (#193)
-- `Lotus.Source.Adapters.Postgres`, `Lotus.Source.Adapters.MySQL`, `Lotus.Source.Adapters.SQLite3` — per-dialect adapter modules using the `use` macro (#193)
-- `query_language/1` callback in `Lotus.Source.Adapter` (with `query_language/0` counterpart on `Lotus.Source.Adapters.Ecto.Dialect`) and dispatch helper — returns the query language identifier for a source (e.g. `"sql:postgres"`, `"sql:mysql"`) (#122)
-- `limit_query/3` callback in `Lotus.Source.Adapter` (with `limit_query/2` counterpart on `Lotus.Source.Adapters.Ecto.Dialect`) and dispatch helper — wraps a statement with a source-specific limit clause (#122)
-- `:schema_hierarchy` feature flag surfaced via `Lotus.Source.Adapter.supports_feature?/2` — `true` for Postgres, `false` for MySQL/SQLite (#122)
-- `supports_feature?/2`, `hierarchy_label/1`, and `example_query/3` optional callbacks in `Lotus.Source.Adapter` with dispatch helpers (dialect-level counterparts `supports_feature?/1`, `hierarchy_label/0`, `example_query/2` on `Lotus.Source.Adapters.Ecto.Dialect`) — adapters define feature flags, UI hierarchy labels, and example query placeholders (#123)
-- `:preload` option on `Lotus.Dashboards.list_dashboards/1` and `list_dashboards_by/1` for eager-loading associations (e.g. `:cards`) in a single query. Fixes N+1 patterns in callers that need card counts or card lists alongside the dashboard list (see elixir-lotus/lotus_web#103).
-- Pluggable source adapter abstraction (`Lotus.Source.Adapter`) — behaviour and struct wrapping data sources behind a uniform callback interface with consistent `{:ok, _} | {:error, _}` return types
-- `Lotus.Source.Resolver` behaviour for configurable source resolution
-- `Lotus.Visibility.Resolver` behaviour for configurable visibility rule resolution
-- Default implementations: `Lotus.Source.Resolvers.Static`, `Lotus.Visibility.Resolvers.Static`, `Lotus.Source.Adapters.Ecto`
-- Config keys: `:source_resolver` (default `Lotus.Source.Resolvers.Static`), `:visibility_resolver` (default `Lotus.Visibility.Resolvers.Static`)
-- Guide: `source-adapters.md` documenting the adapter system, custom resolvers, and custom adapters
-- Guide: `custom-resolvers.md` documenting the `Lotus.Source.Resolver` and `Lotus.Visibility.Resolver` extension points, including use cases, contract details, `Agent`- and ETS-backed examples, and testing guidance (#176)
-- `:after_discover` middleware event fires after any discovery call (`Lotus.list_schemas/2`, `list_tables/2`, `get_table_schema/3`, `list_relations/2`), alongside the kind-specific `:after_list_*` event. Payload is uniform: `%{kind:, source:, result:, scope:, context:}`. Lets a single middleware module handle every discovery kind by dispatching on `:kind` (#173)
-- `:scope` option on all discovery functions (`list_schemas/2`, `list_tables/2`, `get_table_schema/3`, `list_relations/2`, `get_table_stats/3`). Scope is an opaque term passed to the visibility resolver and hashed into the cache key, enabling context-aware visibility rules (e.g. per-role, per-tenant) with correct per-scope caching. When `nil` (the default), cache keys and behavior are identical to pre-scope versions. Discovery middleware payloads now include `:scope`
-- Per-scope cache invalidation via `Lotus.invalidate_scope/1` (delegates to `Lotus.Cache.invalidate_scope/1`). Selectively clears all cached discovery entries associated with a specific scope without flushing the entire cache. Uses tag-based invalidation — each scoped cache entry is automatically tagged with `"scope:<digest>"` (#195)
-- `Lotus.Cache.KeyBuilder` behaviour for pluggable cache key generation. Defines `discovery_key/2` and `result_key/4` callbacks plus a public `scope_digest/1` utility function. Configure via `cache: %{key_builder: MyApp.KeyBuilder}`. Default implementation (`Lotus.Cache.KeyBuilder.Default`) preserves existing key generation logic (#195)
-- Scope-aware result cache keys: `result_key/4` accepts an optional `scope` parameter (default `nil`). When non-nil, the scope digest is appended to the result cache key and a `"scope:<digest>"` tag is added to the cache entry, so `invalidate_scope/1` now clears both discovery and result cache entries for the given scope (#196)
-- `Lotus.Config.cache_key_builder/0` helper to retrieve the configured key builder module (defaults to `Lotus.Cache.KeyBuilder.Default`)
-- 4 optional adapter callbacks for query pipeline participation: `sanitize_query/3`, `transform_query/4`, `extract_accessed_resources/4`, `apply_window/4`. Non-SQL adapters can implement these to sanitize, transform, authorize, and paginate queries using native mechanisms. Dispatch helpers in `Lotus.Source.Adapter` use `function_exported?/3` with safe defaults (`:ok`, passthrough, `:skip`, `nil`) so existing adapters continue to work unchanged (#208)
-- Middleware exception safety: raised exceptions inside middleware `call/2` are now caught and surfaced as `{:error, exception}` instead of propagating uncaught. The `rescue` is scoped to the individual `call/2` invocation so subsequent middleware never runs (#177)
-- `:context` metadata in query telemetry events (`[:lotus, :query, :start | :stop | :exception]`). The caller-supplied `:context` option is now included in event metadata, enabling per-endpoint attribution, distributed trace correlation, and request ID tagging without wrapping or forking `Runner` (#175)
+- **`editor_config/1` exposes two optional extension points** —
+  `:dialect_spec` (SQL tokenizer options: identifier quotes, operator
+  chars, hash / slash / dollar-quoted string rules, PL/SQL quoting,
+  etc., forwarded verbatim to CodeMirror's `SQLDialect.define()`) and
+  `:context_schema` (structural JSON DSL completion schema: per-parent
+  valid keys, marker atoms for field-name / nested-query / named-
+  aggregation lookups, and value-literal lists). External SQL adapters
+  declaring `:dialect_spec` reach tokenization parity with the
+  built-in PG/MySQL Lezer grammars; JSON DSL adapters (Elasticsearch,
+  future OpenSearch) declare a `:context_schema` that drives parent-
+  aware autocomplete in `lotus_web`. Mirroring the `ai_context`
+  sanitization philosophy, `editor_config/1` payloads are capped at
+  the `Lotus.Source.Adapter` dispatch layer: `:keywords` and `:types`
+  at 2000 entries each, `:functions` at 500, `:context_schema.root`
+  at 200, `:context_schema.children` at 500, unknown top-level keys
+  dropped, with a one-time `Logger.warning/1` per `(adapter, field)`
+  truncation (deduped via `:persistent_term`) so a noisy or compromised
+  adapter can't ship a huge payload over LiveView to every editor
+  session (elixir-lotus/lotus_web#126).
 
-### Security
+- **First-party non-SQL reference adapter `Lotus.Test.InMemoryAdapter`**
+  (in `test/support/`). Implements the full `Lotus.Source.Adapter`
+  contract against an in-memory dataset using a structured DSL map as
+  the `%Statement{}` payload (`%{from, where, order_by, limit, offset}`)
+  — no SQL text, no Jason encoding, no driver dependency. Exercises
+  `substitute_variable/5` + `substitute_list_variable/5` via
+  `{:var, name}` markers embedded in the `:where` clause, and declares
+  per-feature AI capabilities. Serves as both a test fixture and a
+  starting template for external non-Ecto adapters, with coverage in
+  `test/lotus/source/adapters/in_memory_adapter_test.exs`,
+  `test/integration/non_sql/in_memory_end_to_end_test.exs`, and
+  `test/lotus/ai/in_memory_adapter_ai_test.exs` (35 tests total).
 
-- Use parameterized queries in `FilterInjector` instead of string-interpolated values — filter values are now bound as query parameters (`$1`, `?`) and never appear in the SQL string, eliminating SQL injection risk via crafted filter values (#152)
-- Validate column names in `FilterInjector` and `SortInjector` against `[a-zA-Z_][a-zA-Z0-9_]*` using `Lotus.SQL.Identifier`, rejecting column names containing spaces, quotes, semicolons, or other special characters (#152)
-- Track nesting depth in `Runner`'s `skip_block_comment/1` so the single-statement parser matches PostgreSQL's nested block comment semantics. The previous implementation exited at the first `*/`, which could let a second statement slip past `assert_single_statement/1` when hidden inside a nested comment (#164)
+- **`Lotus.AI.supports?(source_name, feature)`** and
+  **`Lotus.AI.unsupported_reason(source_name, feature)`** — UIs gate
+  AI buttons per-source per-feature, reading
+  `ai_context.capabilities`. Reasons from untrusted adapters are
+  replaced with a generic fallback at the dispatch layer.
+
+- **`Lotus.UnsupportedOperatorError`** exception raised when a filter
+  operator is not in the adapter's declared support list.
+
+- **`:scope` option on all discovery functions**
+  (`list_schemas/2`, `list_tables/2`, `describe_table/3`,
+  `list_relations/2`, `get_table_stats/3`). Opaque term passed to the
+  visibility resolver and hashed into the cache key — enables
+  context-aware visibility rules (per-role, per-tenant) with correct
+  per-scope caching. When `nil` (the default), cache keys and behavior
+  are identical to pre-scope versions. Discovery middleware payloads
+  include `:scope`.
+
+- **Per-scope cache invalidation** via `Lotus.invalidate_scope/1`
+  (delegates to `Lotus.Cache.invalidate_scope/1`). Selectively clears
+  all cached entries associated with a specific scope without flushing
+  the entire cache, using tag-based invalidation (#195).
+
+- **`:after_discover` middleware event** fires after any discovery
+  call alongside the kind-specific `:after_list_*` event. Payload is
+  uniform `%{kind:, source:, result:, scope:, context:}`. Lets a
+  single middleware module handle every discovery kind by dispatching
+  on `:kind` (#173).
+
+- **Middleware exception safety** — raised exceptions inside
+  middleware `call/2` are caught and surfaced as
+  `{:error, exception}` instead of propagating uncaught. The rescue
+  is scoped to the individual `call/2` invocation so subsequent
+  middleware never runs (#177).
+
+- **`:preload` option on `Lotus.Dashboards.list_dashboards/1` and
+  `list_dashboards_by/1`** for eager-loading associations (e.g.
+  `:cards`) in a single query. Fixes N+1 patterns in callers that need
+  card counts or card lists alongside the dashboard list
+  (elixir-lotus/lotus_web#103).
+
+- **Documentation** — new guide `guides/upgrading-to-v1.md` with a
+  10-step upgrade checklist covering every breaking change in this
+  release. Rewritten `guides/source-adapters.md` to the v1.0 contract.
+  New `guides/custom-resolvers.md` for `Lotus.Source.Resolver` and
+  `Lotus.Visibility.Resolver` extension points (#176).
+
+- **`Lotus.TaskSupervisor`** added to the supervision tree. Dashboard
+  card execution uses `Task.Supervisor.async` instead of bare
+  `Task.async`, giving proper OTP supervision and fault tolerance
+  (#169).
+
+- **Typespecs on `Lotus.Cache` public API** for Dialyzer coverage
+  against the cache facade (#161).
+
+### Changed
+
+- `Lotus.Config.load!/0` caches the validated config in
+  `:persistent_term` instead of re-running
+  `NimbleOptions.validate/2` on every accessor call.
+  `Lotus.Config.reload!/0` refreshes the cached value (called from
+  `Lotus.Supervisor.init/1` at boot, and available to tests that
+  mutate `Application` env). `load!/1` with explicit opts still
+  validates without touching the cache (#178).
+- `Lotus.can_run?/2` now reuses the private `prepare_variables/2`
+  helper instead of duplicating default-merge logic inline (#156).
+- Shared filter → sort → pagination → cache → execute pipeline
+  extracted from `Lotus.run_statement/3` and `Lotus.run_query/2` into
+  a single private `execute_with_options/7` helper (#160).
+- Discovery middleware (`:after_list_*`) now runs outside the schema
+  cache callback, so context-sensitive filtering is no longer cached
+  by the first caller's context and served to later callers.
+  Side-effecting middleware that undercounted by running only on
+  cache misses will now run on every call (#173).
+- Discovery middleware that raises now propagates the exception
+  instead of being silently converted to `{:error, message}`
+  (matching `:before_query` / `:after_query` behaviour in
+  `Lotus.Runner`) — middleware should return `{:halt, reason}` for
+  error conditions, not raise (#173).
+- `guides/middleware.md` documented the `:after_describe_table`
+  payload key as `:table_schema`, but `Lotus.Schema` actually sends
+  `:columns` (plus the previously-undocumented `:table_name` and
+  `:schema` keys). Documentation now matches the code (#173).
 
 ### Fixed
 
-- `get_table_schema/3` and `get_table_stats/3` now propagate adapter errors (e.g. permission denied, connection errors) instead of masking them as "Table not found" (#189)
-- `Lotus.Storage.Query.to_sql_params/2` now correctly uses falsy supplied values (`false`, `0`) instead of short-circuiting through `||` and falling back to the variable's default. `nil` supplied values still fall back to the default (#163).
+- `describe_table/3` and `get_table_stats/3` now propagate adapter
+  errors (permission denied, connection errors) instead of masking
+  them as "Table not found" (#189).
+- `Lotus.Storage.Query.to_sql_params/2` uses falsy supplied values
+  (`false`, `0`) correctly instead of short-circuiting through `||`
+  and falling back to the variable's default. `nil` supplied values
+  still fall back to the default (#163).
+- `Lotus.Normalizer` for `URI` now renders URIs as URL strings via
+  `URI.to_string/1` instead of `inspect/1`, which produced struct
+  representations (`%URI{...}`) (#159).
+- `Lotus.Config.cache_namespace/0` returns a consistent default
+  regardless of cache configuration state. The previous implementation
+  returned `"lotus:v0"` when no cache was configured and `"lotus:v1"`
+  when a cache was configured without an explicit namespace (#165).
+
+### Security
+
+- Filter values are parameterized (bound as `$1`, `?`) instead of
+  string-interpolated, eliminating SQL-injection risk via crafted
+  filter values (#152).
+- Column names in `FilterInjector` and `SortInjector` are validated
+  against `[a-zA-Z_][a-zA-Z0-9_]*` via
+  `Lotus.Source.Adapters.Ecto.SQL.Identifier`, rejecting names with
+  spaces, quotes, semicolons, or other special characters (#152).
+- Nested block-comment depth is tracked in `Runner`'s
+  `skip_block_comment/1` so the single-statement parser matches
+  PostgreSQL's nested block-comment semantics. The previous
+  implementation exited at the first `*/`, which could let a second
+  statement slip past `assert_single_statement/1` when hidden inside
+  a nested comment (#164).
 - `Lotus.Config.cache_namespace/0` now returns a consistent `"lotus:v1"` default regardless of whether a cache is configured, eliminating an inconsistency where the un-configured path returned `"lotus:v0"` (#165)
 - `Lotus.Normalizer` implementation for `URI` now uses `URI.to_string/1` instead of `inspect/1`, producing the actual URL string rather than the `%URI{}` struct representation (#159)
 - Propagate `Repo.transaction/1` errors from `Dashboards.reorder_dashboard_cards/2` instead of unconditionally returning `:ok`. Spec updated to `:ok | {:error, term()}` (#157)
