@@ -7,23 +7,49 @@ defmodule Lotus.Cache.ETS do
   If you want a distributed cache, consider using `Lotus.Cache.Cachex`.
   """
 
+  use GenServer
   use Lotus.Cache.Adapter
 
   @table :lotus_cache
   @tag_table :lotus_cache_tags
+  @janitor_interval :timer.seconds(30)
 
-  def child_spec(_opts \\ []) do
-    %{
-      id: __MODULE__,
-      start: {__MODULE__, :start_link, [[]]},
-      type: :supervisor
-    }
+  def start_link(opts \\ []) do
+    case GenServer.start_link(__MODULE__, opts, name: __MODULE__) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      error -> error
+    end
   end
 
-  def start_link(_opts) do
-    ensure_tables!()
-    start_janitor()
-    {:ok, self()}
+  @impl GenServer
+  def init(_opts) do
+    :ets.new(@table, [
+      :set,
+      :named_table,
+      :public,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
+    :ets.new(@tag_table, [:bag, :named_table, :public, write_concurrency: true])
+
+    schedule_janitor()
+    {:ok, %{}}
+  end
+
+  @impl GenServer
+  def handle_info(:run_janitor, state) do
+    now = now_ms()
+    :ets.select_delete(@table, [{{:"$1", :"$2", :"$3"}, [{:"=<", :"$3", now}], [true]}])
+    schedule_janitor()
+    {:noreply, state}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  defp schedule_janitor do
+    Process.send_after(self(), :run_janitor, @janitor_interval)
   end
 
   @impl Lotus.Cache.Adapter
@@ -123,37 +149,6 @@ defmodule Lotus.Cache.ETS do
     end
 
     :ok
-  end
-
-  defp ensure_tables! do
-    unless :ets.whereis(@table) != :undefined do
-      :ets.new(@table, [
-        :set,
-        :named_table,
-        :public,
-        read_concurrency: true,
-        write_concurrency: true
-      ])
-    end
-
-    unless :ets.whereis(@tag_table) != :undefined do
-      :ets.new(@tag_table, [:bag, :named_table, :public, write_concurrency: true])
-    end
-  end
-
-  defp start_janitor do
-    spawn_link(fn -> janitor_loop() end)
-  end
-
-  defp janitor_loop do
-    Process.sleep(:timer.seconds(30))
-    now = now_ms()
-
-    for {key, _v, expires_at} <- :ets.tab2list(@table), expires_at <= now do
-      :ets.delete(@table, key)
-    end
-
-    janitor_loop()
   end
 
   defp expired?(ts), do: ts <= now_ms()

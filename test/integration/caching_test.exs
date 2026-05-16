@@ -11,8 +11,7 @@ defmodule Lotus.Integration.CachingTest do
     Mimic.copy(Lotus.Config)
     Mimic.copy(Lotus.Cache)
 
-    cleanup_cache_tables()
-    {:ok, _} = ETS.start_link([])
+    start_supervised!(ETS)
 
     Config
     |> stub(:cache_adapter, fn -> {:ok, ETS} end)
@@ -40,26 +39,7 @@ defmodule Lotus.Integration.CachingTest do
       end
     end)
 
-    on_exit(fn -> cleanup_cache_tables() end)
     :ok
-  end
-
-  defp cleanup_cache_tables do
-    try do
-      if :ets.whereis(:lotus_cache) != :undefined do
-        :ets.delete(:lotus_cache)
-      end
-    rescue
-      ArgumentError -> :ok
-    end
-
-    try do
-      if :ets.whereis(:lotus_cache_tags) != :undefined do
-        :ets.delete(:lotus_cache_tags)
-      end
-    rescue
-      ArgumentError -> :ok
-    end
   end
 
   describe "run_sql/3 caching scenarios" do

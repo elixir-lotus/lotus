@@ -180,31 +180,27 @@ defmodule Lotus.Cache.ETSTest do
   end
 
   describe "child_spec/1" do
-    test "returns proper child spec" do
+    test "returns the default GenServer child spec" do
       spec = ETS.child_spec([])
       assert spec.id == ETS
-      assert spec.type == :supervisor
       assert spec.start == {ETS, :start_link, [[]]}
     end
   end
 
   describe "start_link/1" do
-    test "creates ETS tables and starts successfully" do
-      if :ets.whereis(:lotus_cache) != :undefined do
-        :ets.delete(:lotus_cache)
-      end
-
-      if :ets.whereis(:lotus_cache_tags) != :undefined do
-        :ets.delete(:lotus_cache_tags)
-      end
-
-      assert {:ok, _pid} = ETS.start_link([])
-      assert :ets.whereis(:lotus_cache) != :undefined
-      assert :ets.whereis(:lotus_cache_tags) != :undefined
+    test "is idempotent when the singleton is already started" do
+      # Lotus.Application starts ETS as a named singleton. A second start_link
+      # should return {:ok, pid} rather than {:error, {:already_started, _}}.
+      assert {:ok, pid1} = ETS.start_link([])
+      assert {:ok, pid2} = ETS.start_link([])
+      assert pid1 == pid2
+      assert Process.alive?(pid1)
     end
 
-    test "handles already existing tables gracefully" do
-      assert {:ok, _pid} = ETS.start_link([])
+    test "cache tables are live and usable" do
+      assert :ets.whereis(:lotus_cache) != :undefined
+      assert :ets.whereis(:lotus_cache_tags) != :undefined
+
       ETS.put("test", "value", 5000, [])
       assert ETS.get("test") == {:ok, "value"}
     end

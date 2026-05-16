@@ -1,11 +1,13 @@
 defmodule Lotus.CacheCase do
   @moduledoc """
   This module defines the setup for cache-related tests.
+
+  `Lotus.Cache.ETS` is a named GenServer that owns the cache tables. ExUnit
+  starts a supervised instance per test, which guarantees the GenServer (and
+  its ETS tables) are torn down cleanly between tests.
   """
 
   use ExUnit.CaseTemplate
-
-  alias Lotus.Cache.ETS
 
   using do
     quote do
@@ -14,30 +16,7 @@ defmodule Lotus.CacheCase do
   end
 
   setup do
-    cleanup_cache_tables()
-
-    {:ok, _} = ETS.start_link([])
-
-    on_exit(fn -> cleanup_cache_tables() end)
-
+    start_supervised!(Lotus.Cache.ETS)
     :ok
-  end
-
-  defp cleanup_cache_tables do
-    try do
-      if :ets.whereis(:lotus_cache) != :undefined do
-        :ets.delete(:lotus_cache)
-      end
-    rescue
-      ArgumentError -> :ok
-    end
-
-    try do
-      if :ets.whereis(:lotus_cache_tags) != :undefined do
-        :ets.delete(:lotus_cache_tags)
-      end
-    rescue
-      ArgumentError -> :ok
-    end
   end
 end
