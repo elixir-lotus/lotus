@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.16.6] - 2026-05-16
+
+### Fixed
+
+- **FIX:** `Lotus.Cache.ETS` is now a proper `GenServer` so applications using the ETS cache can shut down cleanly. Previously the adapter's `start_link/1` returned `{:ok, self()}` and spawned a janitor process that never trapped exits, causing `Application.stop/1` and `System.stop/0` to hang until the BEAM forced shutdown (#219)
+
 ## [0.16.5] - 2026-05-02
 
 ### Fixed
