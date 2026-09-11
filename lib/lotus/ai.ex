@@ -30,7 +30,7 @@ defmodule Lotus.AI do
 
       # Returns:
       # %{
-      #   sql: "SELECT * FROM users WHERE created_at >= ...",
+      #   statement: "SELECT * FROM users WHERE created_at >= ...",
       #   variables: [],
       #   model: "openai:gpt-4o",
       #   usage: %{total_tokens: 150}
@@ -120,7 +120,7 @@ defmodule Lotus.AI do
            ) do
       {:ok,
        %{
-         sql: response.content,
+         statement: response.content,
          variables: Map.get(response, :variables, []),
          model: response.model,
          usage: response.usage
@@ -180,7 +180,7 @@ defmodule Lotus.AI do
            ) do
       {:ok,
        %{
-         sql: response.content,
+         statement: response.content,
          variables: Map.get(response, :variables, []),
          model: response.model,
          usage: response.usage
@@ -244,7 +244,7 @@ defmodule Lotus.AI do
 
       # Explain a full query
       {:ok, result} = Lotus.AI.explain_query(
-        sql: "SELECT d.name, COUNT(o.id) FROM departments d LEFT JOIN orders o ...",
+        statement: "SELECT d.name, COUNT(o.id) FROM departments d LEFT JOIN orders o ...",
         data_source: "postgres"
       )
 
@@ -253,7 +253,7 @@ defmodule Lotus.AI do
 
       # Explain a selected fragment
       {:ok, result} = Lotus.AI.explain_query(
-        sql: "SELECT d.name FROM departments d LEFT JOIN employees e ON e.department_id = d.id",
+        statement: "SELECT d.name FROM departments d LEFT JOIN employees e ON e.department_id = d.id",
         fragment: "LEFT JOIN employees e ON e.department_id = d.id",
         data_source: "postgres"
       )
@@ -263,7 +263,7 @@ defmodule Lotus.AI do
     with {:ok, config} <- get_ai_config(),
          :ok <- check_feature(opts[:data_source], :explanation) do
       QueryExplainer.explain_query(config.model,
-        sql: opts[:sql],
+        statement: opts[:statement],
         fragment: opts[:fragment],
         data_source: opts[:data_source],
         api_key: config.api_key

@@ -83,7 +83,7 @@ For simple, one-off queries without conversation context:
   data_source: "my_repo"
 )
 
-result.sql
+result.statement
 #=> "SELECT * FROM users WHERE created_at > NOW() - INTERVAL '7 days'"
 
 result.variables
@@ -104,7 +104,7 @@ When the user asks for parameterized queries, the AI also returns variable confi
   data_source: "my_repo"
 )
 
-result.sql
+result.statement
 #=> "SELECT * FROM orders WHERE status = {{status}}"
 
 result.variables
@@ -120,7 +120,7 @@ For iterative refinement and error fixing, see [Conversational Query Refinement]
 ```elixir
 case Lotus.AI.generate_query(prompt: prompt, data_source: repo) do
   {:ok, result} ->
-    # Success - use result.sql
+    # Success - use result.statement
 
   {:error, :not_configured} ->
     # AI features not enabled in config
@@ -233,10 +233,10 @@ Always review the generated SQL before using it in production:
 {:ok, result} = Lotus.AI.generate_query(prompt: prompt, data_source: repo)
 
 IO.puts("Generated SQL:")
-IO.puts(result.sql)
+IO.puts(result.statement)
 
 # Review before executing:
-Lotus.run_statement(result.sql, [], repo: repo)
+Lotus.run_statement(result.statement, [], repo: repo)
 ```
 
 ## Visibility and Security
@@ -362,12 +362,12 @@ conversation = Conversation.add_user_message(conversation, "Show active users")
 conversation = Conversation.add_assistant_response(
   conversation,
   "Here's your query:",
-  result.sql,
+  result.statement,
   result.variables
 )
 
 # If the query fails, add the error
-case Lotus.run_statement(result.sql, [], repo: "postgres") do
+case Lotus.run_statement(result.statement, [], repo: "postgres") do
   {:ok, _} ->
     :success
   {:error, error} ->
@@ -442,7 +442,7 @@ Lotus can explain what a SQL query does in plain language, powered by AI. This h
 
 ```elixir
 {:ok, result} = Lotus.AI.explain_query(
-  sql: """
+  statement: """
   SELECT d.name, COUNT(o.id), SUM(o.total)
   FROM departments d
   LEFT JOIN employees e ON e.department_id = d.id
@@ -468,7 +468,7 @@ Users can highlight a portion of SQL to explain just that part. The full query i
 
 ```elixir
 {:ok, result} = Lotus.AI.explain_query(
-  sql: "SELECT d.name FROM departments d LEFT JOIN employees e ON e.department_id = d.id",
+  statement: "SELECT d.name FROM departments d LEFT JOIN employees e ON e.department_id = d.id",
   fragment: "LEFT JOIN employees e ON e.department_id = d.id",
   data_source: "my_repo"
 )
@@ -485,7 +485,7 @@ The explainer understands Lotus-specific `{{variable}}` placeholders and `[[opti
 
 ```elixir
 {:ok, result} = Lotus.AI.explain_query(
-  sql: """
+  statement: """
   SELECT id, name, status FROM users
   WHERE 1=1
   [[AND status = {{status}}]]
@@ -504,7 +504,7 @@ The explainer understands Lotus-specific `{{variable}}` placeholders and `[[opti
 ### Error Handling
 
 ```elixir
-case Lotus.AI.explain_query(sql: sql, data_source: repo) do
+case Lotus.AI.explain_query(statement: statement, data_source: repo) do
   {:ok, %{explanation: explanation}} ->
     # Display explanation to user
 
@@ -524,7 +524,7 @@ Lotus can analyze your SQL queries and suggest performance improvements using AI
 
 ```elixir
 {:ok, result} = Lotus.AI.suggest_optimizations(
-  sql: "SELECT * FROM orders WHERE created_at > '2024-01-01'",
+  statement: "SELECT * FROM orders WHERE created_at > '2024-01-01'",
   data_source: "my_repo"
 )
 
@@ -583,7 +583,7 @@ Queries using Lotus-specific syntax (`{{variables}}` and `[[optional clauses]]`)
 ```elixir
 # Works with Lotus variable syntax
 {:ok, result} = Lotus.AI.suggest_optimizations(
-  sql: """
+  statement: """
   SELECT id, name FROM users
   WHERE 1=1
   [[AND status = {{status}}]]
@@ -596,7 +596,7 @@ Queries using Lotus-specific syntax (`{{variables}}` and `[[optional clauses]]`)
 
 ### Options
 
-- `:sql` (required) - The SQL query to optimize
+- `:statement` (required) - The statement to optimize
 - `:data_source` (required) - Name of the data source
 - `:params` (optional) - Query parameters (default: `[]`)
 - `:search_path` (optional) - PostgreSQL search path
@@ -604,7 +604,7 @@ Queries using Lotus-specific syntax (`{{variables}}` and `[[optional clauses]]`)
 ### Error Handling
 
 ```elixir
-case Lotus.AI.suggest_optimizations(sql: sql, data_source: repo) do
+case Lotus.AI.suggest_optimizations(statement: statement, data_source: repo) do
   {:ok, %{suggestions: []}} ->
     # Query is already well-optimized
 
@@ -637,7 +637,7 @@ Generates SQL from natural language (single-turn).
 
 **Returns:**
 
-- `{:ok, %{sql: String.t(), variables: [map()], model: String.t(), usage: map()}}` - Success
+- `{:ok, %{statement: String.t(), variables: [map()], model: String.t(), usage: map()}}` - Success
 - `{:error, :not_configured}` - AI not enabled
 - `{:error, :api_key_not_configured}` - Missing API key
 - `{:error, {:unable_to_generate, reason}}` - LLM refused
@@ -677,7 +677,7 @@ Explains a SQL query (or a selected fragment) in plain language.
 
 **Options:**
 
-- `:sql` (required) - The full SQL query
+- `:statement` (required) - The full statement to explain
 - `:fragment` (optional) - A selected portion of the query to explain
 - `:data_source` (required) - Repository name
 
@@ -694,7 +694,7 @@ Analyzes a SQL query and returns optimization suggestions.
 
 **Options:**
 
-- `:sql` (required) - The SQL query to optimize
+- `:statement` (required) - The statement to optimize
 - `:data_source` (required) - Repository name
 - `:params` (optional) - Query parameters (default: `[]`)
 - `:search_path` (optional) - PostgreSQL search path

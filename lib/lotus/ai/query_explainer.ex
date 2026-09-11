@@ -15,7 +15,7 @@ defmodule Lotus.AI.QueryExplainer do
 
   ## Options
 
-  - `:sql` (required) - The full SQL query
+  - `:statement` (required) - The full statement to explain
   - `:fragment` (optional) - A selected portion of the query to explain
   - `:data_source` (required) - Name of the data source
   - `:api_key` (required) - API key for the LLM provider
@@ -29,7 +29,7 @@ defmodule Lotus.AI.QueryExplainer do
   @spec explain_query(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def explain_query(model_string, opts) do
     data_source = Keyword.fetch!(opts, :data_source)
-    sql = Keyword.fetch!(opts, :sql)
+    statement = Keyword.fetch!(opts, :statement)
     fragment = Keyword.get(opts, :fragment)
     api_key = Keyword.fetch!(opts, :api_key)
     temperature = Keyword.get(opts, :temperature, 0.2)
@@ -40,9 +40,9 @@ defmodule Lotus.AI.QueryExplainer do
 
     user_prompt =
       if fragment do
-        Explanation.fragment_prompt(fragment, sql)
+        Explanation.fragment_prompt(fragment, statement)
       else
-        Explanation.user_prompt(sql)
+        Explanation.user_prompt(statement)
       end
 
     tools = build_tools(data_source)

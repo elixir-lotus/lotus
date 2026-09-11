@@ -274,6 +274,14 @@
   also present (caller-supplied opaque value, threaded from the
   `run_query/2` + `run_statement/3` options, #175).
 
+- **AI map keys renamed from SQL-specific names.**
+  `Lotus.AI.generate_query/1` and `generate_query_with_context/1` return
+  `:statement` instead of `:sql`; `Lotus.AI.explain_query/1` takes
+  `:statement` instead of `:sql`; `Lotus.AI.Conversation` messages carry
+  `:statement`; `Lotus.AI.ErrorDetector.analyze_error/4` returns
+  `:failed_statement`. The values are unchanged — only the key names,
+  which described SQL on a surface that is no longer SQL-only.
+
 #### Visibility
 
 - **`Lotus.Visibility.Resolver` callbacks gained a `scope` argument:**

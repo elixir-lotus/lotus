@@ -68,8 +68,8 @@ defmodule Lotus.AITest do
                  data_source: "postgres"
                )
 
-      assert result.sql =~ "SELECT * FROM users"
-      assert result.sql =~ "created_at >= NOW()"
+      assert result.statement =~ "SELECT * FROM users"
+      assert result.statement =~ "created_at >= NOW()"
       assert result.variables == []
       assert result.model == "openai:gpt-4o"
       assert result.usage.total_tokens == 200
@@ -84,7 +84,7 @@ defmodule Lotus.AITest do
                  data_source: "postgres"
                )
 
-      assert result.sql =~ "SELECT * FROM orders"
+      assert result.statement =~ "SELECT * FROM orders"
       assert length(result.variables) == 1
       assert hd(result.variables)["name"] == "status"
     end
@@ -98,7 +98,7 @@ defmodule Lotus.AITest do
                  data_source: "postgres"
                )
 
-      assert result.sql == "SELECT COUNT(*) FROM users WHERE status = 'active'"
+      assert result.statement == "SELECT COUNT(*) FROM users WHERE status = 'active'"
     end
 
     test "handles complex SQL with JOINs" do
@@ -110,9 +110,9 @@ defmodule Lotus.AITest do
                  data_source: "postgres"
                )
 
-      assert result.sql =~ "SELECT"
-      assert result.sql =~ "JOIN"
-      assert result.sql =~ "GROUP BY"
+      assert result.statement =~ "SELECT"
+      assert result.statement =~ "JOIN"
+      assert result.statement =~ "GROUP BY"
     end
 
     test "returns structured error when AI not configured" do
@@ -206,7 +206,7 @@ defmodule Lotus.AITest do
                  data_source: "postgres"
                )
 
-      assert result.sql =~ "SELECT * FROM orders"
+      assert result.statement =~ "SELECT * FROM orders"
       assert length(result.variables) == 1
       assert hd(result.variables)["name"] == "status"
     end
