@@ -247,6 +247,12 @@ defmodule Lotus.SourcesTest do
       assert Source.supports_feature?("mysql", :schema_hierarchy) == false
       assert Source.supports_feature?("sqlite", :schema_hierarchy) == false
     end
+
+    test "every SQL source populates dropdown options from a query" do
+      assert Source.supports_feature?("postgres", :dynamic_options) == true
+      assert Source.supports_feature?("mysql", :dynamic_options) == true
+      assert Source.supports_feature?("sqlite", :dynamic_options) == true
+    end
   end
 
   describe "query_language/1" do

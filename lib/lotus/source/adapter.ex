@@ -575,11 +575,24 @@ defmodule Lotus.Source.Adapter do
       function, so the transformer can rewrite `INTERVAL '{{n}} days'`
       into a parameterized call instead of inlining the value.
 
+    * `:dynamic_options` — a query against this source can return a flat
+      list of values suitable for populating a variable's dropdown, so the
+      UI offers query-based option population alongside manual entry. True
+      for every SQL source. False for sources whose query language returns
+      shaped documents rather than rows (Elasticsearch), where the user
+      enters dropdown options by hand.
+
   Answer `false` for anything you do not recognise; the built-in dialects
   all end with a catch-all clause that does exactly that.
   """
   @type feature ::
-          :schema_hierarchy | :search_path | :arrays | :json | :make_interval | atom()
+          :schema_hierarchy
+          | :search_path
+          | :arrays
+          | :json
+          | :make_interval
+          | :dynamic_options
+          | atom()
 
   @doc """
   Whether this adapter supports a given feature.
