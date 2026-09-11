@@ -14,6 +14,9 @@ The full breaking-change list lives in the v1.0.0 entry of the
 [CHANGELOG](../CHANGELOG.md). This guide groups changes by what you need to
 do in your host app.
 
+Before any of it: v1.0 declares `elixir: "~> 1.18"`. A host app on 1.17 or
+older cannot resolve the release, so raise your toolchain first.
+
 ---
 
 ## 1. Configuration renames
@@ -36,6 +39,23 @@ Three config keys were renamed. No deprecation aliases — the old keys raise at
 
 The accessor names (`Lotus.repo/0`, `Lotus.Config.repo!/0`) did not change.
 Only the config keys moved.
+
+### New host-facing keys
+
+Nothing forces you to set these three, but they are host config rather than
+adapter config, so they are easy to miss in §8 where they are explained:
+
+- `:source_adapters` — external adapter modules to consider when resolving a
+  source.
+- `:allow_unrestricted_resources` — an adapter that cannot enforce visibility
+  at the statement layer now returns `{:unrestricted, reason}` instead of
+  skipping the check quietly. The host opts in to running it with this key.
+- `:trusted_source_adapters` — an external adapter's free-form AI prompt
+  fields (`syntax_notes`, `example_query`, `error_patterns`) reach the LLM
+  only when the adapter is listed here.
+
+All three are new in v1.0. A host that uses only the built-in Ecto adapters
+can ignore all three.
 
 ---
 
@@ -63,9 +83,53 @@ this is your checklist.
 
 ## 3. DB column rename — `data_repo` → `data_source`
 
-The `lotus_queries` table's `data_repo` column was renamed to `data_source`.
-`Lotus.Storage.Query` previously carried a `field(:data_source, :string,
-source: :data_repo)` shim; the shim is gone.
+The `lotus_queries` table's `data_repo` column was renamed to `data_source`,
+and `Lotus.Storage.Query` renamed its field to match.
+
+No alias survives, and none ever shipped: the
+`field(:data_source, :string, source: :data_repo)` shim existed only between
+the rename and the v1.0 prep, never in a released 0.16.x. So a host app coming
+from 0.16.x has `data_repo` as the real field name **and** as the real
+attribute key.
+
+### Attribute maps move too — and they fail silently
+
+This is the one rename that neither the compiler nor a changeset will catch.
+Read it even if `Lotus.create_query/1` is the only Lotus function you call.
+
+```diff
+ Lotus.create_query(%{
+   name: "Active Users",
+   statement: "SELECT * FROM users WHERE active = true",
+-  data_repo: "analytics"
++  data_source: "analytics"
+ })
+```
+
+`data_repo` is no longer a permitted attribute, so `cast/3` drops it.
+`data_source` is not a required attribute, so the changeset stays valid. The
+query saves with `data_source: nil`, and a `nil` source resolves at run time to
+`:default_source` — or, if you set none, to the first configured source.
+
+Nothing raises, nothing warns, and `{:ok, query}` comes back.
+
+- **Single-source hosts** keep working, because the default source is the only
+  source. The rows are wrong; the behaviour is not.
+- **Multi-source hosts** silently run those queries against the wrong database.
+
+So grep for the attribute key, not only for the function names: `data_repo:` in
+every `create_query/1` and `update_query/2` attribute map, in seeds, in test
+fixtures, and in any form or params plumbing that feeds them.
+
+To find rows that a stale key already produced:
+
+```sql
+SELECT id, name FROM lotus_queries WHERE data_source IS NULL;
+```
+
+A row in that result either carries an intentional `NULL` — which has always
+meant "use the default source" — or lost its source to a dropped `data_repo`
+key. Compare the list against what your seeds and fixtures intend.
 
 ### Postgres
 
@@ -402,10 +466,52 @@ config users are unaffected.
 
 ---
 
+## 11. Remove `Lotus` from your supervision tree
+
+Nothing breaks if you leave it, so this one is cleanup rather than repair — but
+the instruction that put it there is gone, so it is worth doing while you are
+in the file.
+
+The 0.16.x installation guide told hosts to add `Lotus` to their children to
+turn caching on:
+
+```elixir
+# What the 0.16.x installation guide asked for
+children = [
+  MyApp.Repo,
+  # Add Lotus for caching support
+  Lotus,
+  MyAppWeb.Endpoint
+]
+```
+
+Caching no longer needs it. Lotus is an OTP application, so `Lotus.Supervisor`
+starts with your app as soon as `:lotus` is a dependency, and a `:cache` entry
+in your config is the whole of the setup. A host child entry now only re-attaches
+the supervisor that already started — `Lotus.Supervisor.start_link/1` returns
+`{:ok, pid}` for an `:already_started` name — which leaves your host supervisor
+linked to a tree it does not own.
+
+```diff
+ children = [
+   MyApp.Repo,
+-  Lotus,
+   MyAppWeb.Endpoint
+ ]
+```
+
+Keep a child entry only if you deliberately own the supervision tree yourself,
+or run more than one instance with per-instance opts:
+`{Lotus, name: MyApp.LotusReporting, cache: ...}`. Both paths are described in
+`Lotus.Supervisor`.
+
+---
+
 ## Quick-reference upgrade checklist
 
 Order matters — do these in sequence:
 
+0. [ ] **Toolchain** — Elixir 1.18 or newer.
 1. [ ] **Host config** — rename `:ecto_repo`, `:data_repos`, `:default_repo`.
 2. [ ] **DB migration (Postgres)** — run `mix ecto.migrate` to apply the
    `data_repo` → `data_source` rename.
@@ -415,15 +521,20 @@ Order matters — do these in sequence:
 4. [ ] **Callers** — grep for `Lotus.run_sql`, `Lotus.data_repos`,
    `Lotus.get_table_schema`, `Lotus.default_data_repo`, `run_sql_with_context`
    etc. Rename per §2.
-5. [ ] **Middleware** — update `:sql`/`:params` → `:statement`; `:repo`
+5. [ ] **Attribute maps** — grep for `data_repo:` in `create_query/1` and
+   `update_query/2` attrs, seeds, fixtures and form params. This one is
+   silent: the old key is dropped and the changeset still succeeds (§3).
+6. [ ] **Middleware** — update `:sql`/`:params` → `:statement`; `:repo`
    → `:source`; `:after_get_table_schema` → `:after_describe_table`.
-6. [ ] **Telemetry handlers** — `:sql`/`:params` → `statement.text`/`statement.params`.
-7. [ ] **Cache tag invalidations** — `repo:<name>` → `source:<name>`.
-8. [ ] **AI callers** — `suggest_optimizations` takes `:statement`; check for
+7. [ ] **Telemetry handlers** — `:sql`/`:params` → `statement.text`/`statement.params`.
+8. [ ] **Cache tag invalidations** — `repo:<name>` → `source:<name>`.
+9. [ ] **AI callers** — `suggest_optimizations` takes `:statement`; check for
    `{:error, {:ai_feature_unsupported, _, _}}` in error paths; grep for
    `ExecuteSQL`, `ValidateSQL`, `"execute_sql"` and `"validate_sql"` (§6).
-9. [ ] **Custom adapters** — see §8 above and the [authoring guide](source-adapters.md).
-10. [ ] **Run tests.** `mix compile --warnings-as-errors` + your suite will
+10. [ ] **Custom adapters** — see §8 above and the [authoring guide](source-adapters.md).
+11. [ ] **Supervision tree** — drop the `Lotus` child entry the 0.16.x
+    installation guide asked for (§11).
+12. [ ] **Run tests.** `mix compile --warnings-as-errors` + your suite will
     catch most mismatches (the removed names fail at compile time).
 
 ---
