@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.0-rc.1] - 2026-09-11
 
 > **v1.0 is a large rewrite and not a drop-in upgrade from the v0.16.x
 > line.** The motivating goal was to stop assuming every data source is
