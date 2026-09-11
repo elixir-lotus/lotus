@@ -17,6 +17,7 @@ defmodule Lotus.Migrations.SQLite do
       add(:variables, :map, null: false, default: "[]")
       add(:data_source, :string)
       add(:search_path, :string)
+      add(:query_language, :string, size: 32)
       timestamps(type: :utc_datetime_usec)
     end
 

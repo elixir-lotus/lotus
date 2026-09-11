@@ -28,6 +28,7 @@ defmodule Lotus.Storage.Query do
           variables: [QueryVariable.t()],
           data_source: String.t() | nil,
           search_path: String.t() | nil,
+          query_language: String.t() | nil,
           inserted_at: DateTime.t(),
           updated_at: DateTime.t()
         }
@@ -46,6 +47,7 @@ defmodule Lotus.Storage.Query do
              :variables,
              :data_source,
              :search_path,
+             :query_language,
              :inserted_at,
              :updated_at
            ]}
@@ -56,6 +58,7 @@ defmodule Lotus.Storage.Query do
     field(:statement, :string)
     field(:data_source, :string)
     field(:search_path, :string)
+    field(:query_language, :string)
 
     embeds_many(:variables, QueryVariable, on_replace: :delete)
 
@@ -63,7 +66,7 @@ defmodule Lotus.Storage.Query do
   end
 
   @required ~w(name statement)a
-  @permitted ~w(name description statement data_source search_path)a
+  @permitted ~w(name description statement data_source search_path query_language)a
 
   def new(attrs), do: changeset(%__MODULE__{}, attrs)
   def update(query, attrs), do: changeset(query, attrs)
@@ -77,6 +80,7 @@ defmodule Lotus.Storage.Query do
     |> validate_statement()
     |> validate_data_source()
     |> validate_search_path()
+    |> validate_query_language()
     |> maybe_add_unique_constraint()
   end
 
@@ -98,9 +102,9 @@ defmodule Lotus.Storage.Query do
   def compile(%__MODULE__{statement: raw_body, variables: vars} = q, supplied_vars \\ %{}) do
     # A stored query's `data_source` can become stale when the source is
     # renamed or removed. Fall back to the default source so compilation
-    # still succeeds — the caller (Runner/Preflight) will surface a clear
-    # error at execution if the default source doesn't match the query's
-    # dialect expectations.
+    # still succeeds. `Lotus.run_query/2` resolves the source again before
+    # executing, and rejects the query there if the resolved source speaks a
+    # different language than the one recorded in `query_language`.
     adapter =
       try do
         Source.resolve!(q.data_source, nil)
@@ -455,6 +459,32 @@ defmodule Lotus.Storage.Query do
 
       _ ->
         add_error(changeset, :data_source, "must be a string")
+    end
+  end
+
+  @query_language_format ~r/\A[a-z0-9]+(:[a-z0-9_-]+)?\z/
+
+  defp validate_query_language(changeset) do
+    case get_change(changeset, :query_language) do
+      nil ->
+        changeset
+
+      "" ->
+        put_change(changeset, :query_language, nil)
+
+      language when is_binary(language) ->
+        if Regex.match?(@query_language_format, language) do
+          changeset
+        else
+          add_error(
+            changeset,
+            :query_language,
+            "must be a language identifier like \"sql\" or \"sql:postgres\""
+          )
+        end
+
+      _ ->
+        add_error(changeset, :query_language, "must be a string")
     end
   end
 

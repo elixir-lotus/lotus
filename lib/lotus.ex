@@ -455,10 +455,27 @@ defmodule Lotus do
 
   defp execute_query(q, body, params, vars, opts) do
     adapter = Source.resolve!(Keyword.get(opts, :repo), q.data_source)
-    search_path = Keyword.get(opts, :search_path) || q.search_path
-    runner_opts = prepare_final_opts(opts, search_path)
+    adapter_language = Adapter.query_language(adapter)
 
-    execute_with_options(adapter, body, params, opts, runner_opts, vars, q.id)
+    if language_compatible?(q.query_language, adapter_language) do
+      search_path = Keyword.get(opts, :search_path) || q.search_path
+      runner_opts = prepare_final_opts(opts, search_path)
+
+      execute_with_options(adapter, body, params, opts, runner_opts, vars, q.id)
+    else
+      {:error, language_mismatch_message(q.query_language, adapter.name, adapter_language)}
+    end
+  end
+
+  # A stored query without a recorded language predates the column, or was
+  # saved without one. Deriving it from the adapter is the historical
+  # behaviour, so there is nothing to compare against.
+  defp language_compatible?(nil, _adapter_language), do: true
+  defp language_compatible?(stored, adapter_language), do: stored == adapter_language
+
+  defp language_mismatch_message(stored, source_name, adapter_language) do
+    "Query was written for #{inspect(stored)} but data source " <>
+      "#{inspect(source_name)} speaks #{inspect(adapter_language)}"
   end
 
   defp execute_with_options(adapter, body, params, opts, runner_opts, cache_identity, query_id) do
