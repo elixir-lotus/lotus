@@ -68,7 +68,7 @@ jobs:
           elixir-version: ${{ matrix.tuple.elixir }}
           otp-version: ${{ matrix.tuple.erlang }}
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             deps
