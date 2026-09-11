@@ -35,13 +35,20 @@ defmodule Lotus.Query.Statement do
   """
 
   @typedoc """
+  The adapter-native query payload. SQL text for Ecto-backed adapters, a
+  decoded JSON object for Elasticsearch, an AST for a DSL adapter. Core
+  never inspects it.
+  """
+  @type body :: term()
+
+  @typedoc """
   Bound values: a list for positional placeholders, a map for named ones.
   """
   @type params :: list() | map()
 
   @type t :: %__MODULE__{
           adapter: module() | nil,
-          body: term(),
+          body: body(),
           params: params(),
           meta: map()
         }
@@ -56,7 +63,7 @@ defmodule Lotus.Query.Statement do
   (Runner integration tests, adapter-author examples) sometimes need to
   construct one directly.
   """
-  @spec new(body :: term(), params :: params()) :: t()
+  @spec new(body :: body(), params :: params()) :: t()
   def new(body, params \\ []) when is_list(params) or is_map(params) do
     %__MODULE__{body: body, params: params}
   end

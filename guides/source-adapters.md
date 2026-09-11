@@ -429,6 +429,7 @@ legitimately cannot support a feature.
 | `prepare_for_analysis/2` | `{:error, :unsupported}` | Produce a runnable statement for `query_plan/3` analysis — strips `[[ ... ]]`, neutralizes `{{var}}`. |
 | `hierarchy_label/1` | `"Tables"` | UI label for the top-level hierarchy (e.g. `"Indices"` for Elasticsearch). |
 | `example_query/3` | generic `SELECT` | Source-native example for the query editor's placeholder text. |
+| `table_stats/3` | `{:error, :unsupported}` | Relation statistics. Without it, core falls back to `SELECT COUNT(*)`, which only suits SQL sources. |
 | `limit_query/3` | statement unchanged | Cap a statement at a row limit for the UI's preview affordance — `%Statement{}` in, `%Statement{}` out. |
 | `list_schemas/1` | `{:ok, []}` | Sources with a namespace level. Flat sources omit it. |
 | `resolve_table_namespace/3` | `{:ok, nil}` | Resolve which namespace holds a table. |

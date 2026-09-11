@@ -516,6 +516,68 @@ defmodule Lotus.Source.AdapterTest do
     end
   end
 
+  describe "table_stats/3" do
+    defmodule StatsAdapter do
+      @moduledoc false
+      @behaviour Lotus.Source.Adapter
+
+      @impl true
+      def execute_query(_state, _body, _params, _opts),
+        do: {:ok, %{columns: [], rows: [], num_rows: 0}}
+
+      @impl true
+      def transaction(state, fun, _opts), do: {:ok, fun.(state)}
+
+      @impl true
+      def list_tables(_state, _schemas, _opts), do: {:ok, []}
+
+      @impl true
+      def describe_table(_state, _schema, _table), do: {:ok, []}
+
+      @impl true
+      def builtin_denies(_state), do: []
+
+      @impl true
+      def health_check(_state), do: :ok
+
+      @impl true
+      def disconnect(_state), do: :ok
+
+      @impl true
+      def format_error(_state, error), do: inspect(error)
+
+      @impl true
+      def source_type(_state), do: :other
+
+      @impl true
+      def table_stats(_state, schema, table),
+        do: {:ok, %{row_count: 42, schema: schema, table: table}}
+    end
+
+    test "dispatches to the adapter when it implements the callback" do
+      adapter = %Adapter{
+        name: "stats",
+        module: StatsAdapter,
+        state: nil,
+        source_type: :other
+      }
+
+      assert {:ok, %{row_count: 42, schema: "logs", table: "events"}} =
+               Adapter.table_stats(adapter, "logs", "events")
+    end
+
+    test "reports :unsupported when the adapter does not implement it" do
+      adapter = %Adapter{
+        name: "stub",
+        module: Lotus.Test.StubAdapter,
+        state: nil,
+        source_type: :other
+      }
+
+      assert {:error, :unsupported} = Adapter.table_stats(adapter, nil, "events")
+    end
+  end
+
   describe "SQL-shaped callbacks are optional" do
     defmodule MinimalAdapter do
       @moduledoc """

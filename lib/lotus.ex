@@ -1,10 +1,11 @@
 defmodule Lotus do
   @moduledoc """
-  Lotus is a lightweight Elixir library for saving and executing read-only SQL queries.
+  Lotus is a lightweight Elixir library for saving and executing read-only queries
+  against SQL and non-SQL data sources alike.
 
   This module provides the main public API, orchestrating between:
   - Storage: Query persistence and management
-  - Runner: SQL execution with safety checks
+  - Runner: statement execution with safety checks
   - Migrations: Database schema management
 
   ## Configuration
@@ -31,7 +32,7 @@ defmodule Lotus do
       # Execute a saved query
       {:ok, results} = Lotus.run_query(query)
 
-      # Execute SQL directly (read-only)
+      # Execute a statement directly (read-only)
       {:ok, results} = Lotus.run_statement("SELECT * FROM products WHERE price > $1", [100])
 
   ## Further reading
@@ -74,12 +75,14 @@ defmodule Lotus do
           statement_timeout_ms: non_neg_integer(),
           read_only: boolean(),
           search_path: binary() | nil,
-          repo: binary() | nil,
+          repo: binary() | module() | nil,
           vars: map(),
           cache: [cache_opt] | :bypass | :refresh | nil,
           window: window_opts,
           filters: [Filter.t()],
-          context: term()
+          sorts: [Sort.t()],
+          context: term(),
+          scope: term()
         ]
 
   def child_spec(opts), do: Lotus.Supervisor.child_spec(opts)
@@ -563,7 +566,10 @@ defmodule Lotus do
   end
 
   @doc """
-  Run ad-hoc SQL (bypassing storage), read-only by default and sandboxed.
+  Run an ad-hoc statement (bypassing storage), read-only by default and sandboxed.
+
+  The statement is the adapter-native payload: SQL text for Ecto-backed
+  sources, a decoded JSON object or DSL term for others.
 
   ## Options
 
@@ -594,17 +600,10 @@ defmodule Lotus do
 
   ### Windowed pagination
   Pass `window: [limit: pos_integer, offset: non_neg_integer, count: :none | :exact]` to
-  page results from the SQL. See `run_query/2` for details. The cache key automatically
+  page results from the statement. See `run_query/2` for details. The cache key automatically
   incorporates the window so different pages are cached independently.
   """
-  @spec run_statement(binary(), list(any()), [
-          {:read_only, boolean()}
-          | {:statement_timeout_ms, non_neg_integer()}
-          | {:timeout, non_neg_integer()}
-          | {:search_path, binary() | nil}
-          | {:repo, atom() | binary()}
-          | {:window, window_opts}
-        ]) ::
+  @spec run_statement(Statement.body(), Statement.params(), opts()) ::
           {:ok, Result.t()} | {:error, term()}
   def run_statement(statement, params \\ [], opts \\ []) do
     adapter = Source.resolve!(Keyword.get(opts, :repo), nil)

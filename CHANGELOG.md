@@ -251,6 +251,18 @@
   to the cache entry. `Lotus.invalidate_scope/1` clears both discovery
   and result cache entries for the given scope (#196).
 
+- **Optional `table_stats/3` callback.** `Lotus.get_table_stats/3` asks the
+  adapter first and only falls back to `SELECT COUNT(*)` when the adapter
+  does not implement it. Non-SQL sources can now answer with their engine's
+  own statistics, and may return keys beyond `:row_count`; the return type
+  widened from `%{row_count: non_neg_integer()}` to `map()`.
+
+- **`Lotus.run_statement/3` and the shared `opts` type are honest.** The
+  spec claimed `binary()` statements while non-SQL adapters take any term;
+  it now uses `Lotus.Query.Statement.body/0` and `params/0`. The `opts`
+  type gained `:scope` and `:sorts`, which the code already read but never
+  declared, and `:repo` accepts a module as well as a name.
+
 - **The SQL-shaped callbacks became optional, with defaults.**
   `list_schemas/1`, `resolve_table_namespace/3`, `default_schemas/1`,
   `builtin_schema_denies/1`, `quote_identifier/2`, `apply_filters/3`,

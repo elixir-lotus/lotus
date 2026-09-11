@@ -2,9 +2,13 @@ defmodule Lotus.Runner do
   @moduledoc """
   Statement execution with safety checks, param binding, and result shaping.
 
-  By default, all statements are read-only. Destructive operations (INSERT,
-  UPDATE, DELETE, DDL) are blocked at both the application and database level.
-  Pass `read_only: false` to allow write operations.
+  By default, all statements are read-only. Destructive operations (writes,
+  schema changes — INSERT, UPDATE, DELETE and DDL in SQL terms) are blocked
+  at both the application and database level. Pass `read_only: false` to
+  allow write operations.
+
+  What counts as a write is the adapter's judgement, via
+  `c:Lotus.Source.Adapter.sanitize_query/3`.
   """
 
   alias Lotus.{Middleware, Preflight, Result, Telemetry, Value, Visibility}

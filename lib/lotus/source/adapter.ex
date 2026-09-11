@@ -173,6 +173,26 @@ defmodule Lotus.Source.Adapter do
   # Callbacks — SQL Generation
   # ---------------------------------------------------------------------------
 
+  @doc """
+  Return statistics for a relation.
+
+  At minimum a `:row_count`; adapters may add their own keys (on-disk size,
+  segment counts, a last-analyzed timestamp) and callers should tolerate
+  extras.
+
+  `Lotus.Schema.get_table_stats/3` calls this when the adapter implements
+  it. Otherwise it falls back to `SELECT COUNT(*)` against the quoted
+  relation name, which only makes sense for SQL sources — a non-SQL adapter
+  should implement this callback rather than inherit that fallback.
+
+  Return `{:error, :unsupported}` for an engine that exposes no such
+  statistic; callers treat it as "no stats available".
+
+  Default (when not implemented): `{:error, :unsupported}`.
+  """
+  @callback table_stats(state :: term(), schema :: String.t() | nil, table :: String.t()) ::
+              {:ok, map()} | {:error, term()}
+
   @doc "Quote a SQL identifier (column, table, schema name) using source-specific syntax."
   @callback quote_identifier(state :: term(), String.t()) :: String.t()
 
@@ -903,7 +923,8 @@ defmodule Lotus.Source.Adapter do
     default_schemas: 1,
     supports_feature?: 2,
     db_type_to_lotus_type: 2,
-    editor_config: 1
+    editor_config: 1,
+    table_stats: 3
   ]
 
   # Conservative fallback deny rules applied when no adapter can be resolved
@@ -1027,6 +1048,14 @@ defmodule Lotus.Source.Adapter do
     if function_exported?(mod, :builtin_schema_denies, 1),
       do: mod.builtin_schema_denies(state),
       else: []
+  end
+
+  @doc "Return statistics for a relation via the adapter."
+  @spec table_stats(t(), String.t() | nil, String.t()) :: {:ok, map()} | {:error, term()}
+  def table_stats(%__MODULE__{module: mod, state: state}, schema, table) do
+    if function_exported?(mod, :table_stats, 3),
+      do: mod.table_stats(state, schema, table),
+      else: {:error, :unsupported}
   end
 
   @doc "Return default schemas via the adapter."
