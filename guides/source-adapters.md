@@ -430,6 +430,17 @@ legitimately cannot support a feature.
 | `hierarchy_label/1` | `"Tables"` | UI label for the top-level hierarchy (e.g. `"Indices"` for Elasticsearch). |
 | `example_query/3` | generic `SELECT` | Source-native example for the query editor's placeholder text. |
 | `limit_query/3` | statement unchanged | Cap a statement at a row limit for the UI's preview affordance — `%Statement{}` in, `%Statement{}` out. |
+| `list_schemas/1` | `{:ok, []}` | Sources with a namespace level. Flat sources omit it. |
+| `resolve_table_namespace/3` | `{:ok, nil}` | Resolve which namespace holds a table. |
+| `default_schemas/1` | `[]` | Namespaces browsed when the caller names none. |
+| `builtin_schema_denies/1` | `[]` | Namespaces always hidden (system catalogues). |
+| `quote_identifier/2` | identifier unchanged | Quote an identifier. Languages without quoting omit it. |
+| `apply_filters/3` | statement unchanged | Bake runtime filters into the statement. |
+| `apply_sorts/3` | statement unchanged | Bake runtime sorts into the statement. |
+| `query_plan/3` | `{:ok, nil}` | Execution plan, when the engine exposes one. |
+| `supports_feature?/2` | `false` | Declare capabilities. See `t:Lotus.Source.Adapter.feature/0`. |
+| `db_type_to_lotus_type/2` | `:text` | Map engine column types onto Lotus value types. |
+| `editor_config/1` | empty editor shape | Keywords, types and functions for editor completions. |
 
 ## The Security Boundaries
 

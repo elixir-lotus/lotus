@@ -96,18 +96,16 @@ defmodule Lotus.SourcesTest do
       assert adapter.state == Lotus.Test.SqliteRepo
     end
 
-    test "unloaded atoms in both positions fall through to default" do
-      adapter = Source.resolve!(:typoed_one, :typoed_two)
-      assert %Adapter{} = adapter
-      assert adapter.name == "postgres"
-      assert adapter.state == Lotus.Test.Repo
+    test "unloaded atoms in both positions raise rather than using the default" do
+      assert_raise ArgumentError, ~r/not configured/, fn ->
+        Source.resolve!(:typoed_one, :typoed_two)
+      end
     end
 
-    test "handles invalid types gracefully" do
-      adapter = Source.resolve!(123, :"Elixir.Nonexistent.Module")
-      assert %Adapter{} = adapter
-      assert adapter.name == "postgres"
-      assert adapter.state == Lotus.Test.Repo
+    test "invalid types raise rather than using the default" do
+      assert_raise ArgumentError, ~r/not configured/, fn ->
+        Source.resolve!(123, :"Elixir.Nonexistent.Module")
+      end
     end
   end
 

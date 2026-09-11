@@ -251,6 +251,35 @@
   to the cache entry. `Lotus.invalidate_scope/1` clears both discovery
   and result cache entries for the given scope (#196).
 
+- **The SQL-shaped callbacks became optional, with defaults.**
+  `list_schemas/1`, `resolve_table_namespace/3`, `default_schemas/1`,
+  `builtin_schema_denies/1`, `quote_identifier/2`, `apply_filters/3`,
+  `apply_sorts/3`, `query_plan/3`, `supports_feature?/2`,
+  `db_type_to_lotus_type/2` and `editor_config/1` all have safe defaults
+  now, so a non-SQL adapter implements the ten callbacks it actually
+  needs instead of thirty, most of them stubs. Existing adapters are
+  unaffected — an implemented callback is still used.
+
+- **`%{adapter: MyAdapter, ...}` is the canonical data source entry.**
+  The named module is used directly, with no `can_handle?/1` probing. When
+  two adapters both claim a non-canonical entry, resolution now raises and
+  names them instead of silently picking whichever came first.
+
+- **An unresolvable data source is an error, not the default source.** A
+  typo in a saved query's `data_source`, or a source dropped from config,
+  used to fall through and run the query against the default database.
+  `Lotus.Source.resolve!/2` raises and the resolver returns
+  `{:error, :not_found}`. Only a caller that names no source at all gets
+  the default.
+
+- **`%Lotus.Query.Statement{}` params may be a map.** Positional binds stay
+  a list; engines with named binds carry `%{"since" => ~D[2026-01-01]}`
+  rather than inventing an order.
+
+- **`t:Lotus.Source.Adapter.feature/0` documents the feature atoms** that
+  `supports_feature?/2` is asked about: `:schema_hierarchy`,
+  `:search_path`, `:arrays`, `:json` and `:make_interval`.
+
 - **`Lotus.Source.Adapters.Ecto.Dialect` is public.** It was
   `@moduledoc false` while the adapter guide told external libraries to
   implement it; it now carries documentation and ships in the generated

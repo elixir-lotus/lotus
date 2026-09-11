@@ -516,6 +516,101 @@ defmodule Lotus.Source.AdapterTest do
     end
   end
 
+  describe "SQL-shaped callbacks are optional" do
+    defmodule MinimalAdapter do
+      @moduledoc """
+      The smallest adapter a non-SQL source can get away with: it executes
+      statements and says who it is. Everything SQL-shaped is left out.
+      """
+      @behaviour Lotus.Source.Adapter
+
+      @impl true
+      def execute_query(_state, _body, _params, _opts),
+        do: {:ok, %{columns: [], rows: [], num_rows: 0}}
+
+      @impl true
+      def transaction(state, fun, _opts), do: {:ok, fun.(state)}
+
+      @impl true
+      def list_tables(_state, _schemas, _opts), do: {:ok, []}
+
+      @impl true
+      def describe_table(_state, _schema, _table), do: {:ok, []}
+
+      @impl true
+      def builtin_denies(_state), do: []
+
+      @impl true
+      def health_check(_state), do: :ok
+
+      @impl true
+      def disconnect(_state), do: :ok
+
+      @impl true
+      def format_error(_state, error), do: inspect(error)
+
+      @impl true
+      def source_type(_state), do: :other
+    end
+
+    setup do
+      {:ok,
+       adapter: %Adapter{
+         name: "minimal",
+         module: MinimalAdapter,
+         state: nil,
+         source_type: :other
+       }}
+    end
+
+    test "quote_identifier/2 returns the identifier unchanged", %{adapter: adapter} do
+      assert Adapter.quote_identifier(adapter, "users") == "users"
+    end
+
+    test "query_plan/3 reports no plan", %{adapter: adapter} do
+      assert {:ok, nil} = Adapter.query_plan(adapter, Statement.new("anything"), [])
+    end
+
+    test "apply_filters/3 and apply_sorts/3 pass the statement through", %{adapter: adapter} do
+      statement = Statement.new(%{"match_all" => %{}})
+
+      assert Adapter.apply_filters(adapter, statement, [:a_filter]) == statement
+      assert Adapter.apply_sorts(adapter, statement, [:a_sort]) == statement
+    end
+
+    test "list_schemas/1 reports a flat namespace", %{adapter: adapter} do
+      assert {:ok, []} = Adapter.list_schemas(adapter)
+    end
+
+    test "resolve_table_namespace/3 resolves to no namespace", %{adapter: adapter} do
+      assert {:ok, nil} = Adapter.resolve_table_namespace(adapter, "logs", [])
+    end
+
+    test "default_schemas/1 and builtin_schema_denies/1 are empty", %{adapter: adapter} do
+      assert Adapter.default_schemas(adapter) == []
+      assert Adapter.builtin_schema_denies(adapter) == []
+    end
+
+    test "supports_feature?/2 answers false for everything", %{adapter: adapter} do
+      refute Adapter.supports_feature?(adapter, :schema_hierarchy)
+      refute Adapter.supports_feature?(adapter, :search_path)
+      refute Adapter.supports_feature?(adapter, :anything_at_all)
+    end
+
+    test "db_type_to_lotus_type/2 falls back to :text", %{adapter: adapter} do
+      assert Adapter.db_type_to_lotus_type(adapter, "whatever") == :text
+    end
+
+    test "editor_config/1 returns an empty editor shape", %{adapter: adapter} do
+      config = Adapter.editor_config(adapter)
+
+      assert config.keywords == []
+      assert config.types == []
+      assert config.functions == []
+      assert config.context_boundaries == []
+    end
+  end
+
   describe "limit_query/3" do
     setup do
       {:ok,

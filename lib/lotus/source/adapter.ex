@@ -528,8 +528,45 @@ defmodule Lotus.Source.Adapter do
   @doc "Return the source type atom (e.g. `:postgres`, `:mysql`)."
   @callback source_type(state :: term()) :: source_type()
 
-  @doc "Whether this adapter supports a given feature."
-  @callback supports_feature?(state :: term(), atom()) :: boolean()
+  @typedoc """
+  A capability an adapter may declare through `supports_feature?/2`.
+
+  These are the atoms core and the built-in UI ask about. The type is open —
+  an adapter may answer questions about its own atoms, and callers that
+  invent one get `false` from any adapter that does not recognise it — but
+  these are the ones with defined meaning:
+
+    * `:schema_hierarchy` — the source has a real namespace level above
+      tables, so the UI shows a schema picker. False for flat sources
+      (SQLite, Elasticsearch); false for MySQL, whose databases are
+      configured per source rather than browsed.
+
+    * `:search_path` — the source honours a session-level namespace search
+      path, so a caller-supplied `:search_path` option is meaningful.
+
+    * `:arrays` — the query language has a first-class array type, so list
+      variables can bind as one value instead of being expanded into N
+      placeholders.
+
+    * `:json` — the source can store and query JSON documents, which the
+      editor uses to offer JSON-aware affordances.
+
+    * `:make_interval` — SQL-specific: the engine has a `make_interval`
+      function, so the transformer can rewrite `INTERVAL '{{n}} days'`
+      into a parameterized call instead of inlining the value.
+
+  Answer `false` for anything you do not recognise; the built-in dialects
+  all end with a catch-all clause that does exactly that.
+  """
+  @type feature ::
+          :schema_hierarchy | :search_path | :arrays | :json | :make_interval | atom()
+
+  @doc """
+  Whether this adapter supports a given feature.
+
+  See `t:feature/0` for the atoms core asks about and what each one means.
+  """
+  @callback supports_feature?(state :: term(), feature()) :: boolean()
 
   @doc """
   Return the query language identifier for this source.
@@ -855,7 +892,18 @@ defmodule Lotus.Source.Adapter do
     can_handle?: 1,
     wrap: 2,
     transform_statement: 2,
-    limit_query: 3
+    limit_query: 3,
+    list_schemas: 1,
+    resolve_table_namespace: 3,
+    query_plan: 3,
+    quote_identifier: 2,
+    apply_filters: 3,
+    apply_sorts: 3,
+    builtin_schema_denies: 1,
+    default_schemas: 1,
+    supports_feature?: 2,
+    db_type_to_lotus_type: 2,
+    editor_config: 1
   ]
 
   # Conservative fallback deny rules applied when no adapter can be resolved
@@ -930,7 +978,9 @@ defmodule Lotus.Source.Adapter do
   @doc "List all schemas via the adapter."
   @spec list_schemas(t()) :: {:ok, [String.t()]} | {:error, term()}
   def list_schemas(%__MODULE__{module: mod, state: state}) do
-    mod.list_schemas(state)
+    if function_exported?(mod, :list_schemas, 1),
+      do: mod.list_schemas(state),
+      else: {:ok, []}
   end
 
   @doc "List tables via the adapter."
@@ -951,14 +1001,18 @@ defmodule Lotus.Source.Adapter do
   @spec resolve_table_namespace(t(), String.t(), [String.t()]) ::
           {:ok, String.t() | nil} | {:error, term()}
   def resolve_table_namespace(%__MODULE__{module: mod, state: state}, table, schemas) do
-    mod.resolve_table_namespace(state, table, schemas)
+    if function_exported?(mod, :resolve_table_namespace, 3),
+      do: mod.resolve_table_namespace(state, table, schemas),
+      else: {:ok, nil}
   end
 
   @doc "Get the execution plan for a statement via the adapter."
   @spec query_plan(t(), Statement.t(), keyword()) ::
           {:ok, String.t() | nil} | {:error, term()}
   def query_plan(%__MODULE__{module: mod, state: state}, %Statement{} = statement, opts) do
-    mod.query_plan(state, statement, opts)
+    if function_exported?(mod, :query_plan, 3),
+      do: mod.query_plan(state, statement, opts),
+      else: {:ok, nil}
   end
 
   @doc "Return built-in deny rules via the adapter."
@@ -970,13 +1024,17 @@ defmodule Lotus.Source.Adapter do
   @doc "Return built-in schema denies via the adapter."
   @spec builtin_schema_denies(t()) :: [String.t() | Regex.t()]
   def builtin_schema_denies(%__MODULE__{module: mod, state: state}) do
-    mod.builtin_schema_denies(state)
+    if function_exported?(mod, :builtin_schema_denies, 1),
+      do: mod.builtin_schema_denies(state),
+      else: []
   end
 
   @doc "Return default schemas via the adapter."
   @spec default_schemas(t()) :: [String.t()]
   def default_schemas(%__MODULE__{module: mod, state: state}) do
-    mod.default_schemas(state)
+    if function_exported?(mod, :default_schemas, 1),
+      do: mod.default_schemas(state),
+      else: []
   end
 
   @doc "Check data source health via the adapter."
@@ -1066,7 +1124,9 @@ defmodule Lotus.Source.Adapter do
   @doc "Quote a SQL identifier via the adapter."
   @spec quote_identifier(t(), String.t()) :: String.t()
   def quote_identifier(%__MODULE__{module: mod, state: state}, identifier) do
-    mod.quote_identifier(state, identifier)
+    if function_exported?(mod, :quote_identifier, 2),
+      do: mod.quote_identifier(state, identifier),
+      else: identifier
   end
 
   @doc """
@@ -1163,7 +1223,9 @@ defmodule Lotus.Source.Adapter do
   def apply_filters(_adapter, %Statement{} = statement, []), do: statement
 
   def apply_filters(%__MODULE__{module: mod, state: state}, %Statement{} = statement, filters) do
-    mod.apply_filters(state, statement, filters)
+    if function_exported?(mod, :apply_filters, 3),
+      do: mod.apply_filters(state, statement, filters),
+      else: statement
   end
 
   @doc "Apply sorts to a statement via the adapter. Empty sorts short-circuit."
@@ -1171,7 +1233,9 @@ defmodule Lotus.Source.Adapter do
   def apply_sorts(_adapter, %Statement{} = statement, []), do: statement
 
   def apply_sorts(%__MODULE__{module: mod, state: state}, %Statement{} = statement, sorts) do
-    mod.apply_sorts(state, statement, sorts)
+    if function_exported?(mod, :apply_sorts, 3),
+      do: mod.apply_sorts(state, statement, sorts),
+      else: statement
   end
 
   @doc "Format an error via the adapter."
@@ -1189,7 +1253,7 @@ defmodule Lotus.Source.Adapter do
   @doc "Check feature support via the adapter."
   @spec supports_feature?(t(), atom()) :: boolean()
   def supports_feature?(%__MODULE__{module: mod, state: state}, feature) do
-    mod.supports_feature?(state, feature)
+    function_exported?(mod, :supports_feature?, 2) and mod.supports_feature?(state, feature)
   end
 
   @doc "Return the query language identifier via the adapter."
@@ -1412,6 +1476,16 @@ defmodule Lotus.Source.Adapter do
   @editor_config_max_context_schema_root 200
   @editor_config_max_context_schema_children 500
 
+  # Editor shape for adapters that declare no editor support: the query
+  # editor renders plain text with no completions rather than crashing.
+  @empty_editor_config %{
+    language: "",
+    keywords: [],
+    types: [],
+    functions: [],
+    context_boundaries: []
+  }
+
   @editor_config_known_keys [
     :language,
     :keywords,
@@ -1434,7 +1508,11 @@ defmodule Lotus.Source.Adapter do
   """
   @spec editor_config(t()) :: map()
   def editor_config(%__MODULE__{module: mod, state: state}) do
-    state |> mod.editor_config() |> sanitize_editor_config(mod)
+    if function_exported?(mod, :editor_config, 1) do
+      state |> mod.editor_config() |> sanitize_editor_config(mod)
+    else
+      @empty_editor_config
+    end
   end
 
   defp sanitize_editor_config(config, mod) when is_map(config) do
@@ -1563,6 +1641,8 @@ defmodule Lotus.Source.Adapter do
   @doc "Map a database type to a Lotus type via the adapter."
   @spec db_type_to_lotus_type(t(), String.t()) :: atom()
   def db_type_to_lotus_type(%__MODULE__{module: mod, state: state}, db_type) do
-    mod.db_type_to_lotus_type(state, db_type)
+    if function_exported?(mod, :db_type_to_lotus_type, 2),
+      do: mod.db_type_to_lotus_type(state, db_type),
+      else: :text
   end
 end
