@@ -25,7 +25,7 @@ defmodule Lotus.Runner do
           {:ok, query_result()} | {:error, term()}
   def run_statement(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
     context = Keyword.get(opts, :context)
-    telemetry_meta = %{repo: adapter.name, statement: statement, context: context}
+    telemetry_meta = %{source: adapter.name, statement: statement, context: context}
     start_time = Telemetry.query_start(telemetry_meta)
 
     result =

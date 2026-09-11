@@ -268,10 +268,11 @@
   keys. Extract via `statement.body` / `statement.params`.
 
 - **Telemetry `[:lotus, :query, :start | :stop | :exception]` metadata
-  carries `:statement`.** Handlers that indexed on `:sql` / `:params`
-  must switch. `:context` is also present (caller-supplied opaque
-  value, threaded from the `run_query/2` + `run_statement/3` options,
-  #175).
+  carries `:source` and `:statement`.** The source name moved from
+  `:repo` to `:source`, matching the middleware payloads; handlers that
+  indexed on `:repo`, `:sql` or `:params` must switch. `:context` is
+  also present (caller-supplied opaque value, threaded from the
+  `run_query/2` + `run_statement/3` options, #175).
 
 #### Visibility
 
