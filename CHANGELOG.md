@@ -525,6 +525,13 @@
   regardless of cache configuration state. The previous implementation
   returned `"lotus:v0"` when no cache was configured and `"lotus:v1"`
   when a cache was configured without an explicit namespace (#165).
+- `Lotus.Normalizer` for `Decimal` renders values of any width instead
+  of raising `ArgumentError`. Decimal 3.0 caps `Decimal.to_string/2`
+  output at 6178 digit characters, but query results can exceed that
+  (an unconstrained PostgreSQL `numeric` allows 131072 integer digits).
+  The error escaped `Lotus.Result.to_encodable/1` and every
+  `Lotus.Export.Value` path; the implementation now passes
+  `max_digits: :infinity`.
 
 ### Security
 
@@ -551,6 +558,43 @@
 - `guides/middleware.md` documented the `:after_get_table_schema` payload key as `:table_schema`, but `Lotus.Schema` actually sends `:columns` (plus the previously-undocumented `:table_name` and `:schema` keys). Middleware written to the documented contract would have raised `KeyError`. Doc now matches the code (#173)
 - Discovery middleware (`:after_list_*`) previously ran **inside** the schema cache callback, so context-sensitive filtering was cached by the first caller's context and served to later callers with different contexts. The middleware pipeline now runs outside the cache; only the raw, visibility-filtered adapter result is cached. Side-effecting middleware (e.g. audit logging) that previously undercounted by logging only on cache misses will now run on every call — adjust if this change in volume matters for your use case (#173)
 - Discovery middleware that raises an exception now propagates the exception to the caller instead of being converted to `{:error, message}`. The previous conversion was an incidental side-effect of an adapter-level `try/rescue` that wrapped the middleware pipeline; after the cache refactor above, middleware runs outside that rescue. This matches the existing behavior of `:before_query` / `:after_query` middleware in `Lotus.Runner`. Middleware should return `{:halt, reason}` for error conditions, not raise (#173)
+
+### Dependencies
+
+Security advisories resolved by these bumps:
+
+- Bumped `decimal` from 2.4.1 to 3.1.1 — CVE-2026-32686 (unbounded
+  exponent enables unauthenticated DoS). Major release: `parse/1` and
+  `cast/1` now reject inputs wider than 34 digits, returning `:error`
+  (`Lotus.Storage.TypeCaster` surfaces this as a cast error), and the
+  default context precision moves from 28 to 34.
+- Bumped `mint` from 1.7.1 to 1.10.0 — CVE-2026-48861, CVE-2026-48862,
+  CVE-2026-49753, CVE-2026-49754, CVE-2026-56810, CVE-2026-58229,
+  CVE-2026-59246, CVE-2026-59249, CVE-2026-82728 (response smuggling,
+  HTTP/2 CONTINUATION floods, unbounded buffering).
+- Bumped `postgrex` from 0.22.0 to 0.22.4 — CVE-2026-32687,
+  CVE-2026-58225, CVE-2026-66838 (SQL injection via notification
+  channel name, the `:comment` option, and dollar-quote replay).
+- Bumped `req` from 0.5.17 to 0.7.4 — CVE-2026-49755, CVE-2026-49756
+  (decompression-bomb DoS, multipart header injection).
+- Bumped `hpax` from 1.0.3 to 1.0.4 — CVE-2026-58226 (unbounded HPACK
+  integer decoding).
+
+Supporting bumps required to reach the versions above:
+
+- Bumped `ecto` from 3.13.5 to 3.14.2
+- Bumped `ecto_sql` from 3.13.5 to 3.14.0
+- Bumped `ecto_sqlite3` from 0.22.0 to 0.24.1
+- Bumped `myxql` from 0.8.2 to 0.9.0
+- Bumped `req_llm` from 1.11.0 to 1.22.0
+- Bumped `telemetry` from 1.4.1 to 1.4.2
+- Transitively bumped `db_connection` to 2.10.2, `elixir_make` to
+  0.10.0, `exqlite` to 0.40.0, `finch` to 0.23.0, `jsv` to 0.22.0,
+  `llm_db` to 2026.9.1, `server_sent_events` to 1.1.0, `splode` to
+  0.3.2, `texture` to 1.2.1, and `zoi` to 0.18.7
+
+No `mix.exs` requirements changed; every update fits the existing
+version constraints.
 
 ## [0.16.4] - 2026-03-10
 

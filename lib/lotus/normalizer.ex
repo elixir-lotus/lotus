@@ -94,14 +94,10 @@ defimpl Lotus.Normalizer, for: NaiveDateTime do
 end
 
 defimpl Lotus.Normalizer, for: Decimal do
-  def normalize(value) do
-    case Decimal.to_string(value) do
-      "NaN" -> "NaN"
-      "Inf" -> "Infinity"
-      "-Inf" -> "-Infinity"
-      str -> str
-    end
-  end
+  # Query results may hold numerics far wider than Decimal's default output cap
+  # (an unconstrained Postgres numeric allows 131072 integer digits), so render
+  # them in full rather than raising ArgumentError.
+  def normalize(value), do: Decimal.to_string(value, :scientific, max_digits: :infinity)
 end
 
 defimpl Lotus.Normalizer, for: URI do
