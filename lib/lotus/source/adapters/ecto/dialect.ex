@@ -1,5 +1,53 @@
 defmodule Lotus.Source.Adapters.Ecto.Dialect do
-  @moduledoc false
+  @moduledoc """
+  The SQL-specific half of an Ecto-backed data source.
+
+  `Lotus.Source.Adapter` is the adapter-agnostic contract every data source
+  implements. A dialect is narrower: it supplies the parts that differ between
+  *SQL* engines behind an `Ecto.Repo` — identifier quoting, parameter
+  placeholders, `EXPLAIN` syntax, catalogue introspection queries, and the
+  built-in deny rules for each engine's system tables.
+
+  Pair a dialect with the `Lotus.Source.Adapters.Ecto` macro and the adapter
+  is a one-liner:
+
+      defmodule LotusMSSql.Dialect do
+        @behaviour Lotus.Source.Adapters.Ecto.Dialect
+
+        # ... callbacks ...
+      end
+
+      defmodule LotusMSSql.Adapter do
+        use Lotus.Source.Adapters.Ecto, dialect: LotusMSSql.Dialect
+      end
+
+  The macro injects every `Lotus.Source.Adapter` callback, routing the shared
+  Ecto plumbing through `Lotus.Source.Adapters.Ecto` and the engine-specific
+  parts through your dialect. All of them are `defoverridable`, so a dialect
+  that needs to escape the macro's assumptions can implement the adapter
+  callback directly.
+
+  ## When not to write a dialect
+
+  A dialect is for SQL over Ecto. A data source that is not SQL, or not
+  reached through an `Ecto.Repo`, implements `Lotus.Source.Adapter` directly
+  instead — see the [Source Adapters guide](source-adapters.md). Elasticsearch
+  is the worked example of that path.
+
+  ## Statement shape
+
+  Pipeline callbacks take and return `%Lotus.Query.Statement{}`. For a
+  dialect, `statement.body` is always SQL text and `statement.params` the
+  bound values in the order the driver expects.
+
+  ## Optional callbacks
+
+  Everything in `@optional_callbacks` has a safe default, so a minimal
+  dialect only implements what its engine actually needs. Notably
+  `set_statement_timeout/2` and `set_search_path/2` are optional: engines
+  with no session-level timeout or schema search path simply omit them
+  rather than defining no-op clauses.
+  """
 
   alias Lotus.Query.Statement
 
@@ -10,7 +58,22 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
   # ---------------------------------------------------------------------------
 
   @callback execute_in_transaction(repo, (-> any()), keyword()) :: {:ok, any()} | {:error, any()}
+
+  @doc """
+  Apply a session-level statement timeout.
+
+  Optional. Engines with no such notion omit it and Lotus relies on the
+  driver-level `:timeout` passed to `execute_query/4` instead.
+  """
   @callback set_statement_timeout(repo, non_neg_integer()) :: :ok | no_return()
+
+  @doc """
+  Apply a session-level schema search path.
+
+  Optional. Called inside the query transaction when the caller supplies
+  `:search_path`. Engines without a search path omit it, and Lotus ignores
+  the option for that source.
+  """
   @callback set_search_path(repo, String.t()) :: :ok | no_return()
 
   # ---------------------------------------------------------------------------
@@ -175,6 +238,8 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
   @callback ai_context() :: {:ok, Lotus.Source.Adapter.ai_context_map()} | {:error, term()}
 
   @optional_callbacks [
+    set_statement_timeout: 2,
+    set_search_path: 2,
     supports_feature?: 1,
     hierarchy_label: 0,
     example_query: 2,

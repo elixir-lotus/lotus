@@ -676,7 +676,7 @@ defmodule Lotus.Source.Adapters.Ecto do
     dialect.execute_in_transaction(
       repo,
       fn ->
-        if search_path do
+        if search_path && function_exported?(dialect, :set_search_path, 2) do
           dialect.set_search_path(repo, search_path)
         end
 

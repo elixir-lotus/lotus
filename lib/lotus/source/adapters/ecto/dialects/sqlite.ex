@@ -83,12 +83,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def set_statement_timeout(_repo, _timeout_ms), do: :ok
-
-  @impl true
-  def set_search_path(_repo, _search_path), do: :ok
-
-  @impl true
   def format_error(%{__struct__: mod} = e) when mod == Exqlite.Error do
     "SQLite Error: " <> (Map.get(e, :message) || Exception.message(e))
   end

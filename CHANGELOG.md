@@ -251,6 +251,13 @@
   to the cache entry. `Lotus.invalidate_scope/1` clears both discovery
   and result cache entries for the given scope (#196).
 
+- **`Lotus.Source.Adapters.Ecto.Dialect` is public.** It was
+  `@moduledoc false` while the adapter guide told external libraries to
+  implement it; it now carries documentation and ships in the generated
+  docs. `set_statement_timeout/2` and `set_search_path/2` moved to
+  `@optional_callbacks` — engines with no session timeout or search path
+  drop their no-op clauses.
+
 #### Middleware and telemetry
 
 - **Payload key `:repo` → `:source`** across every middleware event

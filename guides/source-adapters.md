@@ -230,6 +230,11 @@ end
 Callbacks are organized by category. All required callbacks must be
 implemented; optional callbacks have sensible defaults.
 
+`set_statement_timeout/2` and `set_search_path/2` are optional. Engines with
+no session-level timeout or schema search path omit them entirely rather than
+defining no-op clauses; Lotus falls back to the driver-level `:timeout` and
+ignores a caller-supplied `:search_path` for that source.
+
 **Required:**
 
 | Callback | Category |
@@ -239,8 +244,6 @@ implemented; optional callbacks have sensible defaults.
 | `query_language/0` | Identity |
 | `limit_query/2` | Identity |
 | `execute_in_transaction/3` | Transaction & session |
-| `set_statement_timeout/2` | Transaction & session |
-| `set_search_path/2` | Transaction & session |
 | `format_error/1` | Error handling |
 | `quote_identifier/1` | SQL generation |
 | `param_placeholder/3` | SQL generation |

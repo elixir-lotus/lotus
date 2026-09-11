@@ -145,9 +145,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   end
 
   @impl true
-  def set_search_path(_repo, _search_path), do: :ok
-
-  @impl true
   def format_error(%{__struct__: mod} = e) when mod == MyXQL.Error do
     case e do
       %{mysql: %{code: code, message: message}} when is_integer(code) and is_binary(message) ->
