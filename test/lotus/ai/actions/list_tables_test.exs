@@ -7,7 +7,7 @@ defmodule Lotus.AI.Actions.ListTablesTest do
 
   describe "run/2" do
     test "returns schema-qualified table names" do
-      stub(Lotus.Schema, :list_tables, fn _source ->
+      stub(Lotus.Schema, :list_tables, fn _source, _opts ->
         {:ok, table_list()}
       end)
 
@@ -22,7 +22,7 @@ defmodule Lotus.AI.Actions.ListTablesTest do
     end
 
     test "returns plain table names for schema-less databases" do
-      stub(Lotus.Schema, :list_tables, fn _source ->
+      stub(Lotus.Schema, :list_tables, fn _source, _opts ->
         {:ok, sqlite_table_list()}
       end)
 
@@ -31,7 +31,7 @@ defmodule Lotus.AI.Actions.ListTablesTest do
     end
 
     test "returns error when listing fails" do
-      stub(Lotus.Schema, :list_tables, fn _source ->
+      stub(Lotus.Schema, :list_tables, fn _source, _opts ->
         {:error, "Connection failed"}
       end)
 

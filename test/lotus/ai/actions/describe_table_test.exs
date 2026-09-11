@@ -7,7 +7,7 @@ defmodule Lotus.AI.Actions.DescribeTableTest do
 
   describe "run/2" do
     test "returns column details for a table" do
-      stub(Lotus.Schema, :describe_table, fn _source, _table ->
+      stub(Lotus.Schema, :describe_table, fn _source, _table, _opts ->
         {:ok, users_table_schema()}
       end)
 
@@ -51,7 +51,7 @@ defmodule Lotus.AI.Actions.DescribeTableTest do
     end
 
     test "returns error when table not found" do
-      stub(Lotus.Schema, :describe_table, fn _source, _table ->
+      stub(Lotus.Schema, :describe_table, fn _source, _table, _opts ->
         {:error, "Table not found"}
       end)
 

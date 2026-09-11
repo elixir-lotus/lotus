@@ -4,7 +4,7 @@ defmodule Lotus.AI.QueryOptimizer do
 
   Runs the adapter's `prepare_for_analysis/2` to resolve Lotus template
   syntax into a form parseable by the engine's diagnostic endpoint, calls
-  `query_plan/4` to get an execution plan (when available), and sends
+  `query_plan/3` to get an execution plan (when available), and sends
   both the statement and the plan to the LLM for review.
 
   The module is adapter-agnostic — SQL dialects produce EXPLAIN output,
@@ -65,7 +65,7 @@ defmodule Lotus.AI.QueryOptimizer do
         system_prompt = Optimization.system_prompt(ai_context)
         user_prompt = Optimization.user_prompt(statement.body, execution_plan)
 
-        tools = build_tools(data_source)
+        tools = build_tools(data_source, actor_from(opts))
         messages = build_messages(system_prompt, user_prompt)
         context = ReqLLM.Context.new(messages)
 
@@ -87,17 +87,28 @@ defmodule Lotus.AI.QueryOptimizer do
   # suggestions.
   defp get_execution_plan(adapter, %Statement{} = statement, opts) do
     with {:ok, prepared} <- Adapter.prepare_for_analysis(adapter, statement),
-         {:ok, plan} <- Adapter.query_plan(adapter, prepared.body, prepared.params, opts) do
+         {:ok, plan} <- Adapter.query_plan(adapter, prepared, opts) do
       plan
     else
       _ -> nil
     end
   end
 
-  defp build_tools(data_source) do
+  defp build_tools(data_source, actor) do
     [
-      Tool.from_action(Actions.DescribeTable, bind: %{data_source: data_source})
+      Tool.from_action(Actions.DescribeTable, bind: %{data_source: data_source}, context: actor)
     ]
+  end
+
+  # The actor the AI is working for, in the shape actions expect. Keys the
+  # caller did not supply are left out rather than passed as nil.
+  defp actor_from(opts) do
+    Enum.reduce([:context, :scope], %{}, fn key, acc ->
+      case Keyword.fetch(opts, key) do
+        {:ok, value} -> Map.put(acc, key, value)
+        :error -> acc
+      end
+    end)
   end
 
   defp build_messages(system_prompt, user_prompt) do

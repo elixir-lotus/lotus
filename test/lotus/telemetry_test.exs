@@ -31,11 +31,11 @@ defmodule Lotus.TelemetryTest do
       {:ok, _result} = Runner.run_statement(@pg_adapter, Statement.new("SELECT 1 AS num"))
 
       assert_received {:telemetry, [:lotus, :query, :start], %{system_time: _},
-                       %{repo: "postgres", statement: %Statement{body: "SELECT 1 AS num"}}}
+                       %{source: "postgres", statement: %Statement{body: "SELECT 1 AS num"}}}
 
       assert_received {:telemetry, [:lotus, :query, :stop], measurements,
                        %{
-                         repo: "postgres",
+                         source: "postgres",
                          statement: %Statement{body: "SELECT 1 AS num"},
                          result: %Lotus.Result{}
                        }}
@@ -65,9 +65,10 @@ defmodule Lotus.TelemetryTest do
         Runner.run_statement(@pg_adapter, Statement.new("SELECT 1 AS num", []), context: ctx)
 
       assert_received {:telemetry, [:lotus, :query, :start], _,
-                       %{repo: "postgres", context: ^ctx}}
+                       %{source: "postgres", context: ^ctx}}
 
-      assert_received {:telemetry, [:lotus, :query, :stop], _, %{repo: "postgres", context: ^ctx}}
+      assert_received {:telemetry, [:lotus, :query, :stop], _,
+                       %{source: "postgres", context: ^ctx}}
 
       :telemetry.detach("#{inspect(ref)}")
     end
@@ -134,12 +135,12 @@ defmodule Lotus.TelemetryTest do
       {:error, _} = Runner.run_statement(@pg_adapter, Statement.new("DROP TABLE test_users"))
 
       assert_received {:telemetry, [:lotus, :query, :start], %{system_time: _},
-                       %{repo: "postgres", statement: %Statement{body: "DROP TABLE test_users"}}}
+                       %{source: "postgres", statement: %Statement{body: "DROP TABLE test_users"}}}
 
       assert_received {:telemetry, [:lotus, :query, :exception], measurements,
                        %{
                          kind: :error,
-                         repo: "postgres",
+                         source: "postgres",
                          statement: %Statement{body: "DROP TABLE test_users"}
                        }}
 

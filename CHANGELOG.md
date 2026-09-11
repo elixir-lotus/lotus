@@ -25,7 +25,9 @@
   is a public facade (not a behaviour) with `resolve!/2`, `list_sources/0`,
   `get_source!/1`, `default_source/0`, `source_type/1`,
   `supports_feature?/2`, `hierarchy_label/1`, `example_query/3`,
-  `query_language/1`, `limit_query/3`, `supported_filter_operators/1`,
+  `query_language/1`, `limit_query/3` (`%Statement{}` in, `%Statement{}`
+  out, optional with a passthrough default),
+  `supported_filter_operators/1`,
   `prepare_for_analysis/2`, `name_from_module!/1`. SQL-specific
   callbacks moved to `Lotus.Source.Adapters.Ecto.Dialect`. The
   `Lotus.Sources` module and all `Lotus.Sources.*` dialect modules
@@ -105,9 +107,10 @@
   word "schema" meant two things (namespace vs. column definitions).
   Hard renames, no aliases: `get_table_schema/3` → `describe_table/3`,
   `resolve_table_schema/3` → `resolve_table_namespace/3`,
-  `explain_plan/4` → `query_plan/4` (return widened to
-  `{:ok, String.t() | nil} | {:error, term()}` so non-SQL engines can
-  return `{:ok, nil}` without surfacing an error). Renames apply to
+  `explain_plan/4` → `query_plan/3` (now takes `(state, %Statement{},
+  opts)`; return widened to `{:ok, String.t() | nil} | {:error, term()}`
+  so non-SQL engines can return `{:ok, nil}` without surfacing an
+  error). Renames apply to
   `Lotus.Source.Adapter`, `Lotus.Source.Adapters.Ecto.Dialect`, all
   four built-in Ecto dialect impls, and the middle-layer
   `Lotus.Schema.get_table_schema/3`. `list_schemas/1` and
@@ -116,8 +119,8 @@
   double-meaning.
 
 - **Callback signatures take `state` as the first argument** for
-  SQL-generation (`quote_identifier/2`, `query_plan/4`) and
-  error-handling (`format_error/2`, `handled_errors/1`) callbacks.
+  SQL-generation (`quote_identifier/2`, `query_plan/3`) and
+  error-handling (`format_error/2`) callbacks.
 
 - **`execute_query/4` typespec widened** — `sql :: String.t()` →
   `sql :: term()`. This is the driver boundary; adapters receive the
@@ -248,6 +251,54 @@
   to the cache entry. `Lotus.invalidate_scope/1` clears both discovery
   and result cache entries for the given scope (#196).
 
+- **Optional `table_stats/3` callback.** `Lotus.get_table_stats/3` asks the
+  adapter first and only falls back to `SELECT COUNT(*)` when the adapter
+  does not implement it. Non-SQL sources can now answer with their engine's
+  own statistics, and may return keys beyond `:row_count`; the return type
+  widened from `%{row_count: non_neg_integer()}` to `map()`.
+
+- **`Lotus.run_statement/3` and the shared `opts` type are honest.** The
+  spec claimed `binary()` statements while non-SQL adapters take any term;
+  it now uses `Lotus.Query.Statement.body/0` and `params/0`. The `opts`
+  type gained `:scope` and `:sorts`, which the code already read but never
+  declared, and `:repo` accepts a module as well as a name.
+
+- **The SQL-shaped callbacks became optional, with defaults.**
+  `list_schemas/1`, `resolve_table_namespace/3`, `default_schemas/1`,
+  `builtin_schema_denies/1`, `quote_identifier/2`, `apply_filters/3`,
+  `apply_sorts/3`, `query_plan/3`, `supports_feature?/2`,
+  `db_type_to_lotus_type/2` and `editor_config/1` all have safe defaults
+  now, so a non-SQL adapter implements the ten callbacks it actually
+  needs instead of thirty, most of them stubs. Existing adapters are
+  unaffected — an implemented callback is still used.
+
+- **`%{adapter: MyAdapter, ...}` is the canonical data source entry.**
+  The named module is used directly, with no `can_handle?/1` probing. When
+  two adapters both claim a non-canonical entry, resolution now raises and
+  names them instead of silently picking whichever came first.
+
+- **An unresolvable data source is an error, not the default source.** A
+  typo in a saved query's `data_source`, or a source dropped from config,
+  used to fall through and run the query against the default database.
+  `Lotus.Source.resolve!/2` raises and the resolver returns
+  `{:error, :not_found}`. Only a caller that names no source at all gets
+  the default.
+
+- **`%Lotus.Query.Statement{}` params may be a map.** Positional binds stay
+  a list; engines with named binds carry `%{"since" => ~D[2026-01-01]}`
+  rather than inventing an order.
+
+- **`t:Lotus.Source.Adapter.feature/0` documents the feature atoms** that
+  `supports_feature?/2` is asked about: `:schema_hierarchy`,
+  `:search_path`, `:arrays`, `:json` and `:make_interval`.
+
+- **`Lotus.Source.Adapters.Ecto.Dialect` is public.** It was
+  `@moduledoc false` while the adapter guide told external libraries to
+  implement it; it now carries documentation and ships in the generated
+  docs. `set_statement_timeout/2` and `set_search_path/2` moved to
+  `@optional_callbacks` — engines with no session timeout or search path
+  drop their no-op clauses.
+
 #### Middleware and telemetry
 
 - **Payload key `:repo` → `:source`** across every middleware event
@@ -264,13 +315,51 @@
   `%Lotus.Query.Statement{}`) instead of separate `:sql` / `:params`
   keys. Extract via `statement.body` / `statement.params`.
 
+- **`:before_query` plugs can rewrite the statement.** Returning
+  `{:cont, %{payload | statement: rewritten}}` now changes what executes;
+  the runner used to discard the returned payload. This is what row-level
+  security and tenant predicates need. `:before_query` consequently runs
+  *before* statement sanitization and preflight, so the rewritten
+  statement is the one checked — a plug cannot rewrite its way onto a
+  denied table. Plugs that return the payload untouched are unaffected.
+
 - **Telemetry `[:lotus, :query, :start | :stop | :exception]` metadata
-  carries `:statement`.** Handlers that indexed on `:sql` / `:params`
-  must switch. `:context` is also present (caller-supplied opaque
-  value, threaded from the `run_query/2` + `run_statement/3` options,
-  #175).
+  carries `:source` and `:statement`.** The source name moved from
+  `:repo` to `:source`, matching the middleware payloads; handlers that
+  indexed on `:repo`, `:sql` or `:params` must switch. `:context` is
+  also present (caller-supplied opaque value, threaded from the
+  `run_query/2` + `run_statement/3` options, #175).
+
+- **The AI layer carries the caller's actor.** `Lotus.AI.generate_query/1`,
+  `generate_query_with_context/1`, `explain_query/1` and
+  `suggest_optimizations/1` accept `:context` and `:scope`, and thread them
+  into every query and introspection call the AI makes.
+  `Lotus.AI.Tool.from_action/2` gained a `:context` option, which becomes
+  the second argument to the action's `run/2`; `Lotus.AI.Action.actor_opts/1`
+  turns it back into the `:context` / `:scope` options the `Lotus` functions
+  take. Previously every AI-initiated action reached middleware and the
+  visibility resolver with no actor, so the AI could see more than the user
+  it was acting for. Custom actions that ignore their `context` argument are
+  unaffected.
+
+- **AI map keys renamed from SQL-specific names.**
+  `Lotus.AI.generate_query/1` and `generate_query_with_context/1` return
+  `:statement` instead of `:sql`; `Lotus.AI.explain_query/1` takes
+  `:statement` instead of `:sql`; `Lotus.AI.Conversation` messages carry
+  `:statement`; `Lotus.AI.ErrorDetector.analyze_error/4` returns
+  `:failed_statement`. The values are unchanged — only the key names,
+  which described SQL on a surface that is no longer SQL-only.
 
 #### Visibility
+
+- **Scoped visibility is enforced at execution, not only in the explorer.**
+  `Lotus.Preflight.authorize/4` takes the caller's `:scope` and passes it to
+  the visibility resolver, and the runner threads `:scope` from
+  `Lotus.run_query/2` and `Lotus.run_statement/3` into both preflight and
+  column policies. Previously a resolver that denied a table for one tenant
+  hid it from the schema browser while a query against it still returned
+  rows. Resolvers that ignore scope (including the shipped
+  `Lotus.Visibility.Resolvers.Static`) behave exactly as before.
 
 - **`Lotus.Visibility.Resolver` callbacks gained a `scope` argument:**
   `schema_rules_for/2`, `table_rules_for/2`, `column_rules_for/2`.

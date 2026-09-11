@@ -8,6 +8,8 @@ defmodule Lotus.AI.Actions.ListSchemas do
 
   @behaviour Lotus.AI.Action
 
+  import Lotus.AI.Action, only: [actor_opts: 1]
+
   @impl true
   def name, do: "list_schemas"
 
@@ -23,8 +25,8 @@ defmodule Lotus.AI.Actions.ListSchemas do
   end
 
   @impl true
-  def run(params, _context) do
-    case Lotus.Schema.list_schemas(params.data_source) do
+  def run(params, context) do
+    case Lotus.Schema.list_schemas(params.data_source, actor_opts(context)) do
       {:ok, schemas} ->
         {:ok, %{schemas: schemas}}
 

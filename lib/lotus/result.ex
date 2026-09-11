@@ -1,6 +1,6 @@
 defmodule Lotus.Result do
   @moduledoc """
-  Represents the result of a SQL query execution.
+  Represents the result of a query execution.
 
   Contains the columns, rows, and metadata about the query result.
   """

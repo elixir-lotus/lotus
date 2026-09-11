@@ -100,7 +100,13 @@ defmodule Lotus.MixProject do
         "Query Storage": [Lotus.Storage, Lotus.Storage.Query, Lotus.Storage.QueryVariable],
         "Query Execution": [Lotus.Runner, Lotus.Result, Lotus.Preflight],
         "Data Export": [Lotus.Export, ~r/Lotus\.Export\..+/],
-        "Data Sources": [Lotus.Source, Lotus.Sources, ~r/Lotus\.Sources\..+/],
+        "Data Sources": [Lotus.Source, Lotus.Source.Adapter, Lotus.Source.Resolver],
+        "Adapter Authoring": [
+          Lotus.Query.Statement,
+          Lotus.Source.Adapters.Ecto,
+          Lotus.Source.Adapters.Ecto.Dialect,
+          ~r/Lotus\.Source\.Adapters\..+/
+        ],
         "Schema Introspection": [Lotus.Schema, Lotus.Visibility],
         Telemetry: [Lotus.Telemetry],
         Caching: [Lotus.Cache, ~r/Lotus\.Cache\..+/],

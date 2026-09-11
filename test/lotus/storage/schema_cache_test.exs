@@ -26,14 +26,13 @@ defmodule Lotus.Storage.SchemaCacheTest do
     def quote_identifier(_, id), do: ~s("#{id}")
     def apply_filters(_, statement, _), do: statement
     def apply_sorts(_, statement, _), do: statement
-    def query_plan(_, _, _, _), do: {:ok, "plan"}
+    def query_plan(_, _, _), do: {:ok, "plan"}
     def builtin_denies(_), do: []
     def builtin_schema_denies(_), do: []
     def default_schemas(_), do: ["public"]
     def health_check(_), do: :ok
     def disconnect(_), do: :ok
     def format_error(_, e), do: inspect(e)
-    def handled_errors(_), do: []
     def source_type(_), do: :postgres
     def supports_feature?(_, _), do: false
     def limit_query(_, statement, _limit), do: statement

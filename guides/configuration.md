@@ -384,7 +384,7 @@ config :lotus,
   }
 ```
 
-**Type**: `[module()]` — each module must implement `Lotus.Source.Adapter` with `can_handle?/1` and `wrap/2`. Validated at boot: unloaded modules or modules missing the behaviour raise at `Config.reload!/0` rather than at first query.
+**Type**: `[module()]` — each module must implement `Lotus.Source.Adapter` with `can_handle?/1` and `wrap/2`. Validated at boot: unloaded modules or modules missing the behaviour raise at `Lotus.Config.reload!/0` rather than at first query.
 **Default**: `[]`
 
 When resolving a data source, Lotus checks each `source_adapters` module's `can_handle?/1` against the entry (repo module or map) and dispatches to the first match. If none match, atom entries fall through to the built-in Ecto adapter; map entries raise a clear error. See the [source adapters guide](source-adapters.md) for the full contract and a walkthrough.

@@ -1,6 +1,7 @@
 defmodule Lotus.SourcesTest do
   use Lotus.Case, async: true
 
+  alias Lotus.Query.Statement
   alias Lotus.Source
   alias Lotus.Source.Adapter
 
@@ -96,18 +97,16 @@ defmodule Lotus.SourcesTest do
       assert adapter.state == Lotus.Test.SqliteRepo
     end
 
-    test "unloaded atoms in both positions fall through to default" do
-      adapter = Source.resolve!(:typoed_one, :typoed_two)
-      assert %Adapter{} = adapter
-      assert adapter.name == "postgres"
-      assert adapter.state == Lotus.Test.Repo
+    test "unloaded atoms in both positions raise rather than using the default" do
+      assert_raise ArgumentError, ~r/not configured/, fn ->
+        Source.resolve!(:typoed_one, :typoed_two)
+      end
     end
 
-    test "handles invalid types gracefully" do
-      adapter = Source.resolve!(123, :"Elixir.Nonexistent.Module")
-      assert %Adapter{} = adapter
-      assert adapter.name == "postgres"
-      assert adapter.state == Lotus.Test.Repo
+    test "invalid types raise rather than using the default" do
+      assert_raise ArgumentError, ~r/not configured/, fn ->
+        Source.resolve!(123, :"Elixir.Nonexistent.Module")
+      end
     end
   end
 
@@ -266,13 +265,19 @@ defmodule Lotus.SourcesTest do
   describe "limit_query/3" do
     test "wraps statement with limit from adapter struct" do
       adapter = Source.resolve!("postgres", nil)
-      result = Source.limit_query(adapter, "SELECT * FROM users", 10)
-      assert result == "SELECT * FROM (SELECT * FROM users) AS limited_query LIMIT 10"
+      statement = Statement.new("SELECT * FROM users", [:bound])
+
+      assert %Statement{body: body, params: params} = Source.limit_query(adapter, statement, 10)
+
+      assert body == "SELECT * FROM (SELECT * FROM users) AS limited_query LIMIT 10"
+      assert params == [:bound]
     end
 
     test "wraps statement with limit from source name" do
-      result = Source.limit_query("postgres", "SELECT * FROM users", 10)
-      assert result == "SELECT * FROM (SELECT * FROM users) AS limited_query LIMIT 10"
+      statement = Statement.new("SELECT * FROM users")
+
+      assert %Statement{body: body} = Source.limit_query("postgres", statement, 10)
+      assert body == "SELECT * FROM (SELECT * FROM users) AS limited_query LIMIT 10"
     end
   end
 end

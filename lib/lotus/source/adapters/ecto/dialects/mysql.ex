@@ -1,5 +1,15 @@
 defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
-  @moduledoc false
+  @moduledoc """
+  MySQL dialect for `Lotus.Source.Adapters.Ecto`.
+
+  MySQL has no schema-within-database concept, so databases serve as
+  namespaces. Query plans come from `EXPLAIN FORMAT=JSON`, and the
+  statement timeout is applied as `max_execution_time`. There is no search
+  path, so `set_search_path/2` is not implemented.
+
+  Read alongside `Lotus.Source.Adapters.Ecto.Dialect` when writing a dialect
+  for another SQL engine — this module is the reference implementation.
+  """
 
   @behaviour Lotus.Source.Adapters.Ecto.Dialect
 
@@ -145,9 +155,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   end
 
   @impl true
-  def set_search_path(_repo, _search_path), do: :ok
-
-  @impl true
   def format_error(%{__struct__: mod} = e) when mod == MyXQL.Error do
     case e do
       %{mysql: %{code: code, message: message}} when is_integer(code) and is_binary(message) ->
@@ -184,9 +191,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   end
 
   @impl true
-  def handled_errors, do: [MyXQL.Error]
-
-  @impl true
   def query_language, do: "sql:mysql"
 
   @impl true
@@ -219,8 +223,8 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   end
 
   @impl true
-  def limit_query(statement, limit) do
-    "SELECT * FROM (#{statement}) AS limited_query LIMIT #{limit}"
+  def limit_query(%Statement{body: body} = statement, limit) do
+    %{statement | body: "SELECT * FROM (#{body}) AS limited_query LIMIT #{limit}"}
   end
 
   @impl true
@@ -353,7 +357,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   end
 
   @impl true
-  def query_plan(repo, sql, params, _opts) do
+  def query_plan(repo, %Statement{body: sql, params: params}, _opts) do
     explain_sql = "EXPLAIN FORMAT=JSON " <> sql
 
     case repo.query(explain_sql, params) do

@@ -204,8 +204,8 @@ defmodule Lotus.Source.Adapters.Ecto do
       def apply_sorts(_repo, statement, sorts), do: @dialect.apply_sorts(statement, sorts)
 
       @impl true
-      def query_plan(repo, sql, params, opts),
-        do: @dialect.query_plan(repo, sql, params, opts)
+      def query_plan(repo, statement, opts),
+        do: @dialect.query_plan(repo, statement, opts)
     end
   end
 
@@ -232,9 +232,6 @@ defmodule Lotus.Source.Adapters.Ecto do
 
       @impl true
       def format_error(_repo, error), do: @dialect.format_error(error)
-
-      @impl true
-      def handled_errors(_repo), do: @dialect.handled_errors()
     end
   end
 
@@ -523,8 +520,8 @@ defmodule Lotus.Source.Adapters.Ecto do
   end
 
   @impl true
-  def query_plan(repo, sql, params, opts) do
-    @default_dialect.query_plan(repo, sql, params, opts)
+  def query_plan(repo, statement, opts) do
+    @default_dialect.query_plan(repo, statement, opts)
   end
 
   # ---------------------------------------------------------------------------
@@ -566,11 +563,6 @@ defmodule Lotus.Source.Adapters.Ecto do
   @impl true
   def format_error(_repo, error) do
     @default_dialect.format_error(error)
-  end
-
-  @impl true
-  def handled_errors(_repo) do
-    @default_dialect.handled_errors()
   end
 
   # ---------------------------------------------------------------------------
@@ -684,7 +676,7 @@ defmodule Lotus.Source.Adapters.Ecto do
     dialect.execute_in_transaction(
       repo,
       fn ->
-        if search_path do
+        if search_path && function_exported?(dialect, :set_search_path, 2) do
           dialect.set_search_path(repo, search_path)
         end
 
@@ -865,7 +857,7 @@ defmodule Lotus.Source.Adapters.Ecto do
   def do_validate_statement(
         dialect,
         repo,
-        %Statement{body: sql, params: params},
+        %Statement{body: sql} = statement,
         _opts
       )
       when is_binary(sql) do
@@ -874,7 +866,7 @@ defmodule Lotus.Source.Adapters.Ecto do
       |> OptionalClause.strip_brackets()
       |> Variables.neutralize("NULL")
 
-    case dialect.query_plan(repo, neutralized, params, []) do
+    case dialect.query_plan(repo, %{statement | body: neutralized}, []) do
       {:ok, _plan} -> :ok
       {:error, reason} when is_binary(reason) -> {:error, reason}
       {:error, reason} -> {:error, inspect(reason)}
