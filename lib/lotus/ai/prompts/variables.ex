@@ -5,7 +5,9 @@ defmodule Lotus.AI.Prompts.Variables do
   Describes the Lotus variable framework (syntax, widget types, list expansion,
   config fields) independently of any query language. Query-language-specific
   prompt modules (e.g. `QueryGeneration`) call into this module and may append
-  language-specific notes.
+  language-specific notes. Pass the adapter's fence label to `system_docs/1`
+  so the response-format instruction asks for the same fence the extractor
+  accepts.
   """
 
   @doc """
@@ -15,8 +17,8 @@ defmodule Lotus.AI.Prompts.Variables do
   Covers syntax, config fields, widget guidelines, list expansion behaviour,
   and the expected response format.
   """
-  @spec system_docs() :: String.t()
-  def system_docs do
+  @spec system_docs(String.t()) :: String.t()
+  def system_docs(fence \\ "sql") do
     """
     ## Query Variables (Parameterization):
     Only add variables when the user explicitly asks for parameterization, filters,
@@ -77,15 +79,23 @@ defmodule Lotus.AI.Prompts.Variables do
     - User asks for a "search" or "filter" form where not all fields are required
 
     **Response format when variables are used:**
-    Include BOTH a ```sql block AND a ```variables JSON block:
+    Include BOTH a ```#{fence} block AND a ```variables JSON block:
     #{examples()}
 
     When no variables are needed, return ONLY the query block as usual.
     """
   end
 
+  # These examples demonstrate the Lotus variable DSL, not any one query
+  # language. They are written in SQL and fenced as SQL because that is what
+  # they contain — relabelling them with the adapter's family would put a
+  # `json` label on a SELECT. What the adapter's own language looks like is
+  # `ai_context.example_query`'s job.
   defp examples do
     """
+    The examples below use SQL to illustrate the variable DSL. Apply the same
+    `{{variable}}` and `[[optional]]` syntax in your own query language.
+
     Example with static options (for enums/status columns):
     ```sql
     SELECT * FROM orders WHERE status = {{status}}

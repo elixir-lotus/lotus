@@ -1,6 +1,6 @@
-defmodule Lotus.AI.Actions.ExecuteSQL do
+defmodule Lotus.AI.Actions.ExecuteStatement do
   @moduledoc """
-  Executes a SQL query against a data source.
+  Executes a query statement against a data source.
 
   Used by the investigation agent to run queries and analyze results.
   Returns column names, row count, and a preview of the first rows
@@ -14,18 +14,18 @@ defmodule Lotus.AI.Actions.ExecuteSQL do
   @max_preview_rows 50
 
   @impl true
-  def name, do: "execute_sql"
+  def name, do: "execute_statement"
 
   @impl true
   def description,
     do:
-      "Execute a read-only SQL query against a data source and return the results. " <>
-        "Provide a short label describing the purpose of this query step."
+      "Execute a read-only query statement against a data source and return the " <>
+        "results. Provide a short label describing the purpose of this query step."
 
   @impl true
   def schema do
     [
-      sql: [type: :string, required: true, doc: "The SQL query to execute"],
+      sql: [type: :string, required: true, doc: "The query statement to execute"],
       data_source: [
         type: :string,
         required: true,

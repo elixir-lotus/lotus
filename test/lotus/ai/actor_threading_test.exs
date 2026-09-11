@@ -107,10 +107,10 @@ defmodule Lotus.AI.ActorThreadingTest do
     end
 
     test "ExecuteSql under a denied scope is blocked" do
-      # ExecuteSQL reports failures inside an :ok tuple so the LLM can read
+      # ExecuteStatement reports failures inside an :ok tuple so the LLM can read
       # them; what matters here is that the scoped deny stopped the query.
       assert {:ok, %{error: error}} =
-               Actions.ExecuteSQL.run(
+               Actions.ExecuteStatement.run(
                  %{data_source: "postgres", sql: "SELECT id FROM test_users", label: "check"},
                  @actor
                )
@@ -121,7 +121,7 @@ defmodule Lotus.AI.ActorThreadingTest do
 
     test "ExecuteSql under an allowed scope runs" do
       assert {:ok, _} =
-               Actions.ExecuteSQL.run(
+               Actions.ExecuteStatement.run(
                  %{data_source: "postgres", sql: "SELECT id FROM test_users", label: "check"},
                  %{context: %{user_id: 7}, scope: %{tenant_id: 1}}
                )

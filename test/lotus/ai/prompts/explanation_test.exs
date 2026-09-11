@@ -42,10 +42,10 @@ defmodule Lotus.AI.Prompts.ExplanationTest do
   end
 
   describe "user_prompt/2" do
-    test "includes the SQL query" do
+    test "includes the query" do
       prompt = Explanation.user_prompt("SELECT * FROM users", nil)
       assert prompt =~ "SELECT * FROM users"
-      assert prompt =~ "Explain what this SQL query does"
+      assert prompt =~ "Explain what this query does"
     end
 
     test "includes source context when provided" do

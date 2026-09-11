@@ -10,6 +10,7 @@ defmodule Lotus.AI.QueryGenerator do
   alias Lotus.AI.Action
   alias Lotus.AI.Actions
   alias Lotus.AI.Conversation
+  alias Lotus.AI.Prompts.AdapterNotes
   alias Lotus.AI.Prompts.QueryGeneration
   alias Lotus.AI.Tool
   alias Lotus.Query.Statement
@@ -85,7 +86,8 @@ defmodule Lotus.AI.QueryGenerator do
           QueryGeneration.system_prompt(ai_context, table_names, read_only: read_only)
 
         tools = build_tools(data_source, actor)
-        messages = build_messages(conversation, prompt, system_prompt, query_context)
+        fence = AdapterNotes.fence_label(ai_context)
+        messages = build_messages(conversation, prompt, system_prompt, query_context, fence)
         context = build_context(messages)
 
         Tool.run(model_string, context, tools, api_key: api_key, temperature: temperature)
@@ -143,7 +145,7 @@ defmodule Lotus.AI.QueryGenerator do
       Tool.from_action(Actions.ListTables, opts),
       Tool.from_action(Actions.DescribeTable, opts),
       Tool.from_action(Actions.GetColumnValues, opts),
-      Tool.from_action(Actions.ValidateSQL, opts)
+      Tool.from_action(Actions.ValidateStatement, opts)
     ]
   end
 
@@ -167,24 +169,24 @@ defmodule Lotus.AI.QueryGenerator do
     end)
   end
 
-  defp build_messages(conversation, prompt, system_prompt, query_context) do
+  defp build_messages(conversation, prompt, system_prompt, query_context, fence) do
     if conversation && conversation.messages != [] do
-      build_conversation_messages(conversation, prompt, system_prompt, query_context)
+      build_conversation_messages(conversation, prompt, system_prompt, query_context, fence)
     else
-      build_single_turn_messages(prompt, system_prompt, query_context)
+      build_single_turn_messages(prompt, system_prompt, query_context, fence)
     end
   end
 
-  defp build_single_turn_messages(prompt, system_prompt, query_context) do
+  defp build_single_turn_messages(prompt, system_prompt, query_context, fence) do
     Conversation.new()
     |> Conversation.add_user_message(prompt)
-    |> Conversation.build_context_messages(system_prompt, query_context)
+    |> Conversation.build_context_messages(system_prompt, query_context, fence: fence)
     |> convert_to_req_llm_messages()
   end
 
-  defp build_conversation_messages(conversation, prompt, system_prompt, query_context) do
+  defp build_conversation_messages(conversation, prompt, system_prompt, query_context, fence) do
     conversation
-    |> Conversation.build_context_messages(system_prompt, query_context)
+    |> Conversation.build_context_messages(system_prompt, query_context, fence: fence)
     |> convert_to_req_llm_messages()
     |> maybe_add_current_prompt(conversation, prompt)
   end

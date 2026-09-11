@@ -79,7 +79,7 @@ defmodule Lotus.AI.QueryGeneratorTest do
         assert "list_tables" in tool_names
         assert "describe_table" in tool_names
         assert "get_column_values" in tool_names
-        assert "validate_sql" in tool_names
+        assert "validate_statement" in tool_names
       end)
 
       assert {:ok, _} =

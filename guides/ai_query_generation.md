@@ -21,6 +21,51 @@ The AI query generation feature:
 
 > **Web-first design:** The AI module is designed to work hand-in-hand with the [Lotus Web](https://github.com/elixir-lotus/lotus_web) interface. Generated variable configurations — widget types, labels, static options, and options queries — map directly to the web editor's `WidgetComponent`, which renders them as text inputs, dropdowns, multi-selects, date pickers, and tag inputs. While the API is usable standalone, the variable metadata is most valuable when paired with the web UI.
 
+## Who Writes the Prompt
+
+Lotus core owns prompt **structure**; the source adapter owns prompt
+**content** about its own query language.
+
+| Core writes it | The adapter writes it |
+|---|---|
+| The workflow and the tool list | `:language` |
+| `{{var}}` / `[[optional]]` template rules | `:example_query` |
+| The `UNABLE_TO_GENERATE` protocol | `:syntax_notes` |
+| The fence protocol | `:generation_notes` |
+| A generic default for each notes field | `:read_only_notes` |
+
+This follows the enforcement: `sanitize_query/3` is already an adapter
+callback, so the adapter decides what counts as a write. Before v1.0, core
+sent SQL-specific guidance ("use JOINs", "add LIMIT", "never generate
+INSERT / UPDATE / DELETE") to every source, including non-SQL ones where
+those operations do not exist.
+
+Adapter notes render **in place of** core's defaults, never appended after
+them, so an adapter speaks for its own language instead of arguing with
+core's. An adapter that omits a field gets core's generic text. An adapter
+that is not in `:trusted_source_adapters` has its notes dropped and also
+gets core's text — never an empty string, which would leave the prompt with
+no read-only instruction at all.
+
+Core asks for the generated statement inside a fence labelled with the
+adapter's language **family** — `sql` for `sql:postgres`, `json` for
+`json:elasticsearch`. See the [source adapters
+guide](source-adapters.md#ai-adapter-support) for how to supply these.
+
+## Saved Queries Record Their Language
+
+A query saved through `Lotus.Storage` records the `query_language` of the
+source it was written for. At execution, Lotus refuses to run it against a
+source that speaks a different language, rather than passing, say, Postgres
+SQL to ClickHouse and surfacing a confusing syntax error:
+
+```
+Query was written for "sql:postgres" but data source "warehouse" speaks "sql:clickhouse"
+```
+
+Queries saved without a language run anywhere, which is how every query
+predating the column behaves.
+
 ## Supported Providers
 
 Any provider supported by ReqLLM can be used. Common examples:
@@ -159,14 +204,20 @@ Lotus.AI.generate_query(
 
 ### Schema Introspection Tools
 
-The AI has access to four tools:
+The AI has access to these tools:
 
 1. **`list_schemas()`** - Get all database schemas
 2. **`list_tables()`** - Get tables with schema-qualified names
-3. **`get_table_schema(table_name)`** - Get columns, types, constraints
+3. **`describe_table(table_name)`** - Get columns, types, constraints
 4. **`get_column_values(table_name, column_name)`** - Get distinct values (enums, statuses)
+5. **`validate_statement(statement)`** - Check syntax against the source without executing
+6. **`execute_statement(statement)`** - Run a read-only statement (investigation flows)
 
 All tools respect your Lotus visibility rules - the AI sees exactly what your users see.
+
+Tool names are part of the adapter-facing contract: adapters refer to them
+in their own `error_patterns` hints. `validate_statement` and
+`execute_statement` were named `validate_sql` and `execute_sql` before v1.0.
 
 ### Query Generation Process
 
@@ -174,7 +225,8 @@ All tools respect your Lotus visibility rules - the AI sees exactly what your us
 2. **Discover schema** - Calls tools to find relevant tables
 3. **Introspect tables** - Gets column details for identified tables
 4. **Check enum values** - For status/type columns, gets actual values
-5. **Generate SQL** - Produces schema-qualified, type-safe SQL
+5. **Generate the statement** - Produces a schema-qualified, type-safe statement
+6. **Validate** - Calls `validate_statement()` and fixes any error before returning
 
 ### Example: Status Value Discovery
 

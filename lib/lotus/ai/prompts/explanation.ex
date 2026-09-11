@@ -64,13 +64,15 @@ defmodule Lotus.AI.Prompts.Explanation do
 
   ## Parameters
 
-  - `sql` - The full SQL query to explain
+  - `sql` - The full query to explain
   - `source_context` - Optional source context string
+  - `fence` - Markdown fence label for the statement block, from
+    `Lotus.AI.Prompts.AdapterNotes.fence_label/1`
   """
-  @spec user_prompt(String.t(), String.t() | nil) :: String.t()
-  def user_prompt(sql, source_context \\ nil) do
+  @spec user_prompt(String.t(), String.t() | nil, String.t()) :: String.t()
+  def user_prompt(sql, source_context \\ nil, fence \\ "sql") do
     [
-      "Explain what this SQL query does:\n\n```sql\n#{sql}\n```",
+      "Explain what this query does:\n\n```#{fence}\n#{sql}\n```",
       if(source_context, do: "\n\n## Source Context\n\n#{source_context}")
     ]
     |> Enum.reject(&is_nil/1)
@@ -86,16 +88,18 @@ defmodule Lotus.AI.Prompts.Explanation do
 
   ## Parameters
 
-  - `fragment` - The selected SQL fragment to explain
-  - `full_sql` - The complete SQL query for context
+  - `fragment` - The selected fragment to explain
+  - `full_sql` - The complete query for context
   - `source_context` - Optional source context string
+  - `fence` - Markdown fence label for the statement blocks, from
+    `Lotus.AI.Prompts.AdapterNotes.fence_label/1`
   """
-  @spec fragment_prompt(String.t(), String.t(), String.t() | nil) :: String.t()
-  def fragment_prompt(fragment, full_sql, source_context \\ nil) do
+  @spec fragment_prompt(String.t(), String.t(), String.t() | nil, String.t()) :: String.t()
+  def fragment_prompt(fragment, full_sql, source_context \\ nil, fence \\ "sql") do
     [
-      "The user selected the following fragment from a SQL query and wants it explained.\n",
-      "\n## Selected Fragment\n\n```sql\n#{fragment}\n```",
-      "\n\n## Full Query (for context)\n\n```sql\n#{full_sql}\n```",
+      "The user selected the following fragment from a query and wants it explained.\n",
+      "\n## Selected Fragment\n\n```#{fence}\n#{fragment}\n```",
+      "\n\n## Full Query (for context)\n\n```#{fence}\n#{full_sql}\n```",
       "\n\nExplain ONLY what the selected fragment does. Use the full query for context but do not describe other parts of the query.",
       if(source_context, do: "\n\n## Source Context\n\n#{source_context}")
     ]

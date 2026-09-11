@@ -7,8 +7,11 @@ defmodule Lotus.AI.QueryExplainer do
   """
 
   alias Lotus.AI.Actions
+  alias Lotus.AI.Prompts.AdapterNotes
   alias Lotus.AI.Prompts.Explanation
   alias Lotus.AI.Tool
+  alias Lotus.Source
+  alias Lotus.Source.Adapter
 
   @doc """
   Generate a plain-language explanation for a SQL query or fragment.
@@ -34,15 +37,16 @@ defmodule Lotus.AI.QueryExplainer do
     api_key = Keyword.fetch!(opts, :api_key)
     temperature = Keyword.get(opts, :temperature, 0.2)
 
-    database_type = Lotus.Source.source_type(data_source)
+    database_type = Source.source_type(data_source)
+    fence = fence_label(data_source)
 
     system_prompt = Explanation.system_prompt(database_type)
 
     user_prompt =
       if fragment do
-        Explanation.fragment_prompt(fragment, statement)
+        Explanation.fragment_prompt(fragment, statement, nil, fence)
       else
-        Explanation.user_prompt(statement)
+        Explanation.user_prompt(statement, nil, fence)
       end
 
     tools = build_tools(data_source, actor_from(opts))
@@ -51,6 +55,17 @@ defmodule Lotus.AI.QueryExplainer do
 
     Tool.run(model_string, context, tools, api_key: api_key, temperature: temperature)
     |> handle_response(model_string)
+  end
+
+  # Only the sanitized `ai_context.language` is safe to interpolate into a
+  # fence — `Adapter.query_language/1` has no validation, so a raw value could
+  # carry a newline or backticks and break out of the block. An adapter with
+  # no AI context still explains fine; it just gets the default label.
+  defp fence_label(data_source) do
+    case data_source |> Source.get_source!() |> Adapter.ai_context() do
+      {:ok, ai_context} -> AdapterNotes.fence_label(ai_context)
+      {:error, _} -> AdapterNotes.fence_label(%{})
+    end
   end
 
   defp build_tools(data_source, actor) do

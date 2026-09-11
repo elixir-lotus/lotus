@@ -1,9 +1,10 @@
-defmodule Lotus.AI.Actions.ValidateSQL do
+defmodule Lotus.AI.Actions.ValidateStatement do
   @moduledoc """
-  Validates SQL syntax against the database without executing.
+  Validates statement syntax against the data source without executing it.
 
-  Uses EXPLAIN to parse the query server-side, catching syntax errors
-  and missing table/column references before the query is run.
+  Delegates to the adapter's `validate_statement/3`, which parses the
+  statement server-side and catches syntax errors and missing table or
+  column references before the statement is run.
   """
 
   @behaviour Lotus.AI.Action
@@ -13,7 +14,7 @@ defmodule Lotus.AI.Actions.ValidateSQL do
   alias Lotus.Source.Adapter
 
   @impl true
-  def name, do: "validate_sql"
+  def name, do: "validate_statement"
 
   @impl true
   def description,

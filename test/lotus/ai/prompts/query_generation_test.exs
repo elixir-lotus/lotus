@@ -71,9 +71,9 @@ defmodule Lotus.AI.Prompts.QueryGenerationTest do
     test "includes formatting guidelines" do
       prompt = QueryGeneration.system_prompt(pg_context(), [])
 
-      assert prompt =~ "```sql blocks"
-      assert prompt =~ "LIMIT for safety"
-      assert prompt =~ "JOINs for multi-table"
+      assert prompt =~ "inside a ```sql block"
+      assert prompt =~ "Constrain the result size"
+      assert prompt =~ "Prefer naming fields explicitly"
     end
   end
 

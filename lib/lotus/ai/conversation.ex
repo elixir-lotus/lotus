@@ -49,6 +49,11 @@ defmodule Lotus.AI.Conversation do
           last_activity: DateTime.t()
         }
 
+  # Fence label for statements echoed back to the LLM. Callers pass the
+  # adapter's language family via `:fence`; this is the fallback for
+  # callers that have no adapter in scope.
+  @default_fence "sql"
+
   @doc """
   Initialize a new empty conversation.
 
@@ -214,11 +219,12 @@ defmodule Lotus.AI.Conversation do
       iex> Enum.map(messages, & &1.role)
       [:system, :user]
   """
-  @spec build_context_messages(t(), String.t(), map() | nil) :: [map()]
-  def build_context_messages(conversation, system_prompt, query_context \\ nil) do
+  @spec build_context_messages(t(), String.t(), map() | nil, keyword()) :: [map()]
+  def build_context_messages(conversation, system_prompt, query_context \\ nil, opts \\ []) do
+    fence = Keyword.get(opts, :fence, @default_fence)
     system_message = %{role: :system, content: system_prompt}
 
-    context_messages = build_query_context_messages(query_context)
+    context_messages = build_query_context_messages(query_context, fence)
 
     conversation_messages =
       Enum.map(conversation.messages, fn msg ->
@@ -227,13 +233,13 @@ defmodule Lotus.AI.Conversation do
             %{role: :user, content: msg.content}
 
           :assistant ->
-            %{role: :assistant, content: format_assistant_content(msg)}
+            %{role: :assistant, content: format_assistant_content(msg, fence)}
 
           :error ->
             # Format error as user message asking for fix
             error_context =
               if msg.statement do
-                "The previous query failed with an error:\n\nQuery: ```sql\n#{msg.statement}\n```\n\nError: #{msg.content}\n\nPlease fix this error and generate a corrected query."
+                "The previous query failed with an error:\n\nQuery: ```#{fence}\n#{msg.statement}\n```\n\nError: #{msg.content}\n\nPlease fix this error and generate a corrected query."
               else
                 "An error occurred: #{msg.content}\n\nPlease help fix this."
               end
@@ -245,17 +251,20 @@ defmodule Lotus.AI.Conversation do
     [system_message] ++ context_messages ++ conversation_messages
   end
 
-  defp format_assistant_content(%{statement: statement, variables: variables, content: content})
+  defp format_assistant_content(
+         %{statement: statement, variables: variables, content: content},
+         fence
+       )
        when is_binary(statement) and is_list(variables) and variables != [] do
-    "#{content}\n\n```sql\n#{statement}\n```\n\n```variables\n#{Lotus.JSON.encode!(variables)}\n```"
+    "#{content}\n\n```#{fence}\n#{statement}\n```\n\n```variables\n#{Lotus.JSON.encode!(variables)}\n```"
   end
 
-  defp format_assistant_content(%{statement: statement, content: content})
+  defp format_assistant_content(%{statement: statement, content: content}, fence)
        when is_binary(statement) do
-    "#{content}\n\n```sql\n#{statement}\n```"
+    "#{content}\n\n```#{fence}\n#{statement}\n```"
   end
 
-  defp format_assistant_content(%{content: content}), do: content
+  defp format_assistant_content(%{content: content}, _fence), do: content
 
   @doc """
   Determine if the conversation should auto-retry based on the last message.
@@ -345,15 +354,15 @@ defmodule Lotus.AI.Conversation do
 
   # Private helpers
 
-  defp build_query_context_messages(nil), do: []
+  defp build_query_context_messages(nil, _fence), do: []
 
-  defp build_query_context_messages(%{statement: statement, variables: variables})
+  defp build_query_context_messages(%{statement: statement, variables: variables}, fence)
        when is_binary(statement) and statement != "" do
     content =
       if is_list(variables) and variables != [] do
-        "The user already has this query in their editor:\n\n```sql\n#{statement}\n```\n\n```variables\n#{Lotus.JSON.encode!(variables)}\n```"
+        "The user already has this query in their editor:\n\n```#{fence}\n#{statement}\n```\n\n```variables\n#{Lotus.JSON.encode!(variables)}\n```"
       else
-        "The user already has this query in their editor:\n\n```sql\n#{statement}\n```"
+        "The user already has this query in their editor:\n\n```#{fence}\n#{statement}\n```"
       end
 
     [
@@ -361,7 +370,7 @@ defmodule Lotus.AI.Conversation do
     ]
   end
 
-  defp build_query_context_messages(_), do: []
+  defp build_query_context_messages(_, _fence), do: []
 
   defp format_error(error) when is_binary(error), do: error
   defp format_error(error) when is_exception(error), do: Exception.message(error)

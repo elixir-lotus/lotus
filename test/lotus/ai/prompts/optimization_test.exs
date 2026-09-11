@@ -33,10 +33,16 @@ defmodule Lotus.AI.Prompts.OptimizationTest do
   end
 
   describe "user_prompt/3" do
-    test "includes SQL query" do
+    test "includes the query" do
       prompt = Optimization.user_prompt("SELECT * FROM users", nil)
       assert prompt =~ "SELECT * FROM users"
-      assert prompt =~ "## SQL Query"
+      assert prompt =~ "## Query"
+    end
+
+    test "fences the query with the adapter's language family" do
+      prompt = Optimization.user_prompt(~s({"query": {"match_all": {}}}), nil, nil, "json")
+      assert prompt =~ "```json"
+      refute prompt =~ "```sql"
     end
 
     test "includes execution plan when provided" do

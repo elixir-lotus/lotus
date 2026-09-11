@@ -1,7 +1,7 @@
-defmodule Lotus.AI.Actions.ExecuteSQLTest do
+defmodule Lotus.AI.Actions.ExecuteStatementTest do
   use Lotus.AICase, async: true
 
-  alias Lotus.AI.Actions.ExecuteSQL
+  alias Lotus.AI.Actions.ExecuteStatement
   alias Lotus.Result
 
   setup do
@@ -20,7 +20,7 @@ defmodule Lotus.AI.Actions.ExecuteSQLTest do
       end)
 
       assert {:ok, result} =
-               ExecuteSQL.run(
+               ExecuteStatement.run(
                  %{
                    sql: "SELECT region, SUM(amount) as revenue FROM orders GROUP BY region",
                    data_source: "postgres",
@@ -46,7 +46,7 @@ defmodule Lotus.AI.Actions.ExecuteSQLTest do
       end)
 
       assert {:ok, result} =
-               ExecuteSQL.run(
+               ExecuteStatement.run(
                  %{sql: "SELECT * FROM big_table", data_source: "postgres", label: "Big query"},
                  %{}
                )
@@ -62,7 +62,7 @@ defmodule Lotus.AI.Actions.ExecuteSQLTest do
       end)
 
       assert {:ok, result} =
-               ExecuteSQL.run(
+               ExecuteStatement.run(
                  %{
                    sql: "SELECT * FROM missing_table",
                    data_source: "postgres",
@@ -83,7 +83,7 @@ defmodule Lotus.AI.Actions.ExecuteSQLTest do
       end)
 
       assert {:ok, _result} =
-               ExecuteSQL.run(
+               ExecuteStatement.run(
                  %{sql: "SELECT COUNT(*) FROM users", data_source: "postgres", label: "Count"},
                  %{}
                )
@@ -95,7 +95,7 @@ defmodule Lotus.AI.Actions.ExecuteSQLTest do
       end)
 
       assert {:ok, result} =
-               ExecuteSQL.run(
+               ExecuteStatement.run(
                  %{sql: "SELECT 1", data_source: "postgres", label: "Ping"},
                  %{}
                )
@@ -107,11 +107,11 @@ defmodule Lotus.AI.Actions.ExecuteSQLTest do
 
   describe "tool metadata" do
     test "exposes name, description, and schema" do
-      assert ExecuteSQL.name() == "execute_sql"
-      assert ExecuteSQL.description() =~ "Execute"
-      assert Keyword.has_key?(ExecuteSQL.schema(), :sql)
-      assert Keyword.has_key?(ExecuteSQL.schema(), :label)
-      assert Keyword.has_key?(ExecuteSQL.schema(), :data_source)
+      assert ExecuteStatement.name() == "execute_statement"
+      assert ExecuteStatement.description() =~ "Execute"
+      assert Keyword.has_key?(ExecuteStatement.schema(), :sql)
+      assert Keyword.has_key?(ExecuteStatement.schema(), :label)
+      assert Keyword.has_key?(ExecuteStatement.schema(), :data_source)
     end
   end
 end

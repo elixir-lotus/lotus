@@ -4,7 +4,7 @@
 [
   # Return maps are intentionally typed as map() for API flexibility so that
   # adding new fields isn't a breaking change to the spec.
-  {"lib/lotus/ai/query_explainer.ex", :contract_supertype, 29},
+  {"lib/lotus/ai/query_explainer.ex", :contract_supertype, 32},
   # OTP 27 infers a precise map shape for this test helper and flags the
   # intentionally-broad map() spec as a supertype; OTP 28 collapses it to
   # map() and stays silent. The map() return type is deliberate.

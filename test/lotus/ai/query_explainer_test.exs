@@ -68,7 +68,7 @@ defmodule Lotus.AI.QueryExplainerTest do
       mock_with_assertion(fn _model, messages, _opts ->
         user_message = Enum.find(messages, &(&1.role == :user))
         content_text = Enum.map_join(user_message.content, & &1.text)
-        assert content_text =~ "Explain what this SQL query does"
+        assert content_text =~ "Explain what this query does"
         refute content_text =~ "Selected Fragment"
       end)
 

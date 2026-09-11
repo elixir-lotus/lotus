@@ -225,6 +225,26 @@
   `Lotus.Storage.Query.data_repo` field renamed (Elixir side) and the
   `source: :data_repo` shim removed.
 
+- **New `query_language` column on `lotus_queries`** (nullable, 32
+  characters). Records the `family:dialect` identifier — `sql:postgres`,
+  `json:elasticsearch` — that a saved query was written for, exposed as
+  `Lotus.Storage.Query.query_language`. `NULL` means "derive it from the
+  source's adapter", which is how every pre-existing row behaves, so
+  there is no backfill. Postgres installs get it from
+  `Lotus.Migrations.Postgres.V5` via `mix ecto.migrate`; **MySQL and
+  SQLite users must add it manually** (`ALTER TABLE lotus_queries ADD
+  COLUMN query_language VARCHAR(32)` / `... TEXT`) alongside the
+  `data_source` rename above.
+
+- **`Lotus.run_query/2` refuses a language mismatch.** When a saved
+  query's `query_language` differs from the resolved source's, execution
+  returns `{:error, msg}` naming both languages and the source, instead
+  of passing the statement to an engine that cannot parse it. The
+  comparison is exact, not family-level: `sql:postgres` and
+  `sql:clickhouse` share a family but are not interchangeable, and
+  repointing a source between them is the case this catches. Queries with
+  no recorded language run anywhere.
+
 - **`Lotus.Storage.TypeCaster` `column_info` map** now uses `:adapter`
   (an `%Adapter{}` struct) instead of `:source_module` (a module atom)
   for dialect-aware type mapping. Callers that build `column_info`
@@ -388,6 +408,38 @@
   - `Lotus.AI.Actions.GetTableSchema` → `Lotus.AI.Actions.DescribeTable`
     (LLM-visible tool name changed from `"get_table_schema"` to
     `"describe_table"`).
+  - `Lotus.AI.Actions.ExecuteSQL` → `Lotus.AI.Actions.ExecuteStatement`
+    (tool name `"execute_sql"` → `"execute_statement"`).
+  - `Lotus.AI.Actions.ValidateSQL` → `Lotus.AI.Actions.ValidateStatement`
+    (tool name `"validate_sql"` → `"validate_statement"`).
+
+- **Prompt content moved from core to adapters.** Core's generation
+  prompt no longer ships SQL-specific guidance ("use JOINs for
+  multi-table queries", "add LIMIT for safety", "never generate INSERT,
+  UPDATE, DELETE, DROP, CREATE, ALTER, TRUNCATE") to every source,
+  including non-SQL ones whose write paths those keywords do not name.
+  Core now owns prompt structure — the workflow, the tool list, the
+  `UNABLE_TO_GENERATE` protocol, the fence — and adapters own content
+  about their own language. This follows the enforcement:
+  `sanitize_query/3` is already an adapter callback, so the adapter
+  decides what counts as a write.
+
+- **`ai_context/1` gains two optional keys**, both capped at 1024 bytes
+  and both stripped for adapters outside `:trusted_source_adapters`:
+  - `:generation_notes` — how to shape a good query for this source.
+  - `:read_only_notes` — which operations this source treats as writes.
+
+  Adapter notes render **in place of** core's defaults, not appended
+  after them. When a field is absent or stripped, core falls back to its
+  own generic text and never to an empty string — an empty
+  `:read_only_notes` would otherwise leave the prompt with no read-only
+  instruction at all.
+
+- **The statement fence is labelled with the adapter's language family**
+  (`sql` for `sql:postgres`, `json` for `json:elasticsearch`) instead of
+  always `sql`. The extractor accepts any label, so a new family needs no
+  change in core. The label is taken only from the sanitized
+  `ai_context.language` and is re-validated before interpolation.
 
 - **`Lotus.AI.suggest_optimizations/1` and
   `Lotus.AI.QueryOptimizer.suggest_optimizations/2` take `:statement`
