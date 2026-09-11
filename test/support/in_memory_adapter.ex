@@ -258,7 +258,7 @@ defmodule Lotus.Test.InMemoryAdapter do
   def needs_preflight?(_state, _statement), do: true
 
   @impl true
-  def query_plan(_state, _sql, _params, _opts), do: {:ok, nil}
+  def query_plan(_state, _statement, _opts), do: {:ok, nil}
 
   @impl true
   def substitute_variable(_state, %Statement{} = statement, var_name, value, _type) do
@@ -365,9 +365,6 @@ defmodule Lotus.Test.InMemoryAdapter do
 
   @impl true
   def format_error(_state, error), do: inspect(error)
-
-  @impl true
-  def handled_errors(_state), do: []
 
   # ---------------------------------------------------------------------------
   # Identity & presentation

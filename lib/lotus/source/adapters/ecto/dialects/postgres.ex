@@ -1,5 +1,14 @@
 defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
-  @moduledoc false
+  @moduledoc """
+  PostgreSQL dialect for `Lotus.Source.Adapters.Ecto`.
+
+  Namespaces are PostgreSQL schemas. Query plans come from
+  `EXPLAIN (FORMAT JSON)`, run inside a read-only transaction.
+  `set_search_path/2` and `set_statement_timeout/2` are both honoured.
+
+  Read alongside `Lotus.Source.Adapters.Ecto.Dialect` when writing a dialect
+  for another SQL engine — this module is the reference implementation.
+  """
 
   @behaviour Lotus.Source.Adapters.Ecto.Dialect
 
@@ -98,9 +107,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   end
 
   @impl true
-  def handled_errors, do: [Postgrex.Error]
-
-  @impl true
   def query_language, do: "sql:postgres"
 
   @impl true
@@ -138,8 +144,8 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   end
 
   @impl true
-  def limit_query(statement, limit) do
-    "SELECT * FROM (#{statement}) AS limited_query LIMIT #{limit}"
+  def limit_query(%Statement{body: body} = statement, limit) do
+    %{statement | body: "SELECT * FROM (#{body}) AS limited_query LIMIT #{limit}"}
   end
 
   @impl true
@@ -268,7 +274,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   end
 
   @impl true
-  def query_plan(repo, sql, params, opts) do
+  def query_plan(repo, %Statement{body: sql, params: params}, opts) do
     explain_sql = "EXPLAIN (FORMAT JSON) " <> sql
     search_path = Keyword.get(opts, :search_path)
 

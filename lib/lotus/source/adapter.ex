@@ -19,7 +19,7 @@ defmodule Lotus.Source.Adapter do
     * **Query execution** — `execute_query/4`, `transaction/3`
     * **Introspection** — `list_schemas/1`, `list_tables/3`, `describe_table/3`,
       `resolve_table_namespace/3`
-    * **SQL generation** — `quote_identifier/2`, `query_plan/4`
+    * **SQL generation** — `quote_identifier/2`, `query_plan/3`
     * **Pipeline** — `transform_statement/2`, `transform_bound_query/3`,
       `apply_filters/3`, `apply_sorts/3`, `apply_pagination/3`,
       `needs_preflight?/2`, `sanitize_query/3`,
@@ -30,19 +30,45 @@ defmodule Lotus.Source.Adapter do
     * **Safety & visibility** — `builtin_denies/1`, `builtin_schema_denies/1`,
       `default_schemas/1`
     * **Lifecycle** — `health_check/1`, `disconnect/1`
-    * **Error handling** — `format_error/2`, `handled_errors/1`
+    * **Error handling** — `format_error/2`
     * **Source identity** — `source_type/1`, `supports_feature?/2`
 
   ## Pipeline Statement contract
 
   All pipeline callbacks operate on a `%Lotus.Query.Statement{}` struct that
-  carries the adapter-native payload (`:text`, opaque term), `:params`, and
+  carries the adapter-native payload (`:body`, an opaque term), `:params`, and
   adapter-specific `:meta`. Adapters return a new statement with the relevant
   field updated — the pipeline is a series of pure `statement -> statement`
   transforms.
 
   Introspection callbacks consistently return `{:ok, result} | {:error, reason}`
   tuples so callers can handle failures uniformly.
+
+  ## Relations are two-level
+
+  Everywhere Lotus names a resource it uses exactly two levels:
+  `{schema | nil, table}`. That shape is fixed — visibility rules, deny
+  lists, `describe_table/3`, `resolve_table_namespace/3`, the preflight
+  relation set and `extract_accessed_resources/2` all speak it, and core
+  never grows a third element.
+
+  `nil` in the first position means "unqualified" — a source with no
+  namespace concept at all (SQLite tables, Elasticsearch indices), or a
+  name the caller left unqualified.
+
+  Engines with a **deeper** hierarchy flatten everything above the leaf
+  into the schema part, keeping the separator their own query language
+  uses:
+
+    * BigQuery `project.dataset.table` → `{"project.dataset", "table"}`
+    * A catalog/schema/table engine → `{"catalog.schema", "table"}`
+
+  Adapters own that flattening in `parse_qualified_name/2` and
+  `resolve_table_namespace/3`; core treats the schema part as an opaque
+  string and compares it verbatim against visibility rules. The practical
+  consequence for adapter authors: a deny rule the host writes must match
+  the flattened form your adapter produces, so document the spelling your
+  adapter emits.
 
   ## Dispatch helpers
 
@@ -147,6 +173,26 @@ defmodule Lotus.Source.Adapter do
   # Callbacks — SQL Generation
   # ---------------------------------------------------------------------------
 
+  @doc """
+  Return statistics for a relation.
+
+  At minimum a `:row_count`; adapters may add their own keys (on-disk size,
+  segment counts, a last-analyzed timestamp) and callers should tolerate
+  extras.
+
+  `Lotus.Schema.get_table_stats/3` calls this when the adapter implements
+  it. Otherwise it falls back to `SELECT COUNT(*)` against the quoted
+  relation name, which only makes sense for SQL sources — a non-SQL adapter
+  should implement this callback rather than inherit that fallback.
+
+  Return `{:error, :unsupported}` for an engine that exposes no such
+  statistic; callers treat it as "no stats available".
+
+  Default (when not implemented): `{:error, :unsupported}`.
+  """
+  @callback table_stats(state :: term(), schema :: String.t() | nil, table :: String.t()) ::
+              {:ok, map()} | {:error, term()}
+
   @doc "Quote a SQL identifier (column, table, schema name) using source-specific syntax."
   @callback quote_identifier(state :: term(), String.t()) :: String.t()
 
@@ -170,8 +216,11 @@ defmodule Lotus.Source.Adapter do
   cheaply) may legitimately return `{:ok, nil}` or `{:error, :unsupported}`;
   Lotus callers treat both as "no plan available" without surfacing an
   error to the user.
+
+  The statement carries its own bound values in `statement.params`; there is
+  no separate params argument.
   """
-  @callback query_plan(state :: term(), sql :: String.t(), params :: list(), opts :: keyword()) ::
+  @callback query_plan(state :: term(), statement :: Statement.t(), opts :: keyword()) ::
               {:ok, String.t() | nil} | {:error, term()}
 
   # ---------------------------------------------------------------------------
@@ -196,7 +245,7 @@ defmodule Lotus.Source.Adapter do
   @doc """
   Rewrite the statement after variable substitution.
 
-  Pipeline position: fires inside `Lotus.execute_with_options/7` **after**
+  Pipeline position: fires inside the execution pipeline **after**
   `{{var}}` placeholders have been resolved into `statement.params`, and
   **before** `apply_filters`, `apply_sorts`, and `apply_pagination` mutate
   the statement.
@@ -328,7 +377,7 @@ defmodule Lotus.Source.Adapter do
 
   **Security note.** Adapters that inline values are the only defense
   against injection at this layer. Never interpolate raw strings —
-  delegate to `Lotus.JSON.encode!/1` or an equivalent escaper for the target
+  delegate to `Lotus.JSON` or an equivalent escaper for the target
   language.
 
   Default (when not implemented): `{:error, :unsupported}`.
@@ -393,13 +442,16 @@ defmodule Lotus.Source.Adapter do
   Parse a qualified resource name into its hierarchy components.
 
   The return is an ordered list: the most-coarse component first, the leaf
-  last. Component count should match `hierarchy_label/1` depth.
+  last. At most two components — see "Relations are two-level" above; an
+  engine with a deeper hierarchy flattens the upper levels into the first
+  component.
 
   Examples across query languages:
 
     * SQL: `"public.users"` → `["public", "users"]`
     * Elasticsearch: `"logs-2025-01"` → `["logs-2025-01"]` (flat)
     * Mongo: `"mydb.users"` → `["mydb", "users"]`
+    * BigQuery: `"proj.ds.tbl"` → `["proj.ds", "tbl"]` (flattened)
 
   Used by discovery UIs and AI actions to route a user-supplied name to
   the right introspection call.
@@ -489,15 +541,6 @@ defmodule Lotus.Source.Adapter do
   """
   @callback format_error(state :: term(), any()) :: String.t()
 
-  @doc """
-  Return the exception modules this adapter knows how to format.
-
-  Used by `Lotus.Runner`'s rescue clause to match a raised exception
-  against the adapter's `format_error/2`. Returning the narrow set the
-  adapter actually handles lets unrelated exceptions propagate.
-  """
-  @callback handled_errors(state :: term()) :: [module()]
-
   # ---------------------------------------------------------------------------
   # Callbacks — Source Identity
   # ---------------------------------------------------------------------------
@@ -505,8 +548,45 @@ defmodule Lotus.Source.Adapter do
   @doc "Return the source type atom (e.g. `:postgres`, `:mysql`)."
   @callback source_type(state :: term()) :: source_type()
 
-  @doc "Whether this adapter supports a given feature."
-  @callback supports_feature?(state :: term(), atom()) :: boolean()
+  @typedoc """
+  A capability an adapter may declare through `supports_feature?/2`.
+
+  These are the atoms core and the built-in UI ask about. The type is open —
+  an adapter may answer questions about its own atoms, and callers that
+  invent one get `false` from any adapter that does not recognise it — but
+  these are the ones with defined meaning:
+
+    * `:schema_hierarchy` — the source has a real namespace level above
+      tables, so the UI shows a schema picker. False for flat sources
+      (SQLite, Elasticsearch); false for MySQL, whose databases are
+      configured per source rather than browsed.
+
+    * `:search_path` — the source honours a session-level namespace search
+      path, so a caller-supplied `:search_path` option is meaningful.
+
+    * `:arrays` — the query language has a first-class array type, so list
+      variables can bind as one value instead of being expanded into N
+      placeholders.
+
+    * `:json` — the source can store and query JSON documents, which the
+      editor uses to offer JSON-aware affordances.
+
+    * `:make_interval` — SQL-specific: the engine has a `make_interval`
+      function, so the transformer can rewrite `INTERVAL '{{n}} days'`
+      into a parameterized call instead of inlining the value.
+
+  Answer `false` for anything you do not recognise; the built-in dialects
+  all end with a catch-all clause that does exactly that.
+  """
+  @type feature ::
+          :schema_hierarchy | :search_path | :arrays | :json | :make_interval | atom()
+
+  @doc """
+  Whether this adapter supports a given feature.
+
+  See `t:feature/0` for the atoms core asks about and what each one means.
+  """
+  @callback supports_feature?(state :: term(), feature()) :: boolean()
 
   @doc """
   Return the query language identifier for this source.
@@ -595,13 +675,13 @@ defmodule Lotus.Source.Adapter do
   @callback ai_context(state :: term()) :: {:ok, ai_context_map()} | {:error, term()}
 
   @doc """
-  Return a statement safe to pass to `query_plan/4` for optimization
+  Return a statement safe to pass to `query_plan/3` for optimization
   analysis.
 
   Callers (`Lotus.AI.QueryOptimizer`) run this first so the adapter can
   resolve any `[[ ... ]]` optional clauses and replace `{{var}}`
   placeholders with language-appropriate null-ish literals (`NULL` for
-  SQL, `null` for JSON DSLs). The returned statement's `:text` must be
+  SQL, `null` for JSON DSLs). The returned statement's `:body` must be
   syntactically valid in the adapter's language without bound params
   so the engine's EXPLAIN / profile endpoint can parse it.
 
@@ -612,20 +692,22 @@ defmodule Lotus.Source.Adapter do
               {:ok, Statement.t()} | {:error, term()}
 
   @doc """
-  Wrap a raw statement string with a source-specific row limit.
+  Cap a statement at a source-specific row limit.
 
-  **SQL-shaped callback.** The `statement` argument is the raw statement
-  text (typically SQL) and the result is the same text wrapped with a
-  single-page `LIMIT` / `TOP` / `FETCH FIRST` clause (exact syntax varies
-  per dialect). Used by the UI's "preview this query" affordance to cap
-  returned rows without touching the underlying query.
+  Takes a `%Statement{}` and returns a `%Statement{}` whose body carries a
+  single-page limit — a `LIMIT` / `TOP` / `FETCH FIRST` clause for SQL
+  dialects, a `size` key for a JSON DSL, whatever the language calls it.
+  Used by the UI's "preview this query" affordance to cap returned rows
+  without touching the underlying query. `statement.params` is carried
+  through untouched unless the adapter binds the limit itself.
 
-  Non-SQL adapters whose languages don't have a textual limit clause may
-  return the input unchanged — Lotus core treats the callback as best-
-  effort and does not depend on it for correctness.
+  Default (when not implemented): the statement unchanged. Adapters whose
+  language has no notion of a row cap simply omit the callback — Lotus
+  core treats it as best-effort and does not depend on it for
+  correctness.
   """
-  @callback limit_query(state :: term(), statement :: String.t(), limit :: pos_integer()) ::
-              String.t()
+  @callback limit_query(state :: term(), statement :: Statement.t(), limit :: pos_integer()) ::
+              Statement.t()
 
   @doc ~S'Return the human-readable label for the top-level hierarchy (e.g. "Tables", "Indices").'
   @callback hierarchy_label(state :: term()) :: String.t()
@@ -829,7 +911,20 @@ defmodule Lotus.Source.Adapter do
     example_query: 3,
     can_handle?: 1,
     wrap: 2,
-    transform_statement: 2
+    transform_statement: 2,
+    limit_query: 3,
+    list_schemas: 1,
+    resolve_table_namespace: 3,
+    query_plan: 3,
+    quote_identifier: 2,
+    apply_filters: 3,
+    apply_sorts: 3,
+    builtin_schema_denies: 1,
+    default_schemas: 1,
+    supports_feature?: 2,
+    db_type_to_lotus_type: 2,
+    editor_config: 1,
+    table_stats: 3
   ]
 
   # Conservative fallback deny rules applied when no adapter can be resolved
@@ -904,7 +999,9 @@ defmodule Lotus.Source.Adapter do
   @doc "List all schemas via the adapter."
   @spec list_schemas(t()) :: {:ok, [String.t()]} | {:error, term()}
   def list_schemas(%__MODULE__{module: mod, state: state}) do
-    mod.list_schemas(state)
+    if function_exported?(mod, :list_schemas, 1),
+      do: mod.list_schemas(state),
+      else: {:ok, []}
   end
 
   @doc "List tables via the adapter."
@@ -925,14 +1022,18 @@ defmodule Lotus.Source.Adapter do
   @spec resolve_table_namespace(t(), String.t(), [String.t()]) ::
           {:ok, String.t() | nil} | {:error, term()}
   def resolve_table_namespace(%__MODULE__{module: mod, state: state}, table, schemas) do
-    mod.resolve_table_namespace(state, table, schemas)
+    if function_exported?(mod, :resolve_table_namespace, 3),
+      do: mod.resolve_table_namespace(state, table, schemas),
+      else: {:ok, nil}
   end
 
-  @doc "Get the execution plan for a query via the adapter."
-  @spec query_plan(t(), String.t(), list(), keyword()) ::
+  @doc "Get the execution plan for a statement via the adapter."
+  @spec query_plan(t(), Statement.t(), keyword()) ::
           {:ok, String.t() | nil} | {:error, term()}
-  def query_plan(%__MODULE__{module: mod, state: state}, sql, params, opts) do
-    mod.query_plan(state, sql, params, opts)
+  def query_plan(%__MODULE__{module: mod, state: state}, %Statement{} = statement, opts) do
+    if function_exported?(mod, :query_plan, 3),
+      do: mod.query_plan(state, statement, opts),
+      else: {:ok, nil}
   end
 
   @doc "Return built-in deny rules via the adapter."
@@ -944,13 +1045,25 @@ defmodule Lotus.Source.Adapter do
   @doc "Return built-in schema denies via the adapter."
   @spec builtin_schema_denies(t()) :: [String.t() | Regex.t()]
   def builtin_schema_denies(%__MODULE__{module: mod, state: state}) do
-    mod.builtin_schema_denies(state)
+    if function_exported?(mod, :builtin_schema_denies, 1),
+      do: mod.builtin_schema_denies(state),
+      else: []
+  end
+
+  @doc "Return statistics for a relation via the adapter."
+  @spec table_stats(t(), String.t() | nil, String.t()) :: {:ok, map()} | {:error, term()}
+  def table_stats(%__MODULE__{module: mod, state: state}, schema, table) do
+    if function_exported?(mod, :table_stats, 3),
+      do: mod.table_stats(state, schema, table),
+      else: {:error, :unsupported}
   end
 
   @doc "Return default schemas via the adapter."
   @spec default_schemas(t()) :: [String.t()]
   def default_schemas(%__MODULE__{module: mod, state: state}) do
-    mod.default_schemas(state)
+    if function_exported?(mod, :default_schemas, 1),
+      do: mod.default_schemas(state),
+      else: []
   end
 
   @doc "Check data source health via the adapter."
@@ -1040,7 +1153,9 @@ defmodule Lotus.Source.Adapter do
   @doc "Quote a SQL identifier via the adapter."
   @spec quote_identifier(t(), String.t()) :: String.t()
   def quote_identifier(%__MODULE__{module: mod, state: state}, identifier) do
-    mod.quote_identifier(state, identifier)
+    if function_exported?(mod, :quote_identifier, 2),
+      do: mod.quote_identifier(state, identifier),
+      else: identifier
   end
 
   @doc """
@@ -1137,7 +1252,9 @@ defmodule Lotus.Source.Adapter do
   def apply_filters(_adapter, %Statement{} = statement, []), do: statement
 
   def apply_filters(%__MODULE__{module: mod, state: state}, %Statement{} = statement, filters) do
-    mod.apply_filters(state, statement, filters)
+    if function_exported?(mod, :apply_filters, 3),
+      do: mod.apply_filters(state, statement, filters),
+      else: statement
   end
 
   @doc "Apply sorts to a statement via the adapter. Empty sorts short-circuit."
@@ -1145,19 +1262,15 @@ defmodule Lotus.Source.Adapter do
   def apply_sorts(_adapter, %Statement{} = statement, []), do: statement
 
   def apply_sorts(%__MODULE__{module: mod, state: state}, %Statement{} = statement, sorts) do
-    mod.apply_sorts(state, statement, sorts)
+    if function_exported?(mod, :apply_sorts, 3),
+      do: mod.apply_sorts(state, statement, sorts),
+      else: statement
   end
 
   @doc "Format an error via the adapter."
   @spec format_error(t(), any()) :: String.t()
   def format_error(%__MODULE__{module: mod, state: state}, error) do
     mod.format_error(state, error)
-  end
-
-  @doc "Return handled error modules via the adapter."
-  @spec handled_errors(t()) :: [module()]
-  def handled_errors(%__MODULE__{module: mod, state: state}) do
-    mod.handled_errors(state)
   end
 
   @doc "Return the source type via the adapter."
@@ -1169,7 +1282,7 @@ defmodule Lotus.Source.Adapter do
   @doc "Check feature support via the adapter."
   @spec supports_feature?(t(), atom()) :: boolean()
   def supports_feature?(%__MODULE__{module: mod, state: state}, feature) do
-    mod.supports_feature?(state, feature)
+    function_exported?(mod, :supports_feature?, 2) and mod.supports_feature?(state, feature)
   end
 
   @doc "Return the query language identifier via the adapter."
@@ -1392,6 +1505,16 @@ defmodule Lotus.Source.Adapter do
   @editor_config_max_context_schema_root 200
   @editor_config_max_context_schema_children 500
 
+  # Editor shape for adapters that declare no editor support: the query
+  # editor renders plain text with no completions rather than crashing.
+  @empty_editor_config %{
+    language: "",
+    keywords: [],
+    types: [],
+    functions: [],
+    context_boundaries: []
+  }
+
   @editor_config_known_keys [
     :language,
     :keywords,
@@ -1414,7 +1537,11 @@ defmodule Lotus.Source.Adapter do
   """
   @spec editor_config(t()) :: map()
   def editor_config(%__MODULE__{module: mod, state: state}) do
-    state |> mod.editor_config() |> sanitize_editor_config(mod)
+    if function_exported?(mod, :editor_config, 1) do
+      state |> mod.editor_config() |> sanitize_editor_config(mod)
+    else
+      @empty_editor_config
+    end
   end
 
   defp sanitize_editor_config(config, mod) when is_map(config) do
@@ -1506,9 +1633,11 @@ defmodule Lotus.Source.Adapter do
   end
 
   @doc "Wrap a statement with a limit clause via the adapter."
-  @spec limit_query(t(), String.t(), pos_integer()) :: String.t()
-  def limit_query(%__MODULE__{module: mod, state: state}, statement, limit) do
-    mod.limit_query(state, statement, limit)
+  @spec limit_query(t(), Statement.t(), pos_integer()) :: Statement.t()
+  def limit_query(%__MODULE__{module: mod, state: state}, %Statement{} = statement, limit) do
+    if function_exported?(mod, :limit_query, 3),
+      do: mod.limit_query(state, statement, limit),
+      else: statement
   end
 
   @doc "Return the hierarchy label via the adapter."
@@ -1541,6 +1670,8 @@ defmodule Lotus.Source.Adapter do
   @doc "Map a database type to a Lotus type via the adapter."
   @spec db_type_to_lotus_type(t(), String.t()) :: atom()
   def db_type_to_lotus_type(%__MODULE__{module: mod, state: state}, db_type) do
-    mod.db_type_to_lotus_type(state, db_type)
+    if function_exported?(mod, :db_type_to_lotus_type, 2),
+      do: mod.db_type_to_lotus_type(state, db_type),
+      else: :text
   end
 end

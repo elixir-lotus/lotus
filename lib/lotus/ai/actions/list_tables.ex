@@ -8,6 +8,8 @@ defmodule Lotus.AI.Actions.ListTables do
 
   @behaviour Lotus.AI.Action
 
+  import Lotus.AI.Action, only: [actor_opts: 1]
+
   @impl true
   def name, do: "list_tables"
 
@@ -25,8 +27,8 @@ defmodule Lotus.AI.Actions.ListTables do
   end
 
   @impl true
-  def run(params, _context) do
-    case Lotus.Schema.list_tables(params.data_source) do
+  def run(params, context) do
+    case Lotus.Schema.list_tables(params.data_source, actor_opts(context)) do
       {:ok, tables} ->
         {:ok, %{tables: format_table_names(tables)}}
 

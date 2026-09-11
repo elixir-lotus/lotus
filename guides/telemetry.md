@@ -10,12 +10,18 @@ with monitoring tools like Phoenix LiveDashboard, AppSignal, Datadog, and others
 
 | Event                         | Measurements                   | Metadata                                      |
 |-------------------------------|--------------------------------|-----------------------------------------------|
-| `[:lotus, :query, :start]`    | `system_time`                  | `repo`, `sql`, `params`, `context`                       |
-| `[:lotus, :query, :stop]`     | `duration`, `row_count`        | `repo`, `sql`, `params`, `context`, `result`             |
-| `[:lotus, :query, :exception]`| `duration`                     | `repo`, `sql`, `params`, `context`, `kind`, `reason`, `stacktrace` |
+| `[:lotus, :query, :start]`    | `system_time`                  | `source`, `statement`, `context`                         |
+| `[:lotus, :query, :stop]`     | `duration`, `row_count`        | `source`, `statement`, `context`, `result`               |
+| `[:lotus, :query, :exception]`| `duration`                     | `source`, `statement`, `context`, `kind`, `reason`, `stacktrace` |
 
 Duration is measured in native time units. Use `System.convert_time_unit/3` to
 convert to milliseconds or microseconds.
+
+The `source` field is the data source name (`"main"`, `"warehouse"`), not a
+repo module. The `statement` field is a `%Lotus.Query.Statement{}`: read
+`statement.body` for the adapter-native payload (SQL text for Ecto-backed
+sources, a JSON object or AST for others) and `statement.params` for the bound
+values.
 
 The `context` field carries whatever value the caller passed as the `:context`
 option to `Lotus.run_statement/3` or `Lotus.run_query/2`. It defaults to `nil` when
@@ -80,7 +86,7 @@ defmodule MyApp.LotusInstrumentation do
       "Lotus query completed",
       duration_ms: duration_ms,
       row_count: measurements.row_count,
-      repo: inspect(metadata.repo)
+      source: metadata.source
     )
   end
 
@@ -91,7 +97,7 @@ defmodule MyApp.LotusInstrumentation do
       "Lotus query failed",
       duration_ms: duration_ms,
       reason: inspect(metadata.reason),
-      repo: inspect(metadata.repo)
+      source: metadata.source
     )
   end
 

@@ -7,6 +7,7 @@ defmodule Lotus.AI.QueryGenerator do
   string like `"openai:gpt-4o"` or `"anthropic:claude-opus-4"`.
   """
 
+  alias Lotus.AI.Action
   alias Lotus.AI.Actions
   alias Lotus.AI.Conversation
   alias Lotus.AI.Prompts.QueryGeneration
@@ -42,6 +43,9 @@ defmodule Lotus.AI.QueryGenerator do
   - `:query_context` - Additional context for the query
   - `:read_only` - Whether to restrict to read-only SQL (default: true)
   - `:temperature` - LLM temperature (default: 0.1)
+  - `:context` - Caller-supplied actor context, threaded into every query
+    and introspection call the AI makes
+  - `:scope` - Caller-supplied visibility scope, threaded the same way
   """
   @type sql_response :: %{
           content: String.t(),
@@ -63,19 +67,24 @@ defmodule Lotus.AI.QueryGenerator do
     read_only = Keyword.get(opts, :read_only, true)
     api_key = Keyword.fetch!(opts, :api_key)
     temperature = Keyword.get(opts, :temperature, 0.1)
+    actor = actor_from(opts)
+    actor_opts = Action.actor_opts(actor)
 
     adapter = Source.resolve!(data_source, nil)
 
     case Adapter.ai_context(adapter) do
       {:ok, ai_context} ->
-        {:ok, all_schemas} = Lotus.Schema.list_schemas(data_source)
-        {:ok, tables} = Lotus.Schema.list_tables(data_source, schemas: all_schemas)
+        {:ok, all_schemas} = Lotus.Schema.list_schemas(data_source, actor_opts)
+
+        {:ok, tables} =
+          Lotus.Schema.list_tables(data_source, [schemas: all_schemas] ++ actor_opts)
+
         table_names = extract_table_names(tables)
 
         system_prompt =
           QueryGeneration.system_prompt(ai_context, table_names, read_only: read_only)
 
-        tools = build_tools(data_source)
+        tools = build_tools(data_source, actor)
         messages = build_messages(conversation, prompt, system_prompt, query_context)
         context = build_context(messages)
 
@@ -125,16 +134,28 @@ defmodule Lotus.AI.QueryGenerator do
 
   # Tools
 
-  defp build_tools(data_source) do
+  defp build_tools(data_source, actor) do
     bind = %{data_source: data_source}
+    opts = [bind: bind, context: actor]
 
     [
-      Tool.from_action(Actions.ListSchemas, bind: bind),
-      Tool.from_action(Actions.ListTables, bind: bind),
-      Tool.from_action(Actions.DescribeTable, bind: bind),
-      Tool.from_action(Actions.GetColumnValues, bind: bind),
-      Tool.from_action(Actions.ValidateSQL, bind: bind)
+      Tool.from_action(Actions.ListSchemas, opts),
+      Tool.from_action(Actions.ListTables, opts),
+      Tool.from_action(Actions.DescribeTable, opts),
+      Tool.from_action(Actions.GetColumnValues, opts),
+      Tool.from_action(Actions.ValidateSQL, opts)
     ]
+  end
+
+  # The actor the AI is working for, in the shape actions expect. Keys the
+  # caller did not supply are left out rather than passed as nil.
+  defp actor_from(opts) do
+    Enum.reduce([:context, :scope], %{}, fn key, acc ->
+      case Keyword.fetch(opts, key) do
+        {:ok, value} -> Map.put(acc, key, value)
+        :error -> acc
+      end
+    end)
   end
 
   # Messages

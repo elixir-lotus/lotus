@@ -15,7 +15,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Default do
     * `set_statement_timeout/2` is a no-op, so user-configured statement
       timeouts have no effect.
     * `extract_accessed_resources/4` is not implemented, so
-      `Lotus.Preflight.authorize/4` short-circuits to `:ok` — visibility rules
+      `Lotus.Preflight.authorize/3` short-circuits to `:ok` — visibility rules
       are **not** checked against the tables the query touches.
     * `list_schemas/1`, `list_tables/3`, and `describe_table/3` return
       empty lists — the schema browser will be blank.
@@ -115,14 +115,11 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Default do
   end
 
   @impl true
-  def handled_errors, do: []
-
-  @impl true
   def query_language, do: "sql"
 
   @impl true
-  def limit_query(statement, limit) do
-    "SELECT * FROM (#{statement}) AS limited_query LIMIT #{limit}"
+  def limit_query(%Statement{body: body} = statement, limit) do
+    %{statement | body: "SELECT * FROM (#{body}) AS limited_query LIMIT #{limit}"}
   end
 
   @impl true
@@ -163,7 +160,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Default do
   end
 
   @impl true
-  def query_plan(_repo, _sql, _params, _opts) do
+  def query_plan(_repo, %Statement{}, _opts) do
     {:error, "EXPLAIN not supported for this database adapter"}
   end
 

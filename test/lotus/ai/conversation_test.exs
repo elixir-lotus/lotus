@@ -28,7 +28,7 @@ defmodule Lotus.AI.ConversationTest do
 
       assert message.role == :user
       assert message.content == "Show active users"
-      assert message.sql == nil
+      assert message.statement == nil
       assert %DateTime{} = message.timestamp
     end
 
@@ -55,7 +55,7 @@ defmodule Lotus.AI.ConversationTest do
 
       assert message.role == :assistant
       assert message.content == "Here's your query:"
-      assert message.sql == "SELECT * FROM users"
+      assert message.statement == "SELECT * FROM users"
       assert %DateTime{} = message.timestamp
     end
 
@@ -110,7 +110,7 @@ defmodule Lotus.AI.ConversationTest do
 
       assert error_message.role == :error
       assert error_message.content == "column 'status' does not exist"
-      assert error_message.sql == "SELECT status FROM users"
+      assert error_message.statement == "SELECT status FROM users"
     end
 
     test "does not add message when query succeeds" do

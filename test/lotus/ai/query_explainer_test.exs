@@ -20,7 +20,7 @@ defmodule Lotus.AI.QueryExplainerTest do
 
       assert {:ok, result} =
                QueryExplainer.explain_query("openai:gpt-4o",
-                 sql: "SELECT * FROM orders WHERE created_at > '2024-01-01'",
+                 statement: "SELECT * FROM orders WHERE created_at > '2024-01-01'",
                  data_source: "postgres",
                  api_key: "sk-test"
                )
@@ -37,7 +37,7 @@ defmodule Lotus.AI.QueryExplainerTest do
 
       assert {:ok, result} =
                QueryExplainer.explain_query("openai:gpt-4o",
-                 sql:
+                 statement:
                    "SELECT d.name FROM departments d LEFT JOIN employees e ON e.department_id = d.id",
                  fragment: "LEFT JOIN employees e ON e.department_id = d.id",
                  data_source: "postgres",
@@ -57,7 +57,7 @@ defmodule Lotus.AI.QueryExplainerTest do
 
       assert {:ok, _} =
                QueryExplainer.explain_query("openai:gpt-4o",
-                 sql: "SELECT * FROM orders JOIN users ON users.id = orders.user_id",
+                 statement: "SELECT * FROM orders JOIN users ON users.id = orders.user_id",
                  fragment: "JOIN users ON users.id = orders.user_id",
                  data_source: "postgres",
                  api_key: "sk-test"
@@ -74,7 +74,7 @@ defmodule Lotus.AI.QueryExplainerTest do
 
       assert {:ok, _} =
                QueryExplainer.explain_query("openai:gpt-4o",
-                 sql: "SELECT * FROM orders",
+                 statement: "SELECT * FROM orders",
                  data_source: "postgres",
                  api_key: "sk-test"
                )
@@ -87,7 +87,7 @@ defmodule Lotus.AI.QueryExplainerTest do
 
       assert {:ok, _} =
                QueryExplainer.explain_query("anthropic:claude-opus-4",
-                 sql: "SELECT * FROM orders",
+                 statement: "SELECT * FROM orders",
                  data_source: "postgres",
                  api_key: "sk-test"
                )
@@ -104,7 +104,7 @@ defmodule Lotus.AI.QueryExplainerTest do
 
       assert {:ok, _} =
                QueryExplainer.explain_query("openai:gpt-4o",
-                 sql: "SELECT * FROM orders",
+                 statement: "SELECT * FROM orders",
                  data_source: "postgres",
                  api_key: "sk-test"
                )
@@ -124,7 +124,7 @@ defmodule Lotus.AI.QueryExplainerTest do
 
       assert {:ok, _} =
                QueryExplainer.explain_query("openai:gpt-4o",
-                 sql: original_sql,
+                 statement: original_sql,
                  data_source: "postgres",
                  api_key: "sk-test"
                )
@@ -141,7 +141,7 @@ defmodule Lotus.AI.QueryExplainerTest do
 
       assert {:ok, _} =
                QueryExplainer.explain_query("openai:gpt-4o",
-                 sql: "SELECT * FROM users WHERE 1=1 [[AND status = {{status}}]]",
+                 statement: "SELECT * FROM users WHERE 1=1 [[AND status = {{status}}]]",
                  fragment: "[[AND status = {{status}}]]",
                  data_source: "postgres",
                  api_key: "sk-test"
@@ -153,7 +153,7 @@ defmodule Lotus.AI.QueryExplainerTest do
 
       assert {:error, %Lotus.AI.Error.ServiceError{}} =
                QueryExplainer.explain_query("openai:gpt-4o",
-                 sql: "SELECT * FROM orders",
+                 statement: "SELECT * FROM orders",
                  data_source: "postgres",
                  api_key: "sk-invalid"
                )
@@ -164,7 +164,7 @@ defmodule Lotus.AI.QueryExplainerTest do
 
       assert {:error, %Lotus.AI.Error.ServiceError{}} =
                QueryExplainer.explain_query("openai:gpt-4o",
-                 sql: "SELECT * FROM orders",
+                 statement: "SELECT * FROM orders",
                  data_source: "postgres",
                  api_key: "sk-test"
                )

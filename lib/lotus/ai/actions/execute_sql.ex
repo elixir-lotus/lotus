@@ -9,6 +9,8 @@ defmodule Lotus.AI.Actions.ExecuteSQL do
 
   @behaviour Lotus.AI.Action
 
+  import Lotus.AI.Action, only: [actor_opts: 1]
+
   @max_preview_rows 50
 
   @impl true
@@ -38,10 +40,13 @@ defmodule Lotus.AI.Actions.ExecuteSQL do
   end
 
   @impl true
-  def run(params, _context) do
+  def run(params, context) do
     started_at = DateTime.utc_now()
 
-    case Lotus.run_statement(params.sql, [], repo: params.data_source, read_only: true) do
+    opts =
+      [repo: params.data_source, read_only: true] ++ actor_opts(context)
+
+    case Lotus.run_statement(params.sql, [], opts) do
       {:ok, result} ->
         preview_rows =
           result.rows

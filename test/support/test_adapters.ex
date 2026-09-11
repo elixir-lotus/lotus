@@ -25,7 +25,7 @@ defmodule Lotus.Test.NoOpAdapter do
   @impl true
   def apply_sorts(_state, statement, _sorts), do: statement
   @impl true
-  def query_plan(_state, _sql, _params, _opts), do: {:ok, ""}
+  def query_plan(_state, _statement, _opts), do: {:ok, ""}
   @impl true
   def builtin_denies(_state), do: []
   @impl true
@@ -38,8 +38,6 @@ defmodule Lotus.Test.NoOpAdapter do
   def disconnect(_state), do: :ok
   @impl true
   def format_error(_state, error), do: inspect(error)
-  @impl true
-  def handled_errors(_state), do: []
   @impl true
   def source_type(_state), do: :other
   @impl true
@@ -76,7 +74,7 @@ defmodule Lotus.Test.StubAdapter do
   @impl true
   def apply_sorts(_state, statement, _sorts), do: statement
   @impl true
-  def query_plan(_state, _sql, _params, _opts), do: {:ok, ""}
+  def query_plan(_state, _statement, _opts), do: {:ok, ""}
   @impl true
   def builtin_denies(_state), do: []
   @impl true
@@ -90,13 +88,9 @@ defmodule Lotus.Test.StubAdapter do
   @impl true
   def format_error(_state, error), do: inspect(error)
   @impl true
-  def handled_errors(_state), do: []
-  @impl true
   def source_type(_state), do: :other
   @impl true
   def supports_feature?(_state, _feature), do: false
-  @impl true
-  def limit_query(_state, statement, _limit), do: statement
   @impl true
   def db_type_to_lotus_type(_state, _db_type), do: :text
   @impl true

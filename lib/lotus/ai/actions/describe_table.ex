@@ -8,6 +8,8 @@ defmodule Lotus.AI.Actions.DescribeTable do
 
   @behaviour Lotus.AI.Action
 
+  import Lotus.AI.Action, only: [actor_opts: 1]
+
   alias Lotus.Source
   alias Lotus.Source.Adapter
 
@@ -33,12 +35,12 @@ defmodule Lotus.AI.Actions.DescribeTable do
   end
 
   @impl true
-  def run(params, _context) do
+  def run(params, context) do
     adapter = Source.resolve!(params.data_source, nil)
 
     with {:ok, {schema, table}} <- parse_name(adapter, params.table_name),
          :ok <- validate_parts(adapter, schema, table) do
-      fetch_schema(params.data_source, schema, table, params.table_name)
+      fetch_schema(params.data_source, schema, table, params.table_name, actor_opts(context))
     end
   end
 
@@ -67,13 +69,13 @@ defmodule Lotus.AI.Actions.DescribeTable do
     end
   end
 
-  defp fetch_schema(data_source, nil, table, original_name) do
-    format_result(Lotus.Schema.describe_table(data_source, table), original_name)
+  defp fetch_schema(data_source, nil, table, original_name, opts) do
+    format_result(Lotus.Schema.describe_table(data_source, table, opts), original_name)
   end
 
-  defp fetch_schema(data_source, schema, table, original_name) do
+  defp fetch_schema(data_source, schema, table, original_name, opts) do
     format_result(
-      Lotus.Schema.describe_table(data_source, table, schema: schema),
+      Lotus.Schema.describe_table(data_source, table, [schema: schema] ++ opts),
       original_name
     )
   end

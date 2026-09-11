@@ -25,8 +25,8 @@ Each middleware receives a payload map whose contents depend on the pipeline eve
 
 | Event | Triggered | Payload keys |
 |-------|-----------|--------------|
-| `:before_query` | After preflight visibility check, before SQL execution | `:sql`, `:params`, `:source`, `:context` |
-| `:after_query` | After execution, before result returned to caller | `:result`, `:sql`, `:params`, `:source`, `:context` |
+| `:before_query` | Before sanitization, preflight and execution | `:statement`, `:source`, `:context` |
+| `:after_query` | After execution, before result returned to caller | `:result`, `:statement`, `:source`, `:context` |
 | `:after_list_schemas` | After schema discovery and visibility filtering | `:schemas`, `:source`, `:scope`, `:context` |
 | `:after_list_tables` | After table discovery and visibility filtering | `:tables`, `:source`, `:scope`, `:context` |
 | `:after_get_table_schema` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
@@ -57,6 +57,35 @@ defmodule MyApp.DiscoveryAuditMiddleware do
   end
 end
 ```
+
+## Rewriting the Statement
+
+A `:before_query` plug may replace the `:statement` in its payload, and the
+statement it returns is the one Lotus executes:
+
+```elixir
+defmodule MyApp.TenantScope do
+  def init(opts), do: opts
+
+  def call(%{statement: statement, context: %{tenant_id: id}} = payload, _opts) do
+    scoped = %{statement | body: "SELECT * FROM (#{statement.body}) t WHERE tenant_id = $#{length(statement.params) + 1}",
+               params: statement.params ++ [id]}
+
+    {:cont, %{payload | statement: scoped}}
+  end
+
+  def call(payload, _opts), do: {:cont, payload}
+end
+```
+
+Because the rewritten statement is what runs, `:before_query` fires **before**
+statement sanitization and preflight authorization — both apply to the final
+statement, not the text the caller supplied. A plug cannot rewrite its way
+onto a denied table, and cannot turn a read into a write when `read_only` is
+in force.
+
+Returning the payload unchanged leaves the original statement in place, so
+existing audit and access-control plugs need no changes.
 
 ## Configuration
 

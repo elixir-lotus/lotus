@@ -42,7 +42,7 @@ defmodule Lotus.AI.ErrorDetector do
   @type error_context :: %{
           error_type: error_type(),
           error_message: String.t(),
-          failed_sql: String.t() | nil,
+          failed_statement: String.t() | nil,
           suggestions: [String.t()]
         }
 
@@ -52,7 +52,7 @@ defmodule Lotus.AI.ErrorDetector do
   ## Parameters
 
   - `error_message` - The error message from the database
-  - `sql` - The SQL query that failed (optional)
+  - `statement` - The statement that failed (optional)
   - `source_context` - Context about tables analyzed (optional)
 
   ## Returns
@@ -70,7 +70,7 @@ defmodule Lotus.AI.ErrorDetector do
       :column_not_found
       iex> result.error_message
       "column 'status' does not exist"
-      iex> result.failed_sql
+      iex> result.failed_statement
       "SELECT status FROM users"
       iex> Enum.any?(result.suggestions, &String.contains?(&1, "describe_table"))
       true
@@ -88,15 +88,15 @@ defmodule Lotus.AI.ErrorDetector do
   is the generic classification + suggestion flow.
   """
   @spec analyze_error(String.t(), String.t() | nil, map(), map() | nil) :: error_context()
-  def analyze_error(error_message, sql \\ nil, source_context \\ %{}, ai_context \\ nil) do
+  def analyze_error(error_message, statement \\ nil, source_context \\ %{}, ai_context \\ nil) do
     error_type = classify_error(error_message)
-    generic_suggestions = suggest_fixes(error_type, error_message, sql, source_context)
+    generic_suggestions = suggest_fixes(error_type, error_message, statement, source_context)
     adapter_hints = match_adapter_error_patterns(ai_context, error_message)
 
     %{
       error_type: error_type,
       error_message: error_message,
-      failed_sql: sql,
+      failed_statement: statement,
       suggestions: adapter_hints ++ generic_suggestions
     }
   end
@@ -156,7 +156,7 @@ defmodule Lotus.AI.ErrorDetector do
 
   - `error_type` - Classified error type
   - `error_message` - Original error message
-  - `sql` - Failed SQL query (optional)
+  - `statement` - The failed statement (optional)
   - `source_context` - Source context map (optional)
 
   ## Returns
@@ -164,9 +164,9 @@ defmodule Lotus.AI.ErrorDetector do
   List of actionable suggestion strings.
   """
   @spec suggest_fixes(error_type(), String.t(), String.t() | nil, map()) :: [String.t()]
-  def suggest_fixes(error_type, error_message, sql, source_context)
+  def suggest_fixes(error_type, error_message, statement, source_context)
 
-  def suggest_fixes(:column_not_found, error_message, _sql, source_context) do
+  def suggest_fixes(:column_not_found, error_message, _statement, source_context) do
     # Try to extract column name from error
     column_name = extract_identifier(error_message, "column")
     tables = source_context[:tables_analyzed] || []
@@ -206,7 +206,7 @@ defmodule Lotus.AI.ErrorDetector do
     |> Enum.reject(&is_nil/1)
   end
 
-  def suggest_fixes(:table_not_found, error_message, _sql, _source_context) do
+  def suggest_fixes(:table_not_found, error_message, _statement, _source_context) do
     table_name = extract_identifier(error_message, "table", "relation")
 
     base_suggestions = [
@@ -228,14 +228,14 @@ defmodule Lotus.AI.ErrorDetector do
     base_suggestions ++ table_suggestions
   end
 
-  def suggest_fixes(:syntax_error, error_message, sql, _source_context) do
+  def suggest_fixes(:syntax_error, error_message, statement, _source_context) do
     base_suggestions = [
       "There's a SQL syntax error in the query",
       "Review the SQL syntax carefully - check for missing/extra commas, parentheses, or keywords"
     ]
 
-    sql_suggestions =
-      if sql do
+    statement_suggestions =
+      if statement do
         [
           "Review the generated SQL and fix any syntax issues",
           "Common issues: missing FROM clause, incorrect JOIN syntax, or misplaced keywords"
@@ -251,11 +251,11 @@ defmodule Lotus.AI.ErrorDetector do
         []
       end
 
-    (base_suggestions ++ sql_suggestions ++ error_suggestions)
+    (base_suggestions ++ statement_suggestions ++ error_suggestions)
     |> Enum.reject(&is_nil/1)
   end
 
-  def suggest_fixes(:type_mismatch, _error_message, _sql, _source_context) do
+  def suggest_fixes(:type_mismatch, _error_message, _statement, _source_context) do
     [
       "There's a data type mismatch in the query",
       "Check that you're comparing compatible types (e.g., don't compare strings to numbers without casting)",
@@ -264,7 +264,7 @@ defmodule Lotus.AI.ErrorDetector do
     ]
   end
 
-  def suggest_fixes(:ambiguous_column, error_message, _sql, _source_context) do
+  def suggest_fixes(:ambiguous_column, error_message, _statement, _source_context) do
     column_name = extract_identifier(error_message, "column")
 
     base_suggestions = [
@@ -284,7 +284,7 @@ defmodule Lotus.AI.ErrorDetector do
     base_suggestions ++ column_suggestions
   end
 
-  def suggest_fixes(:permission_denied, _error_message, _sql, _source_context) do
+  def suggest_fixes(:permission_denied, _error_message, _statement, _source_context) do
     [
       "You don't have permission to access this table or column",
       "Use list_tables() to see which tables are accessible",
@@ -293,7 +293,7 @@ defmodule Lotus.AI.ErrorDetector do
     ]
   end
 
-  def suggest_fixes(:unknown, error_message, _sql, _source_context) do
+  def suggest_fixes(:unknown, error_message, _statement, _source_context) do
     [
       "An unexpected error occurred: #{error_message}",
       "Review the error message carefully and adjust the query accordingly",

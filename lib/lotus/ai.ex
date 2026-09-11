@@ -30,7 +30,7 @@ defmodule Lotus.AI do
 
       # Returns:
       # %{
-      #   sql: "SELECT * FROM users WHERE created_at >= ...",
+      #   statement: "SELECT * FROM users WHERE created_at >= ...",
       #   variables: [],
       #   model: "openai:gpt-4o",
       #   usage: %{total_tokens: 150}
@@ -110,17 +110,20 @@ defmodule Lotus.AI do
     with {:ok, config} <- get_ai_config(),
          :ok <- check_feature(opts[:data_source], :generation),
          {:ok, response} <-
-           QueryGenerator.generate_sql(config.model,
-             prompt: opts[:prompt],
-             data_source: opts[:data_source],
-             conversation: opts[:conversation],
-             query_context: opts[:query_context],
-             api_key: config.api_key,
-             read_only: Keyword.get(opts, :read_only, true)
+           QueryGenerator.generate_sql(
+             config.model,
+             [
+               prompt: opts[:prompt],
+               data_source: opts[:data_source],
+               conversation: opts[:conversation],
+               query_context: opts[:query_context],
+               api_key: config.api_key,
+               read_only: Keyword.get(opts, :read_only, true)
+             ] ++ actor_opts(opts)
            ) do
       {:ok,
        %{
-         sql: response.content,
+         statement: response.content,
          variables: Map.get(response, :variables, []),
          model: response.model,
          usage: response.usage
@@ -172,15 +175,18 @@ defmodule Lotus.AI do
     with {:ok, config} <- get_ai_config(),
          :ok <- check_feature(opts[:data_source], :generation),
          {:ok, response} <-
-           QueryGenerator.generate_sql(config.model,
-             prompt: opts[:prompt],
-             data_source: opts[:data_source],
-             api_key: config.api_key,
-             read_only: Keyword.get(opts, :read_only, true)
+           QueryGenerator.generate_sql(
+             config.model,
+             [
+               prompt: opts[:prompt],
+               data_source: opts[:data_source],
+               api_key: config.api_key,
+               read_only: Keyword.get(opts, :read_only, true)
+             ] ++ actor_opts(opts)
            ) do
       {:ok,
        %{
-         sql: response.content,
+         statement: response.content,
          variables: Map.get(response, :variables, []),
          model: response.model,
          usage: response.usage
@@ -191,7 +197,7 @@ defmodule Lotus.AI do
   @doc """
   Get AI-powered optimization suggestions for a statement.
 
-  Runs the adapter's `prepare_for_analysis/2` + `query_plan/4` to get an
+  Runs the adapter's `prepare_for_analysis/2` + `query_plan/3` to get an
   execution plan (when the engine exposes one), then asks the AI to
   review the statement and the plan for potential improvements. Adapters
   that can't produce a plan still get structural suggestions.
@@ -213,11 +219,14 @@ defmodule Lotus.AI do
   def suggest_optimizations(opts) do
     with {:ok, config} <- get_ai_config(),
          :ok <- check_feature(opts[:data_source], :optimization) do
-      QueryOptimizer.suggest_optimizations(config.model,
-        statement: Keyword.fetch!(opts, :statement),
-        data_source: opts[:data_source],
-        search_path: opts[:search_path],
-        api_key: config.api_key
+      QueryOptimizer.suggest_optimizations(
+        config.model,
+        [
+          statement: Keyword.fetch!(opts, :statement),
+          data_source: opts[:data_source],
+          search_path: opts[:search_path],
+          api_key: config.api_key
+        ] ++ actor_opts(opts)
       )
     end
   end
@@ -244,7 +253,7 @@ defmodule Lotus.AI do
 
       # Explain a full query
       {:ok, result} = Lotus.AI.explain_query(
-        sql: "SELECT d.name, COUNT(o.id) FROM departments d LEFT JOIN orders o ...",
+        statement: "SELECT d.name, COUNT(o.id) FROM departments d LEFT JOIN orders o ...",
         data_source: "postgres"
       )
 
@@ -253,7 +262,7 @@ defmodule Lotus.AI do
 
       # Explain a selected fragment
       {:ok, result} = Lotus.AI.explain_query(
-        sql: "SELECT d.name FROM departments d LEFT JOIN employees e ON e.department_id = d.id",
+        statement: "SELECT d.name FROM departments d LEFT JOIN employees e ON e.department_id = d.id",
         fragment: "LEFT JOIN employees e ON e.department_id = d.id",
         data_source: "postgres"
       )
@@ -262,11 +271,14 @@ defmodule Lotus.AI do
   def explain_query(opts) do
     with {:ok, config} <- get_ai_config(),
          :ok <- check_feature(opts[:data_source], :explanation) do
-      QueryExplainer.explain_query(config.model,
-        sql: opts[:sql],
-        fragment: opts[:fragment],
-        data_source: opts[:data_source],
-        api_key: config.api_key
+      QueryExplainer.explain_query(
+        config.model,
+        [
+          statement: opts[:statement],
+          fragment: opts[:fragment],
+          data_source: opts[:data_source],
+          api_key: config.api_key
+        ] ++ actor_opts(opts)
       )
     end
   end
@@ -397,4 +409,18 @@ defmodule Lotus.AI do
 
   defp resolve_secret(value) when is_binary(value), do: value
   defp resolve_secret(_), do: nil
+
+  # Forward the caller's actor to the AI layer. Every query the AI runs and
+  # every table it lists goes through Lotus with these options, so an
+  # access-control plug or a scoped visibility resolver sees the same actor
+  # for an AI-initiated action as for one the user made directly. Keys the
+  # caller omitted are left out rather than passed as nil.
+  defp actor_opts(opts) do
+    Enum.flat_map([:context, :scope], fn key ->
+      case Keyword.fetch(opts, key) do
+        {:ok, value} -> [{key, value}]
+        :error -> []
+      end
+    end)
+  end
 end
