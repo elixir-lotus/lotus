@@ -25,10 +25,16 @@ defmodule Lotus.Preflight do
 
   Delegates resource extraction to the adapter, then validates each
   relation against the visibility rules.
+
+  `scope` is the opaque caller-supplied value handed to the visibility
+  resolver, the same one `Lotus.list_tables/2` and friends accept. Pass it
+  and a per-scope deny blocks execution; omit it and only the unscoped
+  rules apply. Without it a resolver that hides a table from one tenant
+  would hide it in the explorer while the query still returned its rows.
   """
-  @spec authorize(Adapter.t(), Statement.t(), String.t() | nil) ::
+  @spec authorize(Adapter.t(), Statement.t(), String.t() | nil, term()) ::
           :ok | {:error, String.t()}
-  def authorize(%Adapter{} = adapter, %Statement{} = statement, search_path \\ nil) do
+  def authorize(%Adapter{} = adapter, %Statement{} = statement, search_path \\ nil, scope \\ nil) do
     statement =
       if search_path,
         do: %{statement | meta: Map.put(statement.meta, :search_path, search_path)},
@@ -37,7 +43,7 @@ defmodule Lotus.Preflight do
     case Adapter.extract_accessed_resources(adapter, statement) do
       {:ok, relations} ->
         rels = MapSet.to_list(relations)
-        check_relations_visibility(rels, adapter.name)
+        check_relations_visibility(rels, adapter.name, scope)
 
       {:error, e} ->
         {:error, normalize_preflight_error(e, adapter)}
@@ -59,8 +65,9 @@ defmodule Lotus.Preflight do
     end
   end
 
-  defp check_relations_visibility(rels, source_name) do
-    {allowed, blocked} = Enum.split_with(rels, &Visibility.allowed_relation?(source_name, &1))
+  defp check_relations_visibility(rels, source_name, scope) do
+    {allowed, blocked} =
+      Enum.split_with(rels, &Visibility.allowed_relation?(source_name, &1, scope))
 
     if blocked == [] do
       Relations.put(allowed)

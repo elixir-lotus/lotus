@@ -62,4 +62,31 @@ defmodule Lotus.AI.Action do
   """
   @callback run(params :: map(), context :: map()) ::
               {:ok, map()} | {:error, term()}
+
+  @doc """
+  Turn an action's `context` into the `:context` / `:scope` options the
+  `Lotus` functions take.
+
+  An action that queries or introspects on the user's behalf must pass these
+  on, or middleware and the visibility resolver see no actor for anything the
+  AI does:
+
+      def run(params, context) do
+        Lotus.Schema.list_tables(params.data_source, Action.actor_opts(context))
+      end
+
+  Keys the caller did not supply are omitted rather than passed as `nil`, so
+  the behaviour matches calling the function without them.
+  """
+  @spec actor_opts(map()) :: keyword()
+  def actor_opts(context) when is_map(context) do
+    Enum.flat_map([:context, :scope], fn key ->
+      case Map.fetch(context, key) do
+        {:ok, value} -> [{key, value}]
+        :error -> []
+      end
+    end)
+  end
+
+  def actor_opts(_), do: []
 end

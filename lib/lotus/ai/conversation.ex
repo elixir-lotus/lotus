@@ -11,8 +11,8 @@ defmodule Lotus.AI.Conversation do
         messages: [
           %{role: :system, content: "...", timestamp: ~U[...]},
           %{role: :user, content: "Show active users", timestamp: ~U[...]},
-          %{role: :assistant, content: "I'll generate...", sql: "SELECT...", timestamp: ~U[...]},
-          %{role: :error, content: "column 'status' not found", sql: "...", timestamp: ~U[...]},
+          %{role: :assistant, content: "I'll generate...", statement: "SELECT...", timestamp: ~U[...]},
+          %{role: :error, content: "column 'status' not found", statement: "...", timestamp: ~U[...]},
           %{role: :user, content: "Fix the error", timestamp: ~U[...]}
         ],
         source_context: %{tables_analyzed: ["users", "orders"]},
@@ -36,7 +36,7 @@ defmodule Lotus.AI.Conversation do
   @type message :: %{
           role: :system | :user | :assistant | :error,
           content: String.t(),
-          sql: String.t() | nil,
+          statement: String.t() | nil,
           variables: [map()] | nil,
           timestamp: DateTime.t()
         }
@@ -93,7 +93,7 @@ defmodule Lotus.AI.Conversation do
     message = %{
       role: :user,
       content: content,
-      sql: nil,
+      statement: nil,
       variables: nil,
       timestamp: DateTime.utc_now()
     }
@@ -112,7 +112,7 @@ defmodule Lotus.AI.Conversation do
 
   - `conversation` - Current conversation state
   - `content` - Assistant's explanation or message
-  - `sql` - Generated SQL query
+  - `statement` - The generated statement
   - `variables` - Optional list of variable configurations (default: `[]`)
 
   ## Examples
@@ -122,15 +122,15 @@ defmodule Lotus.AI.Conversation do
       iex> message = List.last(conversation.messages)
       iex> message.role
       :assistant
-      iex> message.sql
+      iex> message.statement
       "SELECT * FROM users"
   """
   @spec add_assistant_response(t(), String.t(), String.t(), [map()]) :: t()
-  def add_assistant_response(conversation, content, sql, variables \\ []) do
+  def add_assistant_response(conversation, content, statement, variables \\ []) do
     message = %{
       role: :assistant,
       content: content,
-      sql: sql,
+      statement: statement,
       variables: variables,
       timestamp: DateTime.utc_now()
     }
@@ -165,16 +165,16 @@ defmodule Lotus.AI.Conversation do
   """
   @spec add_query_result(t(), {:ok, term()} | {:error, term()}) :: t()
   def add_query_result(conversation, {:error, error}) do
-    # Find the last SQL query from assistant
-    last_sql =
+    # Find the last statement the assistant produced
+    last_statement =
       conversation.messages
       |> Enum.reverse()
-      |> Enum.find_value(fn msg -> if msg.role == :assistant, do: msg.sql end)
+      |> Enum.find_value(fn msg -> if msg.role == :assistant, do: msg.statement end)
 
     error_message = %{
       role: :error,
       content: format_error(error),
-      sql: last_sql,
+      statement: last_statement,
       variables: nil,
       timestamp: DateTime.utc_now()
     }
@@ -232,8 +232,8 @@ defmodule Lotus.AI.Conversation do
           :error ->
             # Format error as user message asking for fix
             error_context =
-              if msg.sql do
-                "The previous query failed with an error:\n\nQuery: ```sql\n#{msg.sql}\n```\n\nError: #{msg.content}\n\nPlease fix this error and generate a corrected query."
+              if msg.statement do
+                "The previous query failed with an error:\n\nQuery: ```sql\n#{msg.statement}\n```\n\nError: #{msg.content}\n\nPlease fix this error and generate a corrected query."
               else
                 "An error occurred: #{msg.content}\n\nPlease help fix this."
               end
@@ -245,13 +245,14 @@ defmodule Lotus.AI.Conversation do
     [system_message] ++ context_messages ++ conversation_messages
   end
 
-  defp format_assistant_content(%{sql: sql, variables: variables, content: content})
-       when is_binary(sql) and is_list(variables) and variables != [] do
-    "#{content}\n\n```sql\n#{sql}\n```\n\n```variables\n#{Lotus.JSON.encode!(variables)}\n```"
+  defp format_assistant_content(%{statement: statement, variables: variables, content: content})
+       when is_binary(statement) and is_list(variables) and variables != [] do
+    "#{content}\n\n```sql\n#{statement}\n```\n\n```variables\n#{Lotus.JSON.encode!(variables)}\n```"
   end
 
-  defp format_assistant_content(%{sql: sql, content: content}) when is_binary(sql) do
-    "#{content}\n\n```sql\n#{sql}\n```"
+  defp format_assistant_content(%{statement: statement, content: content})
+       when is_binary(statement) do
+    "#{content}\n\n```sql\n#{statement}\n```"
   end
 
   defp format_assistant_content(%{content: content}), do: content
@@ -346,13 +347,13 @@ defmodule Lotus.AI.Conversation do
 
   defp build_query_context_messages(nil), do: []
 
-  defp build_query_context_messages(%{sql: sql, variables: variables})
-       when is_binary(sql) and sql != "" do
+  defp build_query_context_messages(%{statement: statement, variables: variables})
+       when is_binary(statement) and statement != "" do
     content =
       if is_list(variables) and variables != [] do
-        "The user already has this query in their editor:\n\n```sql\n#{sql}\n```\n\n```variables\n#{Lotus.JSON.encode!(variables)}\n```"
+        "The user already has this query in their editor:\n\n```sql\n#{statement}\n```\n\n```variables\n#{Lotus.JSON.encode!(variables)}\n```"
       else
-        "The user already has this query in their editor:\n\n```sql\n#{sql}\n```"
+        "The user already has this query in their editor:\n\n```sql\n#{statement}\n```"
       end
 
     [

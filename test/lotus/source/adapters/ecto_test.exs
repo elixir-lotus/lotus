@@ -363,13 +363,6 @@ defmodule Lotus.Source.Adapters.EctoTest do
       error = %RuntimeError{message: "boom"}
       assert is_binary(Adapter.format_error(adapter, error))
     end
-
-    test "handled_errors/0 returns list of exception modules" do
-      adapter = EctoAdapter.wrap("main", Repo)
-      errors = Adapter.handled_errors(adapter)
-      assert is_list(errors)
-      assert Postgrex.Error in errors
-    end
   end
 
   describe "validate_statement/3" do
@@ -513,7 +506,7 @@ defmodule Lotus.Source.Adapters.EctoTest do
                )
     end
 
-    test "returns the prepared statement validatable by query_plan/4" do
+    test "returns the prepared statement validatable by query_plan/3" do
       adapter = EctoAdapter.wrap("main", Repo)
 
       {:ok, prepared} =
@@ -522,7 +515,7 @@ defmodule Lotus.Source.Adapters.EctoTest do
           Statement.new("SELECT id FROM test_users WHERE id = {{id}} [[AND name = {{name}}]]")
         )
 
-      assert {:ok, _plan} = Adapter.query_plan(adapter, prepared.body, prepared.params, [])
+      assert {:ok, _plan} = Adapter.query_plan(adapter, prepared, [])
     end
   end
 end

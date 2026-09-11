@@ -18,9 +18,9 @@ defmodule Lotus.Telemetry do
 
   **Metadata:**
 
-    * `:repo` - The Ecto repo module
-    * `:sql` - The SQL statement being executed
-    * `:params` - The query parameters
+    * `:source` - The data source name (e.g. `"main"`, `"warehouse"`)
+    * `:statement` - The `Lotus.Query.Statement` being executed. Its `:body`
+      is the adapter-native payload and `:params` the bound values.
     * `:context` - The caller-supplied context (or `nil`)
 
   ### `[:lotus, :query, :stop]`
@@ -34,9 +34,8 @@ defmodule Lotus.Telemetry do
 
   **Metadata:**
 
-    * `:repo` - The Ecto repo module
-    * `:sql` - The SQL statement that was executed
-    * `:params` - The query parameters
+    * `:source` - The data source name
+    * `:statement` - The `Lotus.Query.Statement` that was executed
     * `:context` - The caller-supplied context (or `nil`)
     * `:result` - The `Lotus.Result` struct
 
@@ -50,9 +49,8 @@ defmodule Lotus.Telemetry do
 
   **Metadata:**
 
-    * `:repo` - The Ecto repo module
-    * `:sql` - The SQL statement that was executed
-    * `:params` - The query parameters
+    * `:source` - The data source name
+    * `:statement` - The `Lotus.Query.Statement` that was executed
     * `:context` - The caller-supplied context (or `nil`)
     * `:kind` - The kind of exception (`:error`, `:exit`, or `:throw`)
     * `:reason` - The exception or error reason

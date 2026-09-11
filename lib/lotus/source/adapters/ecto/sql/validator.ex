@@ -8,6 +8,7 @@ defmodule Lotus.Source.Adapters.Ecto.SQL.Validator do
   """
 
   alias Lotus.Query.OptionalClause
+  alias Lotus.Query.Statement
   alias Lotus.Source
   alias Lotus.Source.Adapter
   alias Lotus.Variables
@@ -44,7 +45,7 @@ defmodule Lotus.Source.Adapters.Ecto.SQL.Validator do
     # through Source.name_from_module!/1 first.
     adapter = resolve_adapter(data_source)
 
-    case Adapter.query_plan(adapter, neutralized, [], []) do
+    case Adapter.query_plan(adapter, Statement.new(neutralized), []) do
       {:ok, _plan} -> :ok
       {:error, reason} when is_binary(reason) -> {:error, reason}
       {:error, reason} -> {:error, inspect(reason)}

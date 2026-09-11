@@ -1,5 +1,15 @@
 defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
-  @moduledoc false
+  @moduledoc """
+  SQLite dialect for `Lotus.Source.Adapters.Ecto`.
+
+  SQLite has a flat namespace: `list_schemas/1` returns `[]` and every
+  relation is `{nil, table}`. Query plans come from `EXPLAIN QUERY PLAN`.
+  Neither a session timeout nor a search path exists, so both hooks are
+  omitted.
+
+  Read alongside `Lotus.Source.Adapters.Ecto.Dialect` when writing a dialect
+  for another SQL engine — this module is the reference implementation.
+  """
 
   @behaviour Lotus.Source.Adapters.Ecto.Dialect
 
@@ -83,12 +93,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def set_statement_timeout(_repo, _timeout_ms), do: :ok
-
-  @impl true
-  def set_search_path(_repo, _search_path), do: :ok
-
-  @impl true
   def format_error(%{__struct__: mod} = e) when mod == Exqlite.Error do
     "SQLite Error: " <> (Map.get(e, :message) || Exception.message(e))
   end
@@ -102,9 +106,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   def limit_offset_placeholders(_limit_idx, _offset_idx) do
     {"?", "?"}
   end
-
-  @impl true
-  def handled_errors, do: [Exqlite.Error]
 
   @impl true
   def query_language, do: "sql:sqlite"
@@ -139,8 +140,8 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def limit_query(statement, limit) do
-    "SELECT * FROM (#{statement}) AS limited_query LIMIT #{limit}"
+  def limit_query(%Statement{body: body} = statement, limit) do
+    %{statement | body: "SELECT * FROM (#{body}) AS limited_query LIMIT #{limit}"}
   end
 
   @impl true
@@ -230,7 +231,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def query_plan(repo, sql, params, _opts) do
+  def query_plan(repo, %Statement{body: sql, params: params}, _opts) do
     explain_sql = "EXPLAIN QUERY PLAN " <> sql
 
     case repo.query(explain_sql, params) do

@@ -8,6 +8,7 @@ defmodule Lotus.Source do
   """
 
   alias Lotus.Config
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
 
   # ---------------------------------------------------------------------------
@@ -146,7 +147,7 @@ defmodule Lotus.Source do
   @doc """
   Wrap a statement with a limit clause using the source's syntax.
   """
-  @spec limit_query(Adapter.t() | String.t(), String.t(), pos_integer()) :: String.t()
+  @spec limit_query(Adapter.t() | String.t(), Statement.t(), pos_integer()) :: Statement.t()
   def limit_query(%Adapter{} = adapter, statement, limit),
     do: Adapter.limit_query(adapter, statement, limit)
 

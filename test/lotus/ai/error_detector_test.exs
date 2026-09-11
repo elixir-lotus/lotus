@@ -71,7 +71,7 @@ defmodule Lotus.AI.ErrorDetectorTest do
 
       assert result.error_type == :column_not_found
       assert result.error_message == "column 'status' does not exist"
-      assert result.failed_sql == "SELECT status FROM users"
+      assert result.failed_statement == "SELECT status FROM users"
       assert result.suggestions != []
       assert Enum.any?(result.suggestions, &String.contains?(&1, "describe_table"))
     end
@@ -131,7 +131,7 @@ defmodule Lotus.AI.ErrorDetectorTest do
       result = ErrorDetector.analyze_error("some error", nil, %{})
 
       assert result.error_type == :unknown
-      assert result.failed_sql == nil
+      assert result.failed_statement == nil
       assert result.suggestions != []
     end
   end

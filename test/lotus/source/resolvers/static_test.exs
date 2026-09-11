@@ -90,14 +90,14 @@ defmodule Lotus.Source.Resolvers.StaticTest do
       assert adapter.name == "sqlite"
     end
 
-    test "unloaded atoms in both positions fall through to default" do
-      assert {:ok, adapter} = Static.resolve(:typoed_one, :typoed_two)
-      assert adapter.name == "postgres"
+    test "unloaded atoms in both positions are not found" do
+      # Silently answering with the default source would run the query
+      # against the wrong database.
+      assert {:error, :not_found} = Static.resolve(:typoed_one, :typoed_two)
     end
 
-    test "non-atom, non-string values fall through to default" do
-      assert {:ok, adapter} = Static.resolve(123, :"Elixir.Nonexistent.Module")
-      assert adapter.name == "postgres"
+    test "non-atom, non-string values are not found" do
+      assert {:error, :not_found} = Static.resolve(123, :"Elixir.Nonexistent.Module")
     end
   end
 
@@ -154,6 +154,126 @@ defmodule Lotus.Source.Resolvers.StaticTest do
       # Default is "postgres" per test config
       assert name == "postgres"
       assert adapter.state == Lotus.Test.Repo
+    end
+  end
+
+  describe "unresolvable source names" do
+    test "a typo'd atom source name is an error, not a fall-through to the default" do
+      assert {:error, :not_found} = Static.resolve(:postgress, nil)
+    end
+
+    test "a typo'd atom as the query's stored data_source is an error" do
+      assert {:error, :not_found} = Static.resolve(nil, :postgress)
+    end
+
+    test "an unconfigured string source name is an error" do
+      assert {:error, :not_found} = Static.resolve("warehouse", nil)
+    end
+
+    test "only nil on both sides selects the default source" do
+      assert {:ok, adapter} = Static.resolve(nil, nil)
+      assert adapter.name == "postgres"
+    end
+  end
+
+  describe "canonical %{adapter: Module} entries" do
+    setup do
+      Mimic.copy(Config)
+      :ok
+    end
+
+    defmodule CanonicalAdapter do
+      @moduledoc false
+
+      def wrap(name, opts) do
+        %Lotus.Source.Adapter{
+          name: name,
+          module: __MODULE__,
+          state: opts,
+          source_type: :other
+        }
+      end
+    end
+
+    test "an entry naming its adapter resolves without probing can_handle?/1" do
+      entry = %{adapter: CanonicalAdapter, url: "https://example.test"}
+
+      Config
+      |> stub(:data_sources, fn -> %{"api" => entry} end)
+      |> stub(:source_adapters, fn -> [] end)
+
+      assert [adapter] = Static.list_sources()
+      assert adapter.name == "api"
+      assert adapter.module == CanonicalAdapter
+      assert adapter.state == entry
+    end
+
+    test "a named adapter that is not loaded raises a pointed error" do
+      Config
+      |> stub(:data_sources, fn -> %{"api" => %{adapter: NoSuchAdapterModule}} end)
+      |> stub(:source_adapters, fn -> [] end)
+
+      assert_raise ArgumentError, ~r/NoSuchAdapterModule/, fn ->
+        Static.list_sources()
+      end
+    end
+  end
+
+  describe "ambiguous entries" do
+    setup do
+      Mimic.copy(Config)
+      :ok
+    end
+
+    defmodule GreedyAdapterA do
+      @moduledoc false
+      def can_handle?(%{kind: :shared}), do: true
+      def can_handle?(_), do: false
+
+      def wrap(name, opts),
+        do: %Lotus.Source.Adapter{
+          name: name,
+          module: __MODULE__,
+          state: opts,
+          source_type: :other
+        }
+    end
+
+    defmodule GreedyAdapterB do
+      @moduledoc false
+      def can_handle?(%{kind: :shared}), do: true
+      def can_handle?(_), do: false
+
+      def wrap(name, opts),
+        do: %Lotus.Source.Adapter{
+          name: name,
+          module: __MODULE__,
+          state: opts,
+          source_type: :other
+        }
+    end
+
+    test "two adapters claiming the same entry raise instead of silently picking one" do
+      Config
+      |> stub(:data_sources, fn -> %{"shared" => %{kind: :shared}} end)
+      |> stub(:source_adapters, fn -> [GreedyAdapterA, GreedyAdapterB] end)
+
+      assert_raise ArgumentError, ~r/more than one source adapter/i, fn ->
+        Static.list_sources()
+      end
+    end
+
+    test "the error names every adapter that claimed the entry" do
+      Config
+      |> stub(:data_sources, fn -> %{"shared" => %{kind: :shared}} end)
+      |> stub(:source_adapters, fn -> [GreedyAdapterA, GreedyAdapterB] end)
+
+      error =
+        assert_raise ArgumentError, fn -> Static.list_sources() end
+
+      assert error.message =~ "GreedyAdapterA"
+      assert error.message =~ "GreedyAdapterB"
+      assert error.message =~ "adapter:"
     end
   end
 

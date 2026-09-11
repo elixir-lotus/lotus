@@ -1,5 +1,12 @@
 defmodule Lotus.JSON do
-  @moduledoc false
+  @moduledoc """
+  JSON encoding and decoding used across Lotus.
+
+  Delegates to Elixir's built-in `JSON` module on v1.18 and later, falling
+  back to `Jason` on earlier versions. Adapters that inline values into a
+  statement body should escape through here rather than interpolating raw
+  strings.
+  """
 
   # Delegates to JSON in Elixir v1.18+ or Jason for earlier versions
 

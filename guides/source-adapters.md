@@ -200,18 +200,18 @@ defmodule MyApp.Dialects.MSSQL do
   def query_language, do: "sql:tsql"
 
   @impl true
-  def limit_query(statement, limit),
-    do: "SELECT TOP #{limit} * FROM (#{statement}) AS t"
+  def limit_query(%Statement{body: body} = statement, limit),
+    do: %{statement | body: "SELECT TOP #{limit} * FROM (#{body}) AS t"}
 
   # -- Transaction & session --------------------------------------------------
   # execute_in_transaction/3, set_statement_timeout/2, set_search_path/2
 
   # -- Error handling ---------------------------------------------------------
-  # format_error/1, handled_errors/0
+  # format_error/1
 
   # -- SQL generation ---------------------------------------------------------
   # quote_identifier/1, param_placeholder/3, limit_offset_placeholders/2,
-  # apply_filters/2, apply_sorts/2, query_plan/4
+  # apply_filters/2, apply_sorts/2, query_plan/3
 
   # -- Visibility & deny rules -----------------------------------------------
   # builtin_denies/1, builtin_schema_denies/1, default_schemas/1
@@ -230,6 +230,11 @@ end
 Callbacks are organized by category. All required callbacks must be
 implemented; optional callbacks have sensible defaults.
 
+`set_statement_timeout/2` and `set_search_path/2` are optional. Engines with
+no session-level timeout or schema search path omit them entirely rather than
+defining no-op clauses; Lotus falls back to the driver-level `:timeout` and
+ignores a caller-supplied `:search_path` for that source.
+
 **Required:**
 
 | Callback | Category |
@@ -239,16 +244,13 @@ implemented; optional callbacks have sensible defaults.
 | `query_language/0` | Identity |
 | `limit_query/2` | Identity |
 | `execute_in_transaction/3` | Transaction & session |
-| `set_statement_timeout/2` | Transaction & session |
-| `set_search_path/2` | Transaction & session |
 | `format_error/1` | Error handling |
-| `handled_errors/0` | Error handling |
 | `quote_identifier/1` | SQL generation |
 | `param_placeholder/3` | SQL generation |
 | `limit_offset_placeholders/2` | SQL generation |
 | `apply_filters/2` | SQL generation |
 | `apply_sorts/2` | SQL generation |
-| `query_plan/4` | SQL generation |
+| `query_plan/3` | SQL generation |
 | `builtin_denies/1` | Visibility & deny rules |
 | `builtin_schema_denies/1` | Visibility & deny rules |
 | `default_schemas/1` | Visibility & deny rules |
@@ -348,7 +350,7 @@ defmodule MyApp.Adapters.Echo do
   def apply_sorts(_state, statement, _sorts), do: statement
 
   @impl true
-  def query_plan(_state, _sql, _params, _opts), do: {:ok, nil}
+  def query_plan(_state, _statement, _opts), do: {:ok, nil}
 
   # -- Safety & visibility ----------------------------------------------------
   @impl true
@@ -371,9 +373,6 @@ defmodule MyApp.Adapters.Echo do
   @impl true
   def format_error(_state, error), do: inspect(error)
 
-  @impl true
-  def handled_errors(_state), do: []
-
   # -- Identity & presentation ------------------------------------------------
   @impl true
   def source_type(_state), do: :echo
@@ -383,9 +382,6 @@ defmodule MyApp.Adapters.Echo do
 
   @impl true
   def query_language(_state), do: "echo:dsl"
-
-  @impl true
-  def limit_query(_state, statement, _limit), do: statement
 
   @impl true
   def editor_config(_state),
@@ -425,14 +421,27 @@ legitimately cannot support a feature.
 | `substitute_variable/5` | `{:error, :unsupported}` | Support `{{var}}` in stored queries. **Security boundary — see below.** |
 | `substitute_list_variable/5` | `{:error, :unsupported}` | Support list variables. |
 | `validate_statement/3` | `:ok` (trust-on-execute) | Validate a draft via an engine's `_validate` endpoint without executing. |
-| `parse_qualified_name/2` | `{:ok, [name]}` | Adapters with multi-level namespace hierarchies (`schema.table`, `db.collection`). |
+| `parse_qualified_name/2` | `{:ok, [name]}` | Adapters with a two-level namespace (`schema.table`, `db.collection`). See [Relations are two-level](#relations-are-two-level). |
 | `validate_identifier/3` | `:ok` (permissive) | Enforce your query language's identifier grammar. |
 | `supported_filter_operators/1` | all of `Lotus.Query.Filter.operators/0` | Declare the subset of filter operators your `apply_filters/3` actually handles. |
 | `extract_accessed_resources/2` | `{:unrestricted, reason}` | Return `{:ok, MapSet}` of accessed `{schema, table}` tuples so visibility rules apply. **See below.** |
 | `ai_context/1` | `{:error, :ai_not_supported}` | Opt into Lotus.AI — language identifier, example query, syntax notes, error patterns, capability gates. |
-| `prepare_for_analysis/2` | `{:error, :unsupported}` | Produce a runnable statement for `query_plan/4` analysis — strips `[[ ... ]]`, neutralizes `{{var}}`. |
+| `prepare_for_analysis/2` | `{:error, :unsupported}` | Produce a runnable statement for `query_plan/3` analysis — strips `[[ ... ]]`, neutralizes `{{var}}`. |
 | `hierarchy_label/1` | `"Tables"` | UI label for the top-level hierarchy (e.g. `"Indices"` for Elasticsearch). |
 | `example_query/3` | generic `SELECT` | Source-native example for the query editor's placeholder text. |
+| `table_stats/3` | `{:error, :unsupported}` | Relation statistics. Without it, core falls back to `SELECT COUNT(*)`, which only suits SQL sources. |
+| `limit_query/3` | statement unchanged | Cap a statement at a row limit for the UI's preview affordance — `%Statement{}` in, `%Statement{}` out. |
+| `list_schemas/1` | `{:ok, []}` | Sources with a namespace level. Flat sources omit it. |
+| `resolve_table_namespace/3` | `{:ok, nil}` | Resolve which namespace holds a table. |
+| `default_schemas/1` | `[]` | Namespaces browsed when the caller names none. |
+| `builtin_schema_denies/1` | `[]` | Namespaces always hidden (system catalogues). |
+| `quote_identifier/2` | identifier unchanged | Quote an identifier. Languages without quoting omit it. |
+| `apply_filters/3` | statement unchanged | Bake runtime filters into the statement. |
+| `apply_sorts/3` | statement unchanged | Bake runtime sorts into the statement. |
+| `query_plan/3` | `{:ok, nil}` | Execution plan, when the engine exposes one. |
+| `supports_feature?/2` | `false` | Declare capabilities. See `t:Lotus.Source.Adapter.feature/0`. |
+| `db_type_to_lotus_type/2` | `:text` | Map engine column types onto Lotus value types. |
+| `editor_config/1` | empty editor shape | Keywords, types and functions for editor completions. |
 
 ## The Security Boundaries
 
@@ -575,6 +584,34 @@ Fields:
 For large function lists, extract into a dedicated `EditorConfig` submodule
 (see `lotus_clickhouse` for an example with 300+ functions).
 
+## Relations are Two-Level
+
+Everywhere Lotus names a resource it uses exactly two levels:
+`{schema | nil, table}`. Visibility rules, deny lists, `describe_table/3`,
+`resolve_table_namespace/3`, the preflight relation set and
+`extract_accessed_resources/2` all speak this shape, and core never grows a
+third element.
+
+`nil` in the first position means unqualified — either a source with no
+namespace concept (SQLite tables, Elasticsearch indices) or a name the
+caller left unqualified.
+
+If your engine has a **deeper** hierarchy, flatten everything above the leaf
+into the schema part, keeping your query language's own separator:
+
+| Engine shape | Lotus relation |
+|---|---|
+| `schema.table` | `{"schema", "table"}` |
+| flat (`index`) | `{nil, "index"}` |
+| `project.dataset.table` | `{"project.dataset", "table"}` |
+| `catalog.schema.table` | `{"catalog.schema", "table"}` |
+
+Your adapter owns the flattening, in `parse_qualified_name/2` and
+`resolve_table_namespace/3`. Core treats the schema part as an opaque string
+and compares it verbatim against visibility rules — so a deny rule a host
+writes has to match the spelling your adapter emits. Document that spelling
+in your adapter's README.
+
 ## A Note on the "schema" Word
 
 Lotus's surface uses "schema" for two distinct concepts historically — in
@@ -617,7 +654,7 @@ established meaning and are kept for recognizability:
 - `Lotus.AI.Conversation.schema_context` field → `source_context`
   (internal). The field stores tables the AI has analyzed — "source
   context" is the accurate term now that non-SQL sources are first-class.
-- `Lotus.AI.Conversation.update_schema_context/2` →
+- `Lotus.AI.Conversation.update_source_context/2` →
   `update_source_context/2` (internal).
 - Optimization prompt type enum: `"schema"` → `"structure"` in suggestion
   JSON contract. LLMs now respond with

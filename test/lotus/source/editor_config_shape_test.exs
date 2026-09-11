@@ -48,7 +48,7 @@ defmodule Lotus.Source.EditorConfigShapeTest do
         def apply_sorts(_state, %Statement{} = s, _sorts), do: s
 
         @impl true
-        def query_plan(_state, _sql, _params, _opts), do: {:ok, nil}
+        def query_plan(_state, _statement, _opts), do: {:ok, nil}
 
         @impl true
         def builtin_denies(_state), do: []
@@ -69,13 +69,7 @@ defmodule Lotus.Source.EditorConfigShapeTest do
         def format_error(_state, err), do: inspect(err)
 
         @impl true
-        def handled_errors(_state), do: []
-
-        @impl true
         def supports_feature?(_state, _feature), do: false
-
-        @impl true
-        def limit_query(_state, stmt, limit), do: "#{stmt} LIMIT #{limit}"
 
         @impl true
         def db_type_to_lotus_type(_state, _type), do: :text
