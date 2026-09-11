@@ -52,7 +52,7 @@ defmodule Lotus.AITest do
 
       # Mock schema introspection
       stub(Lotus.Source, :source_type, fn _ -> :postgres end)
-      stub(Lotus.Schema, :list_tables, fn _ -> {:ok, table_list()} end)
+      stub(Lotus.Schema, :list_tables, fn _, _opts -> {:ok, table_list()} end)
 
       set_ai_config(enabled: true, api_key: "sk-test")
 
@@ -190,7 +190,7 @@ defmodule Lotus.AITest do
       setup_mocks()
 
       stub(Lotus.Source, :source_type, fn _ -> :postgres end)
-      stub(Lotus.Schema, :list_tables, fn _ -> {:ok, table_list()} end)
+      stub(Lotus.Schema, :list_tables, fn _, _opts -> {:ok, table_list()} end)
 
       set_ai_config(enabled: true, api_key: "sk-test")
 

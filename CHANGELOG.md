@@ -318,6 +318,18 @@
   also present (caller-supplied opaque value, threaded from the
   `run_query/2` + `run_statement/3` options, #175).
 
+- **The AI layer carries the caller's actor.** `Lotus.AI.generate_query/1`,
+  `generate_query_with_context/1`, `explain_query/1` and
+  `suggest_optimizations/1` accept `:context` and `:scope`, and thread them
+  into every query and introspection call the AI makes.
+  `Lotus.AI.Tool.from_action/2` gained a `:context` option, which becomes
+  the second argument to the action's `run/2`; `Lotus.AI.Action.actor_opts/1`
+  turns it back into the `:context` / `:scope` options the `Lotus` functions
+  take. Previously every AI-initiated action reached middleware and the
+  visibility resolver with no actor, so the AI could see more than the user
+  it was acting for. Custom actions that ignore their `context` argument are
+  unaffected.
+
 - **AI map keys renamed from SQL-specific names.**
   `Lotus.AI.generate_query/1` and `generate_query_with_context/1` return
   `:statement` instead of `:sql`; `Lotus.AI.explain_query/1` takes

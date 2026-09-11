@@ -110,13 +110,16 @@ defmodule Lotus.AI do
     with {:ok, config} <- get_ai_config(),
          :ok <- check_feature(opts[:data_source], :generation),
          {:ok, response} <-
-           QueryGenerator.generate_sql(config.model,
-             prompt: opts[:prompt],
-             data_source: opts[:data_source],
-             conversation: opts[:conversation],
-             query_context: opts[:query_context],
-             api_key: config.api_key,
-             read_only: Keyword.get(opts, :read_only, true)
+           QueryGenerator.generate_sql(
+             config.model,
+             [
+               prompt: opts[:prompt],
+               data_source: opts[:data_source],
+               conversation: opts[:conversation],
+               query_context: opts[:query_context],
+               api_key: config.api_key,
+               read_only: Keyword.get(opts, :read_only, true)
+             ] ++ actor_opts(opts)
            ) do
       {:ok,
        %{
@@ -172,11 +175,14 @@ defmodule Lotus.AI do
     with {:ok, config} <- get_ai_config(),
          :ok <- check_feature(opts[:data_source], :generation),
          {:ok, response} <-
-           QueryGenerator.generate_sql(config.model,
-             prompt: opts[:prompt],
-             data_source: opts[:data_source],
-             api_key: config.api_key,
-             read_only: Keyword.get(opts, :read_only, true)
+           QueryGenerator.generate_sql(
+             config.model,
+             [
+               prompt: opts[:prompt],
+               data_source: opts[:data_source],
+               api_key: config.api_key,
+               read_only: Keyword.get(opts, :read_only, true)
+             ] ++ actor_opts(opts)
            ) do
       {:ok,
        %{
@@ -213,11 +219,14 @@ defmodule Lotus.AI do
   def suggest_optimizations(opts) do
     with {:ok, config} <- get_ai_config(),
          :ok <- check_feature(opts[:data_source], :optimization) do
-      QueryOptimizer.suggest_optimizations(config.model,
-        statement: Keyword.fetch!(opts, :statement),
-        data_source: opts[:data_source],
-        search_path: opts[:search_path],
-        api_key: config.api_key
+      QueryOptimizer.suggest_optimizations(
+        config.model,
+        [
+          statement: Keyword.fetch!(opts, :statement),
+          data_source: opts[:data_source],
+          search_path: opts[:search_path],
+          api_key: config.api_key
+        ] ++ actor_opts(opts)
       )
     end
   end
@@ -262,11 +271,14 @@ defmodule Lotus.AI do
   def explain_query(opts) do
     with {:ok, config} <- get_ai_config(),
          :ok <- check_feature(opts[:data_source], :explanation) do
-      QueryExplainer.explain_query(config.model,
-        statement: opts[:statement],
-        fragment: opts[:fragment],
-        data_source: opts[:data_source],
-        api_key: config.api_key
+      QueryExplainer.explain_query(
+        config.model,
+        [
+          statement: opts[:statement],
+          fragment: opts[:fragment],
+          data_source: opts[:data_source],
+          api_key: config.api_key
+        ] ++ actor_opts(opts)
       )
     end
   end
@@ -397,4 +409,18 @@ defmodule Lotus.AI do
 
   defp resolve_secret(value) when is_binary(value), do: value
   defp resolve_secret(_), do: nil
+
+  # Forward the caller's actor to the AI layer. Every query the AI runs and
+  # every table it lists goes through Lotus with these options, so an
+  # access-control plug or a scoped visibility resolver sees the same actor
+  # for an AI-initiated action as for one the user made directly. Keys the
+  # caller omitted are left out rather than passed as nil.
+  defp actor_opts(opts) do
+    Enum.flat_map([:context, :scope], fn key ->
+      case Keyword.fetch(opts, key) do
+        {:ok, value} -> [{key, value}]
+        :error -> []
+      end
+    end)
+  end
 end

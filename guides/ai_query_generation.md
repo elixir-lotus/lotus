@@ -195,6 +195,35 @@ The AI checks first:
 WHERE status IN ('open', 'overdue')  -- ✅ uses actual values
 ```
 
+## Acting on Behalf of a User
+
+Every AI action — listing tables, describing a table, sampling column values,
+running a generated query — goes through the same `Lotus` functions a direct
+call would. Pass `:context` and `:scope` so those calls carry the actor:
+
+```elixir
+Lotus.AI.generate_query(
+  prompt: "Show orders from this month",
+  data_source: "my_repo",
+  context: %{user_id: current_user.id},
+  scope: %{tenant_id: current_user.tenant_id}
+)
+```
+
+`:context` reaches your middleware; `:scope` reaches your visibility
+resolver. Without them the AI runs unscoped, which means it can see tables
+your user cannot — and any access-control plug you wrote sees `nil` for
+every AI-initiated action.
+
+Custom actions receive the same map as the second argument to `run/2`, and
+should pass it on:
+
+```elixir
+def run(params, context) do
+  Lotus.Schema.list_tables(params.data_source, Lotus.AI.Action.actor_opts(context))
+end
+```
+
 ## Best Practices
 
 ### 1. Use Descriptive Prompts

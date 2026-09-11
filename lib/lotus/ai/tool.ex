@@ -35,10 +35,17 @@ defmodule Lotus.AI.Tool do
   - `:bind` - Map of parameter values to inject into every call.
     Bound parameters are removed from the tool's parameter schema
     so the LLM doesn't see or fill them.
+  - `:context` - Map handed to the action's `run/2` as its second argument.
+    Carries the actor on whose behalf the AI is working — typically
+    `%{context: ..., scope: ...}` — so actions can pass it on to the
+    `Lotus` calls they make. Without it every AI-initiated query and
+    introspection call reaches middleware and the visibility resolver with
+    no actor, and the AI sees more than the user it is acting for.
   """
   @spec from_action(module(), keyword()) :: map()
   def from_action(action_module, opts \\ []) do
     bound_params = Keyword.get(opts, :bind, %{})
+    action_context = Keyword.get(opts, :context, %{})
 
     parameter_schema =
       action_module.schema()
@@ -52,7 +59,7 @@ defmodule Lotus.AI.Tool do
       callback: fn llm_args ->
         merged_params = merge_params(llm_args, bound_params)
 
-        case action_module.run(merged_params, %{}) do
+        case action_module.run(merged_params, action_context) do
           {:ok, result} ->
             {:ok, Lotus.JSON.encode!(result)}
 

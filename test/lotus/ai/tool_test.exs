@@ -6,7 +6,7 @@ defmodule Lotus.AI.ToolTest do
 
   describe "from_action/2" do
     test "converts an action module to a ReqLLM tool" do
-      stub(Lotus.Schema, :list_schemas, fn _source ->
+      stub(Lotus.Schema, :list_schemas, fn _source, _opts ->
         {:ok, ["public", "reporting"]}
       end)
 
@@ -37,7 +37,7 @@ defmodule Lotus.AI.ToolTest do
     end
 
     test "callback injects bound params and calls action" do
-      stub(Lotus.Schema, :list_tables, fn source ->
+      stub(Lotus.Schema, :list_tables, fn source, _opts ->
         assert source == "postgres"
         {:ok, [{"public", "users"}]}
       end)
@@ -50,7 +50,7 @@ defmodule Lotus.AI.ToolTest do
     end
 
     test "callback handles LLM args with string keys" do
-      stub(Lotus.Schema, :describe_table, fn _source, _table ->
+      stub(Lotus.Schema, :describe_table, fn _source, _table, _opts ->
         {:ok, [%{name: "id", type: "integer", nullable: false, primary_key: true}]}
       end)
 
@@ -62,7 +62,7 @@ defmodule Lotus.AI.ToolTest do
     end
 
     test "callback returns JSON error on action failure" do
-      stub(Lotus.Schema, :list_schemas, fn _source ->
+      stub(Lotus.Schema, :list_schemas, fn _source, _opts ->
         {:error, "Connection refused"}
       end)
 
@@ -74,7 +74,7 @@ defmodule Lotus.AI.ToolTest do
     end
 
     test "callback handles unknown LLM parameter keys gracefully" do
-      stub(Lotus.Schema, :list_schemas, fn _source ->
+      stub(Lotus.Schema, :list_schemas, fn _source, _opts ->
         {:ok, ["public"]}
       end)
 

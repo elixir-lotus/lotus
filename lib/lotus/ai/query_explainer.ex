@@ -45,7 +45,7 @@ defmodule Lotus.AI.QueryExplainer do
         Explanation.user_prompt(statement)
       end
 
-    tools = build_tools(data_source)
+    tools = build_tools(data_source, actor_from(opts))
     messages = build_messages(system_prompt, user_prompt)
     context = ReqLLM.Context.new(messages)
 
@@ -53,10 +53,21 @@ defmodule Lotus.AI.QueryExplainer do
     |> handle_response(model_string)
   end
 
-  defp build_tools(data_source) do
+  defp build_tools(data_source, actor) do
     [
-      Tool.from_action(Actions.DescribeTable, bind: %{data_source: data_source})
+      Tool.from_action(Actions.DescribeTable, bind: %{data_source: data_source}, context: actor)
     ]
+  end
+
+  # The actor the AI is working for, in the shape actions expect. Keys the
+  # caller did not supply are left out rather than passed as nil.
+  defp actor_from(opts) do
+    Enum.reduce([:context, :scope], %{}, fn key, acc ->
+      case Keyword.fetch(opts, key) do
+        {:ok, value} -> Map.put(acc, key, value)
+        :error -> acc
+      end
+    end)
   end
 
   defp build_messages(system_prompt, user_prompt) do
