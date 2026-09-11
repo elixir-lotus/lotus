@@ -77,7 +77,7 @@ defmodule Lotus.MixProject do
       maintainers: ["Arda Can Tugay", "Rui Freitas"],
       licenses: ["MIT"],
       links: %{GitHub: @source_url},
-      files: ~w[lib .formatter.exs mix.exs README* LICENSE*]
+      files: ~w[lib .formatter.exs mix.exs README* LICENSE* CHANGELOG*]
     ]
   end
 
@@ -95,6 +95,7 @@ defmodule Lotus.MixProject do
       main: "readme",
       source_ref: "v#{@version}",
       extras: docs_guides(),
+      skip_undefined_reference_warnings_on: ["CHANGELOG.md", "guides/upgrading-to-v1.md"],
       groups_for_modules: [
         "Core API": [Lotus, Lotus.Config, Lotus.Value],
         "Query Storage": [Lotus.Storage, Lotus.Storage.Query, Lotus.Storage.QueryVariable],
@@ -132,6 +133,7 @@ defmodule Lotus.MixProject do
   defp docs_guides do
     [
       "README.md",
+      "CHANGELOG.md",
       "guides/overview.md",
       "guides/installation.md",
       "guides/getting-started.md",
