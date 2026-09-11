@@ -11,7 +11,7 @@ defmodule Lotus.AI.Actions.ExecuteStatementTest do
 
   describe "run/2" do
     test "executes SQL and returns result with metadata" do
-      stub(Lotus, :run_statement, fn _sql, _params, _opts ->
+      stub(Lotus, :run_statement, fn _statement, _params, _opts ->
         {:ok,
          Result.new(["region", "revenue"], [["US", 50_000], ["EU", 30_000]],
            num_rows: 2,
@@ -22,7 +22,7 @@ defmodule Lotus.AI.Actions.ExecuteStatementTest do
       assert {:ok, result} =
                ExecuteStatement.run(
                  %{
-                   sql: "SELECT region, SUM(amount) as revenue FROM orders GROUP BY region",
+                   statement: "SELECT region, SUM(amount) as revenue FROM orders GROUP BY region",
                    data_source: "postgres",
                    label: "Revenue by region"
                  },
@@ -41,13 +41,17 @@ defmodule Lotus.AI.Actions.ExecuteStatementTest do
     test "truncates large result sets for LLM context" do
       rows = for i <- 1..100, do: [i, "row_#{i}"]
 
-      stub(Lotus, :run_statement, fn _sql, _params, _opts ->
+      stub(Lotus, :run_statement, fn _statement, _params, _opts ->
         {:ok, Result.new(["id", "name"], rows, num_rows: 100)}
       end)
 
       assert {:ok, result} =
                ExecuteStatement.run(
-                 %{sql: "SELECT * FROM big_table", data_source: "postgres", label: "Big query"},
+                 %{
+                   statement: "SELECT * FROM big_table",
+                   data_source: "postgres",
+                   label: "Big query"
+                 },
                  %{}
                )
 
@@ -57,14 +61,14 @@ defmodule Lotus.AI.Actions.ExecuteStatementTest do
     end
 
     test "captures query errors without failing the action" do
-      stub(Lotus, :run_statement, fn _sql, _params, _opts ->
+      stub(Lotus, :run_statement, fn _statement, _params, _opts ->
         {:error, "relation \"missing_table\" does not exist"}
       end)
 
       assert {:ok, result} =
                ExecuteStatement.run(
                  %{
-                   sql: "SELECT * FROM missing_table",
+                   statement: "SELECT * FROM missing_table",
                    data_source: "postgres",
                    label: "Bad query"
                  },
@@ -77,26 +81,30 @@ defmodule Lotus.AI.Actions.ExecuteStatementTest do
     end
 
     test "enforces read-only execution" do
-      expect(Lotus, :run_statement, fn _sql, _params, opts ->
+      expect(Lotus, :run_statement, fn _statement, _params, opts ->
         assert opts[:read_only] == true
         {:ok, Result.new(["count"], [[42]], num_rows: 1)}
       end)
 
       assert {:ok, _result} =
                ExecuteStatement.run(
-                 %{sql: "SELECT COUNT(*) FROM users", data_source: "postgres", label: "Count"},
+                 %{
+                   statement: "SELECT COUNT(*) FROM users",
+                   data_source: "postgres",
+                   label: "Count"
+                 },
                  %{}
                )
     end
 
     test "includes timing information" do
-      stub(Lotus, :run_statement, fn _sql, _params, _opts ->
+      stub(Lotus, :run_statement, fn _statement, _params, _opts ->
         {:ok, Result.new(["x"], [[1]], num_rows: 1)}
       end)
 
       assert {:ok, result} =
                ExecuteStatement.run(
-                 %{sql: "SELECT 1", data_source: "postgres", label: "Ping"},
+                 %{statement: "SELECT 1", data_source: "postgres", label: "Ping"},
                  %{}
                )
 
@@ -109,7 +117,7 @@ defmodule Lotus.AI.Actions.ExecuteStatementTest do
     test "exposes name, description, and schema" do
       assert ExecuteStatement.name() == "execute_statement"
       assert ExecuteStatement.description() =~ "Execute"
-      assert Keyword.has_key?(ExecuteStatement.schema(), :sql)
+      assert Keyword.has_key?(ExecuteStatement.schema(), :statement)
       assert Keyword.has_key?(ExecuteStatement.schema(), :label)
       assert Keyword.has_key?(ExecuteStatement.schema(), :data_source)
     end

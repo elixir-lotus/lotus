@@ -41,10 +41,10 @@ defmodule Lotus.AI do
   The `generate_query/1` function returns structured error tuples that clients can
   pattern match on for custom handling and internationalization (i18n):
 
-  - `{:ok, result}` - Successfully generated SQL query
+  - `{:ok, result}` - Successfully generated statement
   - `{:error, :not_configured}` - AI features not enabled in config
   - `{:error, :api_key_not_configured}` - API key missing or invalid
-  - `{:error, {:unable_to_generate, reason}}` - LLM refused (non-SQL question)
+  - `{:error, {:unable_to_generate, reason}}` - LLM refused (not a data question)
   - `{:error, term}` - Other errors (API failures, network issues, etc.)
   """
 
@@ -59,7 +59,7 @@ defmodule Lotus.AI do
   @type feature :: :generation | :optimization | :explanation
 
   @doc """
-  Generate SQL query from natural language prompt with conversation context.
+  Generate a query statement from a natural language prompt, with conversation context.
 
   Enables multi-turn conversations by accepting conversation history. The AI
   can refine queries, fix errors, and provide iterative improvements.
@@ -74,7 +74,7 @@ defmodule Lotus.AI do
 
   ## Returns
 
-  - `{:ok, result}` - Successfully generated SQL with metadata
+  - `{:ok, result}` - Successfully generated statement with metadata
   - `{:error, term}` - Structured error tuple (see module docs for error types)
 
   ## Examples
@@ -110,7 +110,7 @@ defmodule Lotus.AI do
     with {:ok, config} <- get_ai_config(),
          :ok <- check_feature(opts[:data_source], :generation),
          {:ok, response} <-
-           QueryGenerator.generate_sql(
+           QueryGenerator.generate_statement(
              config.model,
              [
                prompt: opts[:prompt],
@@ -132,7 +132,7 @@ defmodule Lotus.AI do
   end
 
   @doc """
-  Generate SQL query from natural language prompt.
+  Generate a query statement from a natural language prompt.
 
   Uses the globally configured AI provider from application config.
 
@@ -145,7 +145,7 @@ defmodule Lotus.AI do
 
   ## Returns
 
-  - `{:ok, result}` - Successfully generated SQL with metadata
+  - `{:ok, result}` - Successfully generated statement with metadata
   - `{:error, term}` - Structured error tuple (see module docs for error types)
 
   ## Examples
@@ -155,7 +155,7 @@ defmodule Lotus.AI do
         data_source: "postgres"
       )
 
-      result.sql
+      result.statement
       # => "SELECT DATE_TRUNC('month', created_at) as month, COUNT(*) FROM users WHERE status = 'active' GROUP BY month"
 
       result.model
@@ -175,7 +175,7 @@ defmodule Lotus.AI do
     with {:ok, config} <- get_ai_config(),
          :ok <- check_feature(opts[:data_source], :generation),
          {:ok, response} <-
-           QueryGenerator.generate_sql(
+           QueryGenerator.generate_statement(
              config.model,
              [
                prompt: opts[:prompt],
@@ -232,7 +232,7 @@ defmodule Lotus.AI do
   end
 
   @doc """
-  Get an AI-powered plain-language explanation of a SQL query.
+  Get an AI-powered plain-language explanation of a query.
 
   Supports explaining a full query or a selected fragment. When a fragment
   is provided, the full query is sent as context so the AI can explain even
@@ -240,7 +240,7 @@ defmodule Lotus.AI do
 
   ## Options
 
-  - `:sql` (required) - The full SQL query
+  - `:statement` (required) - The full query statement
   - `:fragment` (optional) - A selected portion of the query to explain
   - `:data_source` (required) - Name of the data source to resolve schema context
 

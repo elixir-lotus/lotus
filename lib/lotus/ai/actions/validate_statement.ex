@@ -26,7 +26,7 @@ defmodule Lotus.AI.Actions.ValidateStatement do
   @impl true
   def schema do
     [
-      sql: [type: :string, required: true, doc: "The query statement to validate"],
+      statement: [type: :string, required: true, doc: "The query statement to validate"],
       data_source: [
         type: :string,
         required: true,
@@ -38,7 +38,7 @@ defmodule Lotus.AI.Actions.ValidateStatement do
   @impl true
   def run(params, _context) do
     adapter = Source.resolve!(params.data_source, nil)
-    statement = Statement.new(params.sql)
+    statement = Statement.new(params.statement)
 
     case Adapter.validate_statement(adapter, statement, []) do
       :ok ->

@@ -227,9 +227,29 @@ sufficient on its own.
 - `Lotus.AI.Actions.ValidateSQL` → `Lotus.AI.Actions.ValidateStatement` (also:
   tool name `"validate_sql"` → `"validate_statement"`)
 
+- `Lotus.AI.QueryGenerator.generate_sql/2` → `generate_statement/2`
+- `Lotus.AI.Prompts.QueryGeneration.extract_sql/1` → `extract_statement/1`
+
 Both action modules are published, so the rename is breaking for anything
 referencing them directly, and for adapter `error_patterns` hints naming the
 old tool names.
+
+### `:sql` keys are now `:statement`
+
+Finishing the move away from assuming every source is SQL:
+
+| Was | Now |
+|---|---|
+| `execute_sql` / `validate_sql` tool parameter `sql` | `statement` |
+| `ExecuteStatement` result key `:sql` | `:statement` |
+| `QueryGeneration.extract_response/1` → `%{sql: ...}` | `%{statement: ...}` |
+
+Two of these were already true in code and wrong only in the docs, so check
+your call sites rather than trusting a pre-v1 guide:
+
+- `Lotus.AI.explain_query/1` reads `opts[:statement]`. The docs said `:sql`.
+- `Lotus.AI.generate_query/1` returns `result.statement`. The docs showed
+  `result.sql`.
 
 ### Prompt content moved from core to adapters
 

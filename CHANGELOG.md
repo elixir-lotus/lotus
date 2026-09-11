@@ -412,6 +412,23 @@
     (tool name `"execute_sql"` → `"execute_statement"`).
   - `Lotus.AI.Actions.ValidateSQL` → `Lotus.AI.Actions.ValidateStatement`
     (tool name `"validate_sql"` → `"validate_statement"`).
+  - `Lotus.AI.QueryGenerator.generate_sql/2` →
+    `generate_statement/2`; its `sql_response` type →
+    `statement_response`.
+  - `Lotus.AI.Prompts.QueryGeneration.extract_sql/1` →
+    `extract_statement/1`.
+
+- **`:sql` keys renamed to `:statement`** across the AI surface, finishing
+  the v1 move away from assuming every source is SQL:
+  - The `execute_statement` and `validate_statement` tool parameter the LLM
+    fills is now `statement`, not `sql`.
+  - `ExecuteStatement`'s result map carries `:statement` instead of `:sql`.
+  - `QueryGeneration.extract_response/1` returns
+    `%{statement: ..., variables: ...}` instead of `%{sql: ...}`.
+  - `Lotus.AI.explain_query/1` documents its required option as
+    `:statement`, which is what the code has always read — the `:sql` in the
+    docs was wrong. Likewise `Lotus.AI.generate_query/1`'s result key is
+    `:statement`, not the `result.sql` the docs showed.
 
 - **Prompt content moved from core to adapters.** Core's generation
   prompt no longer ships SQL-specific guidance ("use JOINs for

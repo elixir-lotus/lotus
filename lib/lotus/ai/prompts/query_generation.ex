@@ -104,10 +104,10 @@ defmodule Lotus.AI.Prompts.QueryGeneration do
   end
 
   @doc """
-  Extract SQL from LLM response content.
+  Extract the generated statement from LLM response content.
 
-  Handles both markdown-wrapped SQL and plain SQL responses, and detects
-  when the LLM has refused to generate SQL.
+  Accepts any fence label, since the prompt asks for the adapter's language
+  family, and detects when the LLM has refused to generate.
 
   ## Parameters
 
@@ -115,15 +115,15 @@ defmodule Lotus.AI.Prompts.QueryGeneration do
 
   ## Returns
 
-  - `{:ok, sql}` - Successfully extracted SQL query
+  - `{:ok, statement}` - Successfully extracted statement
   - `{:error, {:unable_to_generate, reason}}` - LLM refused to generate
 
   ## Examples
 
-      iex> extract_sql("```sql\\nSELECT * FROM users\\n```")
+      iex> extract_statement("```sql\\nSELECT * FROM users\\n```")
       {:ok, "SELECT * FROM users"}
 
-      iex> extract_sql("UNABLE_TO_GENERATE: This is a weather question")
+      iex> extract_statement("UNABLE_TO_GENERATE: This is a weather question")
       {:error, {:unable_to_generate, "This is a weather question"}}
   """
   # The prompt asks for a fence labelled with the adapter's language family,
@@ -133,8 +133,9 @@ defmodule Lotus.AI.Prompts.QueryGeneration do
   # labels the separate JSON block `extract_variables/1` reads.
   @statement_fence ~r/```(?!variables)[a-z0-9_+-]*[ \t]*\n(.*?)\n```/s
 
-  @spec extract_sql(String.t()) :: {:ok, String.t()} | {:error, {:unable_to_generate, String.t()}}
-  def extract_sql(content) do
+  @spec extract_statement(String.t()) ::
+          {:ok, String.t()} | {:error, {:unable_to_generate, String.t()}}
+  def extract_statement(content) do
     content = String.trim(content)
 
     if String.starts_with?(content, "UNABLE_TO_GENERATE:") do
@@ -142,8 +143,8 @@ defmodule Lotus.AI.Prompts.QueryGeneration do
       {:error, {:unable_to_generate, reason}}
     else
       case Regex.run(@statement_fence, content) do
-        [_, sql] ->
-          {:ok, String.trim(sql)}
+        [_, statement] ->
+          {:ok, String.trim(statement)}
 
         nil ->
           {:error, {:unable_to_generate, content}}
@@ -170,7 +171,7 @@ defmodule Lotus.AI.Prompts.QueryGeneration do
       iex> extract_variables("```variables\n[{\"name\": \"status\", \"type\": \"text\"}]\n```")
       [%{"name" => "status", "type" => "text", "widget" => "input", "list" => false}]
 
-      iex> extract_variables("Just some SQL without variables")
+      iex> extract_variables("Just a statement without variables")
       []
   """
   @spec extract_variables(String.t()) :: [map()]
@@ -191,9 +192,9 @@ defmodule Lotus.AI.Prompts.QueryGeneration do
   end
 
   @doc """
-  Extract both SQL and variables from LLM response content.
+  Extract both the statement and its variables from LLM response content.
 
-  Combines `extract_sql/1` and `extract_variables/1` into a single call.
+  Combines `extract_statement/1` and `extract_variables/1` into a single call.
   This is the primary extraction entry point for response parsing.
 
   ## Parameters
@@ -202,22 +203,22 @@ defmodule Lotus.AI.Prompts.QueryGeneration do
 
   ## Returns
 
-  - `{:ok, %{sql: String.t(), variables: [map()]}}` - Successfully extracted
+  - `{:ok, %{statement: String.t(), variables: [map()]}}` - Successfully extracted
   - `{:error, {:unable_to_generate, reason}}` - LLM refused to generate
 
   ## Examples
 
       iex> extract_response("```sql\\nSELECT * FROM users WHERE status = {{status}}\\n```\\n```variables\\n[{\\"name\\": \\"status\\"}]\\n```")
-      {:ok, %{sql: "SELECT * FROM users WHERE status = {{status}}", variables: [...]}}
+      {:ok, %{statement: "SELECT * FROM users WHERE status = {{status}}", variables: [...]}}
   """
   @spec extract_response(String.t()) ::
-          {:ok, %{sql: String.t(), variables: [map()]}}
+          {:ok, %{statement: String.t(), variables: [map()]}}
           | {:error, {:unable_to_generate, String.t()}}
   def extract_response(content) do
-    case extract_sql(content) do
-      {:ok, sql} ->
+    case extract_statement(content) do
+      {:ok, statement} ->
         variables = extract_variables(content)
-        {:ok, %{sql: sql, variables: variables}}
+        {:ok, %{statement: statement, variables: variables}}
 
       {:error, _} = error ->
         error

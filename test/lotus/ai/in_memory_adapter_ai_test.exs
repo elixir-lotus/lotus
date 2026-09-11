@@ -159,7 +159,7 @@ defmodule Lotus.AI.InMemoryAdapterAITest do
     test "the extractor accepts the fence the prompt asked for" do
       content = "```lotus\n%{from: \"users\", limit: 10}\n```"
 
-      assert {:ok, statement} = QueryGeneration.extract_sql(content)
+      assert {:ok, statement} = QueryGeneration.extract_statement(content)
       assert statement == ~s|%{from: "users", limit: 10}|
     end
 
@@ -169,7 +169,7 @@ defmodule Lotus.AI.InMemoryAdapterAITest do
       fence = AdapterNotes.fence_label(mem_context())
       content = "```#{fence}\n%{from: \"users\"}\n```"
 
-      assert {:ok, _} = QueryGeneration.extract_sql(content)
+      assert {:ok, _} = QueryGeneration.extract_statement(content)
     end
 
     test "a hostile language cannot break out of the fence" do

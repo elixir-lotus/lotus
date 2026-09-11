@@ -25,7 +25,7 @@ defmodule Lotus.AI.Actions.ExecuteStatement do
   @impl true
   def schema do
     [
-      sql: [type: :string, required: true, doc: "The query statement to execute"],
+      statement: [type: :string, required: true, doc: "The query statement to execute"],
       data_source: [
         type: :string,
         required: true,
@@ -46,7 +46,7 @@ defmodule Lotus.AI.Actions.ExecuteStatement do
     opts =
       [repo: params.data_source, read_only: true] ++ actor_opts(context)
 
-    case Lotus.run_statement(params.sql, [], opts) do
+    case Lotus.run_statement(params.statement, [], opts) do
       {:ok, result} ->
         preview_rows =
           result.rows
@@ -56,7 +56,7 @@ defmodule Lotus.AI.Actions.ExecuteStatement do
         {:ok,
          %{
            label: params.label,
-           sql: params.sql,
+           statement: params.statement,
            data_source: params.data_source,
            columns: result.columns,
            rows: preview_rows,
@@ -71,7 +71,7 @@ defmodule Lotus.AI.Actions.ExecuteStatement do
         {:ok,
          %{
            label: params.label,
-           sql: params.sql,
+           statement: params.statement,
            data_source: params.data_source,
            error: format_error(reason),
            started_at: started_at,

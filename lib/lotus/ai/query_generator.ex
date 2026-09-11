@@ -1,6 +1,6 @@
 defmodule Lotus.AI.QueryGenerator do
   @moduledoc """
-  Generates SQL from natural language using ReqLLM.
+  Generates query statements from natural language using ReqLLM.
 
   Handles tool building, message handling, and response extraction.
   Any provider supported by ReqLLM can be used by passing a model
@@ -30,7 +30,7 @@ defmodule Lotus.AI.QueryGenerator do
   end
 
   @doc """
-  Generate SQL using the given model string and options.
+  Generate a query statement using the given model string and options.
 
   The model string should be in ReqLLM format, e.g. `"openai:gpt-4o"`,
   `"anthropic:claude-opus-4"`, `"google:gemini-2.0-flash"`.
@@ -42,13 +42,13 @@ defmodule Lotus.AI.QueryGenerator do
   - `:api_key` (required) - API key for the provider
   - `:conversation` - Conversation struct for multi-turn
   - `:query_context` - Additional context for the query
-  - `:read_only` - Whether to restrict to read-only SQL (default: true)
+  - `:read_only` - Whether to restrict to read-only statements (default: true)
   - `:temperature` - LLM temperature (default: 0.1)
   - `:context` - Caller-supplied actor context, threaded into every query
     and introspection call the AI makes
   - `:scope` - Caller-supplied visibility scope, threaded the same way
   """
-  @type sql_response :: %{
+  @type statement_response :: %{
           content: String.t(),
           model: String.t(),
           variables: [map()],
@@ -59,8 +59,9 @@ defmodule Lotus.AI.QueryGenerator do
           }
         }
 
-  @spec generate_sql(String.t(), keyword()) :: {:ok, sql_response()} | {:error, term()}
-  def generate_sql(model_string, opts) do
+  @spec generate_statement(String.t(), keyword()) ::
+          {:ok, statement_response()} | {:error, term()}
+  def generate_statement(model_string, opts) do
     data_source = Keyword.fetch!(opts, :data_source)
     prompt = Keyword.fetch!(opts, :prompt)
     conversation = Keyword.get(opts, :conversation)
@@ -105,8 +106,8 @@ defmodule Lotus.AI.QueryGenerator do
     content = ReqLLM.Response.text(response)
 
     case QueryGeneration.extract_response(content) do
-      {:ok, %{sql: sql, variables: variables}} ->
-        {:ok, build_success_response(response, model_string, sql, variables)}
+      {:ok, %{statement: statement, variables: variables}} ->
+        {:ok, build_success_response(response, model_string, statement, variables)}
 
       {:error, {:unable_to_generate, candidate}} ->
         adapter = Source.resolve!(data_source, nil)
@@ -125,9 +126,9 @@ defmodule Lotus.AI.QueryGenerator do
 
   defp handle_response({:error, error}, _model_string, _data_source), do: {:error, error}
 
-  defp build_success_response(response, model_string, sql, variables) do
+  defp build_success_response(response, model_string, statement, variables) do
     %{
-      content: sql,
+      content: statement,
       model: model_string,
       variables: variables,
       usage: Tool.normalize_usage(ReqLLM.Response.usage(response))

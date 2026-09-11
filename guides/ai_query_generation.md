@@ -477,7 +477,7 @@ conversation = Conversation.new()
   conversation: conversation
 )
 
-conversation = Conversation.add_assistant_response(conversation, "Generated query", result1.sql, result1.variables)
+conversation = Conversation.add_assistant_response(conversation, "Generated query", result1.statement, result1.variables)
 
 # Refine the query
 conversation = Conversation.add_user_message(conversation, "Only show the last 6 months")

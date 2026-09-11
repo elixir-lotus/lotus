@@ -12,7 +12,7 @@ defmodule Lotus.AI.Actions.ValidateStatementTest do
       end)
 
       assert {:ok, %{valid: true}} =
-               ValidateStatement.run(%{sql: "SELECT 1", data_source: "postgres"}, %{})
+               ValidateStatement.run(%{statement: "SELECT 1", data_source: "postgres"}, %{})
     end
 
     test "returns valid: false with error when validation fails" do
@@ -22,7 +22,7 @@ defmodule Lotus.AI.Actions.ValidateStatementTest do
 
       assert {:ok, %{valid: false, error: error}} =
                ValidateStatement.run(
-                 %{sql: "This is not SQL", data_source: "postgres"},
+                 %{statement: "This is not SQL", data_source: "postgres"},
                  %{}
                )
 
@@ -34,7 +34,7 @@ defmodule Lotus.AI.Actions.ValidateStatementTest do
     test "exposes name, description, and schema" do
       assert ValidateStatement.name() == "validate_statement"
       assert ValidateStatement.description() =~ "Validate"
-      assert Keyword.has_key?(ValidateStatement.schema(), :sql)
+      assert Keyword.has_key?(ValidateStatement.schema(), :statement)
       assert Keyword.has_key?(ValidateStatement.schema(), :data_source)
     end
   end
