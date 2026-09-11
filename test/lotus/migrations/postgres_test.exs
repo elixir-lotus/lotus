@@ -21,6 +21,7 @@ defmodule Lotus.Migrations.PostgresTest do
 
     assert Ecto.Migrator.up(MigrationRepo, 1, Lotus.Migrations) in [:ok, :already_up]
     assert table_exists?("lotus_queries")
+    assert column_exists?("lotus_queries", "query_language")
 
     assert :ok = Ecto.Migrator.down(MigrationRepo, 1, Lotus.Migrations)
     refute table_exists?("lotus_queries")
@@ -39,6 +40,21 @@ defmodule Lotus.Migrations.PostgresTest do
     """
 
     {:ok, %{rows: [[exists]]}} = MigrationRepo.query(query, [table_name])
+
+    exists
+  end
+
+  defp column_exists?(table_name, column_name) do
+    query = """
+    SELECT EXISTS (
+      SELECT FROM information_schema.columns
+      WHERE table_schema = 'public'
+      AND table_name = $1
+      AND column_name = $2
+    )
+    """
+
+    {:ok, %{rows: [[exists]]}} = MigrationRepo.query(query, [table_name, column_name])
 
     exists
   end

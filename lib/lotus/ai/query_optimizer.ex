@@ -14,6 +14,7 @@ defmodule Lotus.AI.QueryOptimizer do
   """
 
   alias Lotus.AI.Actions
+  alias Lotus.AI.Prompts.AdapterNotes
   alias Lotus.AI.Prompts.Optimization
   alias Lotus.AI.Tool
   alias Lotus.Query.Statement
@@ -63,7 +64,14 @@ defmodule Lotus.AI.QueryOptimizer do
         execution_plan = get_execution_plan(adapter, statement, search_path: search_path)
 
         system_prompt = Optimization.system_prompt(ai_context)
-        user_prompt = Optimization.user_prompt(statement.body, execution_plan)
+
+        user_prompt =
+          Optimization.user_prompt(
+            statement.body,
+            execution_plan,
+            nil,
+            AdapterNotes.fence_label(ai_context)
+          )
 
         tools = build_tools(data_source, actor_from(opts))
         messages = build_messages(system_prompt, user_prompt)

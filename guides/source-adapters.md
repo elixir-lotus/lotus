@@ -487,6 +487,37 @@ Three return shapes:
 Never return `{:unrestricted, _}` from an adapter that *can* extract
 relations — doing so disables visibility enforcement silently.
 
+## Query Language Identifiers
+
+`query_language/1` returns a `family:dialect` identifier. The family names
+the shape of the statement; the dialect names the engine that speaks it.
+
+| Adapter | `query_language/1` |
+|---|---|
+| Postgres | `sql:postgres` |
+| MySQL | `sql:mysql` |
+| SQLite | `sql:sqlite` |
+| ClickHouse | `sql:clickhouse` |
+| Elasticsearch | `json:elasticsearch` |
+| `Default` dialect | `sql` (bare, no colon) |
+
+Two things read this value, and they read it differently:
+
+- **Saved queries.** `Lotus.Storage.Query` records the identifier in its
+  `:query_language` column when a query is saved. At execution,
+  `Lotus.run_query/2` compares it to the resolved source's identifier and
+  refuses to run on a mismatch, naming both languages and the source. The
+  comparison is **exact, not family-level**: `sql:postgres` and
+  `sql:clickhouse` share a family but are not interchangeable, and
+  repointing a source from one to the other is the case the check exists
+  to catch. A query saved with no identifier (`NULL`) runs anywhere, which
+  is how every row predating the column behaves.
+- **AI prompts.** Only the **family** is used, as the markdown fence label.
+  See [Fences](#fences).
+
+Keep the identifier stable. Changing it on a shipped adapter invalidates
+every saved query that recorded the old value.
+
 ## AI Adapter Support
 
 Opt into `Lotus.AI` by implementing `ai_context/1`:
@@ -503,6 +534,12 @@ def ai_context(_state) do
        %{pattern: ~r/Table .* not found/,
          hint: "Check the table name via list_tables."}
      ],
+     generation_notes:
+       "- Name the fields you need after `from`.\n" <>
+         "- Add `take n` unless the user asked for everything.",
+     read_only_notes:
+       "**IMPORTANT:** Never emit `put`, `patch` or `drop` pipelines. " <>
+         "If asked to, respond with: \"UNABLE_TO_GENERATE: [reason]\"",
      capabilities: %{
        generation:   true,
        optimization: {false, "This source has no execution plan."},
@@ -521,13 +558,57 @@ layer with a one-time warning per `(adapter, field)` pair:
 | `:example_query` | One concrete example the LLM can adapt. | 2048 bytes |
 | `:syntax_notes` | Short prose on quoting, reserved words, dialect pitfalls. | 1024 bytes |
 | `:error_patterns` | `[%{pattern: Regex.t, hint: binary}]` — matched against execution errors so the LLM can self-correct. | 20 entries |
+| `:generation_notes` | How to shape a good query for this source. Optional. | 1024 bytes |
+| `:read_only_notes` | Which operations this source treats as writes, and so must never be generated. Optional. | 1024 bytes |
 | `:capabilities` | Per-feature gate: `:generation`, `:optimization`, `:explanation`. Omit to default all three to `true`. | — |
+
+### What belongs in which field
+
+Core owns prompt **structure**; your adapter owns prompt **content** about
+its own language. The split follows the enforcement: `sanitize_query/3` is
+already your callback, so you — not core — decide what counts as a write.
+
+| Core writes it | You write it |
+|---|---|
+| The workflow and the tool list | `:language` |
+| `{{var}}` / `[[optional]]` template rules | `:example_query` |
+| The `UNABLE_TO_GENERATE` protocol | `:syntax_notes` |
+| The fence protocol | `:generation_notes` |
+| A generic default for each of your two notes fields | `:read_only_notes` |
+
+Your notes render **in place of** core's defaults, never appended after
+them. Omit a field and core's generic text is used, so there is no need to
+restate anything language-agnostic.
+
+Put syntax in `:syntax_notes` and prohibitions in `:read_only_notes`. They
+are different jobs: core's default read-only text is deliberately generic
+("never create, modify or delete data or schema") because only you can name
+the operations that do that in your language. If your source's write paths
+are `_delete_by_query` and `_update_by_query`, say so in `:read_only_notes`
+— core cannot know it.
+
+The tool names your prose refers to (`list_tables`, `describe_table`,
+`execute_statement`, `validate_statement`) are part of this contract. A hint
+like "List available indices via `list_tables`" relies on that name being
+stable, so treat the tool list as API.
+
+### Fences
+
+Core asks the LLM for the statement inside a fence labelled with your
+language **family** — the part of `:language` before the colon. A
+`:language` of `json:elasticsearch` produces a ` ```json ` fence. Editors
+and markdown renderers know `json`; they do not know `json:elasticsearch`.
+The extractor accepts any label, so a new family needs no change in core.
 
 ### Trust boundary
 
 Untrusted adapters get only `:language` plumbed into the LLM prompt —
-`:syntax_notes`, `:example_query`, and `:error_patterns` are discarded so a
-compromised or adversarial adapter cannot inject prompt text. The built-in
+`:syntax_notes`, `:example_query`, `:error_patterns`, `:generation_notes`
+and `:read_only_notes` are discarded so a compromised or adversarial adapter
+cannot inject prompt text. The two notes fields are **dropped, not blanked**:
+core falls back to its own default text. An empty `:read_only_notes` taken
+literally would leave the prompt with no read-only instruction at all, which
+would let an untrusted adapter weaken the guard by supplying a blank. The built-in
 Ecto adapter (and its per-dialect wrappers) is always trusted. External
 adapters opt in via:
 

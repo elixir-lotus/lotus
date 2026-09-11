@@ -101,6 +101,67 @@ defmodule Lotus.Storage.QueryTest do
       refute changeset.valid?
       assert %{search_path: ["is invalid"]} = errors_on(changeset)
     end
+
+    test "accepts a family:dialect query_language" do
+      changeset =
+        Query.new(%{
+          name: "Test",
+          statement: "SELECT 1",
+          query_language: "sql:postgres"
+        })
+
+      assert changeset.valid?
+      assert get_field(changeset, :query_language) == "sql:postgres"
+    end
+
+    test "accepts a bare family query_language" do
+      changeset =
+        Query.new(%{name: "Test", statement: "SELECT 1", query_language: "sql"})
+
+      assert changeset.valid?
+      assert get_field(changeset, :query_language) == "sql"
+    end
+
+    test "accepts a non-SQL query_language" do
+      changeset =
+        Query.new(%{name: "Test", statement: "SELECT 1", query_language: "json:elasticsearch"})
+
+      assert changeset.valid?
+      assert get_field(changeset, :query_language) == "json:elasticsearch"
+    end
+
+    test "is valid without a query_language" do
+      changeset = Query.new(%{name: "Test", statement: "SELECT 1"})
+
+      assert changeset.valid?
+      assert get_field(changeset, :query_language) == nil
+    end
+
+    test "converts empty query_language to nil" do
+      changeset =
+        Query.new(%{name: "Test", statement: "SELECT 1", query_language: ""})
+
+      assert changeset.valid?
+      assert get_field(changeset, :query_language) == nil
+    end
+
+    test "is invalid with a malformed query_language" do
+      changeset =
+        Query.new(%{name: "Test", statement: "SELECT 1", query_language: "SQL:Postgres!"})
+
+      refute changeset.valid?
+
+      assert %{query_language: ["must be a language identifier like \"sql\" or \"sql:postgres\""]} =
+               errors_on(changeset)
+    end
+
+    test "is invalid when query_language is not a string" do
+      changeset =
+        Query.new(%{name: "Test", statement: "SELECT 1", query_language: 123})
+
+      refute changeset.valid?
+      assert %{query_language: ["is invalid"]} = errors_on(changeset)
+    end
   end
 
   describe "update/2" do

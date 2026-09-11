@@ -637,6 +637,8 @@ defmodule Lotus.Source.Adapter do
           required(:example_query) => String.t(),
           required(:syntax_notes) => String.t(),
           required(:error_patterns) => [%{pattern: Regex.t(), hint: String.t()}],
+          optional(:generation_notes) => String.t(),
+          optional(:read_only_notes) => String.t(),
           optional(:capabilities) => ai_capabilities()
         }
 
@@ -647,7 +649,7 @@ defmodule Lotus.Source.Adapter do
   The returned map has fixed keys:
 
     * `:language` — query-language identifier (same shape as
-      `query_language/1`: `"sql:postgres"`, `"elasticsearch:json"`, ...).
+      `query_language/1`: `"sql:postgres"`, `"json:elasticsearch"`, ...).
       Must match a constrained character set; violating identifiers are
       replaced with `"unknown"` at the dispatch layer.
     * `:example_query` — one concrete example statement showing the
@@ -657,6 +659,18 @@ defmodule Lotus.Source.Adapter do
     * `:error_patterns` — up to 20 `%{pattern: Regex.t(), hint: binary}`
       entries. When a query fails, the first matching `:pattern` feeds
       its `:hint` back into the LLM so it can self-correct.
+    * `:generation_notes` — optional prose telling the LLM how to shape a
+      good query for this source. Replaces core's generic guidance rather
+      than being appended to it. Capped at 1024 bytes.
+    * `:read_only_notes` — optional prose naming the operations this
+      source treats as writes, and therefore must never be generated.
+      Replaces core's generic guidance. Capped at 1024 bytes.
+
+  Core owns prompt *structure* — the workflow, the tool list, the
+  `UNABLE_TO_GENERATE` protocol, the fence. The adapter owns prompt
+  *content* about its own language. This split follows the enforcement:
+  `sanitize_query/3` is already an adapter callback, so the adapter, not
+  core, decides what counts as a write.
 
   Return `{:error, :ai_not_supported}` (or any `{:error, term}`) to opt
   the source out of AI generation entirely — `Lotus.AI.generate_query_with_context/1`
@@ -664,10 +678,11 @@ defmodule Lotus.Source.Adapter do
   hallucinating syntax the adapter can't run.
 
   **Security note.** Untrusted adapters can influence LLM output through
-  `:syntax_notes` and `:error_patterns`. Host apps opt adapters into the
-  full context via `config :lotus, :trusted_source_adapters`. Untrusted
-  adapters see only `:language` plumbed to the prompt; free-form fields
-  are discarded.
+  `:syntax_notes`, `:error_patterns`, `:generation_notes` and
+  `:read_only_notes`. Host apps opt adapters into the full context via
+  `config :lotus, :trusted_source_adapters`. Untrusted adapters see only
+  `:language` plumbed to the prompt; free-form fields are discarded, and
+  core falls back to its own guidance rather than to an empty string.
 
   Default (when not implemented): `{:error, :ai_not_supported}` — the
   adapter is opted out of AI.
@@ -1299,6 +1314,8 @@ defmodule Lotus.Source.Adapter do
   # bloating the prompt beyond the LLM's context budget.
   @ai_context_max_example_query_bytes 2048
   @ai_context_max_syntax_notes_bytes 1024
+  @ai_context_max_generation_notes_bytes 1024
+  @ai_context_max_read_only_notes_bytes 1024
   @ai_context_max_error_patterns 20
 
   # Constrains the `:language` field to a small character set so untrusted
@@ -1364,6 +1381,16 @@ defmodule Lotus.Source.Adapter do
       @ai_context_max_syntax_notes_bytes,
       mod
     )
+    |> truncate_bytes(
+      :generation_notes,
+      @ai_context_max_generation_notes_bytes,
+      mod
+    )
+    |> truncate_bytes(
+      :read_only_notes,
+      @ai_context_max_read_only_notes_bytes,
+      mod
+    )
     |> truncate_list(:error_patterns, @ai_context_max_error_patterns, mod)
     |> normalize_capabilities(mod)
   end
@@ -1382,22 +1409,32 @@ defmodule Lotus.Source.Adapter do
           mod,
           :trust_boundary,
           "stripped to language-only (not in :trusted_source_adapters); AI prompts " <>
-            "will not see this adapter's syntax_notes / example_query / error_patterns",
+            "will not see this adapter's syntax_notes / example_query / " <>
+            "error_patterns / generation_notes / read_only_notes",
           :info
         )
       end
 
+      # `:generation_notes` and `:read_only_notes` are dropped, not blanked.
+      # The prompt layer falls back to core's own guidance on a missing key,
+      # and an empty `:read_only_notes` would otherwise leave the prompt with
+      # no read-only instruction at all — a way for an untrusted adapter to
+      # weaken the guard by supplying a blank string.
       ctx
       |> Map.put(:example_query, "")
       |> Map.put(:syntax_notes, "")
       |> Map.put(:error_patterns, [])
+      |> Map.delete(:generation_notes)
+      |> Map.delete(:read_only_notes)
     end
   end
 
   defp has_text_fields?(ctx) do
     Map.get(ctx, :example_query) not in [nil, ""] or
       Map.get(ctx, :syntax_notes) not in [nil, ""] or
-      Map.get(ctx, :error_patterns) not in [nil, []]
+      Map.get(ctx, :error_patterns) not in [nil, []] or
+      Map.get(ctx, :generation_notes) not in [nil, ""] or
+      Map.get(ctx, :read_only_notes) not in [nil, ""]
   end
 
   # Default to all-supported when the adapter omits `:capabilities` —

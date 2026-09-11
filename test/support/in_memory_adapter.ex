@@ -424,6 +424,13 @@ defmodule Lotus.Test.InMemoryAdapter do
            hint: "List available tables via describe_table or list_tables first."
          }
        ],
+       generation_notes:
+         "- Name the columns you need in `select`; omit it only to return every column.\n" <>
+           "- Set `limit` unless the user asked for every row.",
+       read_only_notes:
+         "**IMPORTANT:** This adapter has no write path at all. " <>
+           "Never emit `insert`, `update` or `delete` keys. " <>
+           "If asked to, respond with: \"UNABLE_TO_GENERATE: [reason]\"",
        capabilities: %{
          generation: true,
          optimization: {false, "In-memory adapter has no execution plan."},

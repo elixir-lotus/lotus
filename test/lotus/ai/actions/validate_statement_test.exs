@@ -1,7 +1,7 @@
-defmodule Lotus.AI.Actions.ValidateSQLTest do
+defmodule Lotus.AI.Actions.ValidateStatementTest do
   use Lotus.AICase, async: true
 
-  alias Lotus.AI.Actions.ValidateSQL
+  alias Lotus.AI.Actions.ValidateStatement
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
 
@@ -12,7 +12,7 @@ defmodule Lotus.AI.Actions.ValidateSQLTest do
       end)
 
       assert {:ok, %{valid: true}} =
-               ValidateSQL.run(%{sql: "SELECT 1", data_source: "postgres"}, %{})
+               ValidateStatement.run(%{statement: "SELECT 1", data_source: "postgres"}, %{})
     end
 
     test "returns valid: false with error when validation fails" do
@@ -21,8 +21,8 @@ defmodule Lotus.AI.Actions.ValidateSQLTest do
       end)
 
       assert {:ok, %{valid: false, error: error}} =
-               ValidateSQL.run(
-                 %{sql: "This is not SQL", data_source: "postgres"},
+               ValidateStatement.run(
+                 %{statement: "This is not SQL", data_source: "postgres"},
                  %{}
                )
 
@@ -32,10 +32,10 @@ defmodule Lotus.AI.Actions.ValidateSQLTest do
 
   describe "tool metadata" do
     test "exposes name, description, and schema" do
-      assert ValidateSQL.name() == "validate_sql"
-      assert ValidateSQL.description() =~ "Validate"
-      assert Keyword.has_key?(ValidateSQL.schema(), :sql)
-      assert Keyword.has_key?(ValidateSQL.schema(), :data_source)
+      assert ValidateStatement.name() == "validate_statement"
+      assert ValidateStatement.description() =~ "Validate"
+      assert Keyword.has_key?(ValidateStatement.schema(), :statement)
+      assert Keyword.has_key?(ValidateStatement.schema(), :data_source)
     end
   end
 end

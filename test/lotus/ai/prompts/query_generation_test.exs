@@ -71,9 +71,9 @@ defmodule Lotus.AI.Prompts.QueryGenerationTest do
     test "includes formatting guidelines" do
       prompt = QueryGeneration.system_prompt(pg_context(), [])
 
-      assert prompt =~ "```sql blocks"
-      assert prompt =~ "LIMIT for safety"
-      assert prompt =~ "JOINs for multi-table"
+      assert prompt =~ "inside a ```sql block"
+      assert prompt =~ "Constrain the result size"
+      assert prompt =~ "Prefer naming fields explicitly"
     end
   end
 
@@ -151,7 +151,7 @@ defmodule Lotus.AI.Prompts.QueryGenerationTest do
     end
   end
 
-  describe "extract_sql/1" do
+  describe "extract_statement/1" do
     test "extracts SQL from markdown code blocks" do
       content = """
       ```sql
@@ -160,14 +160,14 @@ defmodule Lotus.AI.Prompts.QueryGenerationTest do
       ```
       """
 
-      assert {:ok, sql} = QueryGeneration.extract_sql(content)
+      assert {:ok, sql} = QueryGeneration.extract_statement(content)
       assert sql == "SELECT * FROM users\nWHERE created_at >= NOW() - INTERVAL '30 days'"
     end
 
     test "returns error for plain SQL without markdown code block" do
       content = "SELECT COUNT(*) FROM users"
 
-      assert {:error, {:unable_to_generate, _}} = QueryGeneration.extract_sql(content)
+      assert {:error, {:unable_to_generate, _}} = QueryGeneration.extract_statement(content)
     end
 
     test "trims whitespace from SQL" do
@@ -181,7 +181,7 @@ defmodule Lotus.AI.Prompts.QueryGenerationTest do
 
       """
 
-      assert {:ok, sql} = QueryGeneration.extract_sql(content)
+      assert {:ok, sql} = QueryGeneration.extract_statement(content)
       assert sql == "SELECT * FROM users"
     end
 
@@ -199,7 +199,7 @@ defmodule Lotus.AI.Prompts.QueryGenerationTest do
       ```
       """
 
-      assert {:ok, sql} = QueryGeneration.extract_sql(content)
+      assert {:ok, sql} = QueryGeneration.extract_statement(content)
       assert sql =~ "SELECT"
       assert sql =~ "LEFT JOIN"
       assert sql =~ "GROUP BY"
@@ -208,7 +208,7 @@ defmodule Lotus.AI.Prompts.QueryGenerationTest do
     test "returns error tuple for UNABLE_TO_GENERATE responses" do
       content = "UNABLE_TO_GENERATE: This is a weather question, not a database query"
 
-      assert {:error, {:unable_to_generate, reason}} = QueryGeneration.extract_sql(content)
+      assert {:error, {:unable_to_generate, reason}} = QueryGeneration.extract_statement(content)
       assert reason == "This is a weather question, not a database query"
     end
 
@@ -216,14 +216,14 @@ defmodule Lotus.AI.Prompts.QueryGenerationTest do
       content =
         "UNABLE_TO_GENERATE: The question asks about company org chart which is not in the database tables"
 
-      assert {:error, {:unable_to_generate, reason}} = QueryGeneration.extract_sql(content)
+      assert {:error, {:unable_to_generate, reason}} = QueryGeneration.extract_statement(content)
       assert reason =~ "org chart"
     end
 
     test "handles edge case with whitespace before UNABLE_TO_GENERATE" do
       content = "  \n  UNABLE_TO_GENERATE: Some reason  \n  "
 
-      assert {:error, {:unable_to_generate, reason}} = QueryGeneration.extract_sql(content)
+      assert {:error, {:unable_to_generate, reason}} = QueryGeneration.extract_statement(content)
       assert reason == "Some reason"
     end
 
@@ -231,7 +231,7 @@ defmodule Lotus.AI.Prompts.QueryGenerationTest do
       content =
         "To generate a query for a heatmap, I'll need some more information. What data points would you like to visualize?"
 
-      assert {:error, {:unable_to_generate, reason}} = QueryGeneration.extract_sql(content)
+      assert {:error, {:unable_to_generate, reason}} = QueryGeneration.extract_statement(content)
       assert reason =~ "heatmap"
     end
 
@@ -239,7 +239,7 @@ defmodule Lotus.AI.Prompts.QueryGenerationTest do
       content =
         "I can help you with that! Could you specify which tables you'd like to query and what time range you're interested in?"
 
-      assert {:error, {:unable_to_generate, _}} = QueryGeneration.extract_sql(content)
+      assert {:error, {:unable_to_generate, _}} = QueryGeneration.extract_statement(content)
     end
   end
 
@@ -401,7 +401,7 @@ defmodule Lotus.AI.Prompts.QueryGenerationTest do
   end
 
   describe "extract_response/1" do
-    test "extracts both SQL and variables" do
+    test "extracts both the statement and its variables" do
       content = """
       ```sql
       SELECT * FROM orders WHERE status = {{status}}
@@ -412,23 +412,25 @@ defmodule Lotus.AI.Prompts.QueryGenerationTest do
       ```
       """
 
-      assert {:ok, %{sql: sql, variables: variables}} = QueryGeneration.extract_response(content)
+      assert {:ok, %{statement: statement, variables: variables}} =
+               QueryGeneration.extract_response(content)
 
-      assert sql =~ "SELECT * FROM orders"
+      assert statement =~ "SELECT * FROM orders"
       assert length(variables) == 1
       assert hd(variables)["name"] == "status"
     end
 
-    test "returns empty variables for SQL-only responses" do
+    test "returns empty variables for statement-only responses" do
       content = """
       ```sql
       SELECT * FROM users
       ```
       """
 
-      assert {:ok, %{sql: sql, variables: variables}} = QueryGeneration.extract_response(content)
+      assert {:ok, %{statement: statement, variables: variables}} =
+               QueryGeneration.extract_response(content)
 
-      assert sql == "SELECT * FROM users"
+      assert statement == "SELECT * FROM users"
       assert variables == []
     end
 

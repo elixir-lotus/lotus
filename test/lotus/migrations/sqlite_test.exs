@@ -31,6 +31,7 @@ defmodule Lotus.Migrations.SQLiteTest do
 
     assert Ecto.Migrator.up(MigrationRepo, 1, Lotus.Migrations) in [:ok, :already_up]
     assert table_exists?("lotus_queries")
+    assert column_exists?("lotus_queries", "query_language")
 
     assert :ok = Ecto.Migrator.down(MigrationRepo, 1, Lotus.Migrations)
     refute table_exists?("lotus_queries")
@@ -40,6 +41,13 @@ defmodule Lotus.Migrations.SQLiteTest do
     rescue
       _ -> :ok
     end
+  end
+
+  defp column_exists?(table_name, column_name) do
+    {:ok, %{rows: rows}} =
+      MigrationRepo.query("SELECT name FROM pragma_table_info('#{table_name}')")
+
+    column_name in List.flatten(rows)
   end
 
   defp table_exists?(table_name) do

@@ -52,9 +52,9 @@ defmodule Lotus.AI.Prompts.Optimization do
     ## Rules
 
     - Only suggest improvements that are clearly supported by the execution plan or query structure
-    - Be specific: name the exact columns, tables, and index definitions
-    - For index suggestions, provide the exact CREATE INDEX statement
-    - For query rewrites, provide the rewritten SQL
+    - Be specific: name the exact fields, collections, and access structures
+    - For index suggestions, give the exact statement that creates the index in this language
+    - For query rewrites, give the rewritten statement in this language
     - Do not suggest changes that would alter query semantics
     - If the query is already well-optimized, return an empty array `[]`
     - Return ONLY the JSON array, no other text
@@ -85,14 +85,16 @@ defmodule Lotus.AI.Prompts.Optimization do
 
   ## Parameters
 
-  - `sql` - The SQL query to optimize
-  - `execution_plan` - The execution plan string (from EXPLAIN)
+  - `sql` - The query to optimize
+  - `execution_plan` - The execution plan string (from EXPLAIN or its equivalent)
   - `source_context` - Optional source context string
+  - `fence` - Markdown fence label for the statement block, from
+    `Lotus.AI.Prompts.AdapterNotes.fence_label/1`
   """
-  @spec user_prompt(String.t(), String.t() | nil, String.t() | nil) :: String.t()
-  def user_prompt(sql, execution_plan, source_context \\ nil) do
+  @spec user_prompt(String.t(), String.t() | nil, String.t() | nil, String.t()) :: String.t()
+  def user_prompt(sql, execution_plan, source_context \\ nil, fence \\ "sql") do
     [
-      "## SQL Query\n\n```sql\n#{sql}\n```",
+      "## Query\n\n```#{fence}\n#{sql}\n```",
       if(execution_plan, do: "\n\n## Execution Plan\n\n```\n#{execution_plan}\n```"),
       if(source_context, do: "\n\n## Source Context\n\n#{source_context}")
     ]

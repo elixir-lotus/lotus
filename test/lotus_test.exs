@@ -439,6 +439,61 @@ defmodule LotusTest do
       assert result.num_rows == 1
       assert result.rows == [[1]]
     end
+
+    test "runs when the stored language matches the source" do
+      query = %Query{
+        name: "Matching Language Query",
+        statement: "SELECT 1 as result",
+        data_source: "postgres",
+        query_language: "sql:postgres",
+        variables: []
+      }
+
+      assert {:ok, result} = Lotus.run_query(query)
+      assert result.rows == [[1]]
+    end
+
+    test "runs when no language is stored, whatever the source speaks" do
+      query = %Query{
+        name: "Unrecorded Language Query",
+        statement: "SELECT 1 as result",
+        data_source: "postgres",
+        query_language: nil,
+        variables: []
+      }
+
+      assert {:ok, result} = Lotus.run_query(query)
+      assert result.rows == [[1]]
+    end
+
+    test "errors when the source speaks another dialect of the same family" do
+      query = %Query{
+        name: "Intra-family Mismatch Query",
+        statement: "SELECT 1 as result",
+        data_source: "sqlite",
+        query_language: "sql:postgres",
+        variables: []
+      }
+
+      assert {:error, msg} = Lotus.run_query(query)
+      assert msg =~ "sql:postgres"
+      assert msg =~ "sql:sqlite"
+      assert msg =~ "sqlite"
+    end
+
+    test "errors when the source speaks another family" do
+      query = %Query{
+        name: "Cross-family Mismatch Query",
+        statement: "SELECT 1 as result",
+        data_source: "postgres",
+        query_language: "json:elasticsearch",
+        variables: []
+      }
+
+      assert {:error, msg} = Lotus.run_query(query)
+      assert msg =~ "json:elasticsearch"
+      assert msg =~ "sql:postgres"
+    end
   end
 
   describe "run_query/2 with query ID" do

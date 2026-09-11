@@ -94,6 +94,30 @@ ALTER TABLE lotus_queries RENAME COLUMN data_repo TO data_source;
 
 Fresh installs land on the correct column name automatically.
 
+### New column — `query_language`
+
+v1.0 also adds a nullable `query_language` column to `lotus_queries`. It
+records the `family:dialect` identifier (`sql:postgres`, `json:elasticsearch`)
+a saved query was written for, so Lotus can refuse to run it against a source
+that speaks something else. `NULL` means "derive it from the source's
+adapter", which is exactly how every existing row behaves — so there is no
+backfill and nothing to change in your app.
+
+**Postgres:** `mix ecto.migrate` applies it (`Lotus.Migrations.Postgres.V5`).
+
+**MySQL and SQLite:** unversioned, so run it by hand alongside the rename
+above:
+
+```sql
+-- MySQL
+ALTER TABLE lotus_queries ADD COLUMN query_language VARCHAR(32);
+
+-- SQLite
+ALTER TABLE lotus_queries ADD COLUMN query_language TEXT;
+```
+
+Fresh installs get the column automatically.
+
 ---
 
 ## 4. Cache tag prefix — `repo:*` → `source:*`
@@ -198,6 +222,51 @@ sufficient on its own.
 - `Lotus.AI.Actions.GetTableSchema` → `Lotus.AI.Actions.DescribeTable` (also:
   LLM-visible tool name changed from `"get_table_schema"` to
   `"describe_table"`)
+- `Lotus.AI.Actions.ExecuteSQL` → `Lotus.AI.Actions.ExecuteStatement` (also:
+  tool name `"execute_sql"` → `"execute_statement"`)
+- `Lotus.AI.Actions.ValidateSQL` → `Lotus.AI.Actions.ValidateStatement` (also:
+  tool name `"validate_sql"` → `"validate_statement"`)
+
+- `Lotus.AI.QueryGenerator.generate_sql/2` → `generate_statement/2`
+- `Lotus.AI.Prompts.QueryGeneration.extract_sql/1` → `extract_statement/1`
+
+Both action modules are published, so the rename is breaking for anything
+referencing them directly, and for adapter `error_patterns` hints naming the
+old tool names.
+
+### `:sql` keys are now `:statement`
+
+Finishing the move away from assuming every source is SQL:
+
+| Was | Now |
+|---|---|
+| `execute_sql` / `validate_sql` tool parameter `sql` | `statement` |
+| `ExecuteStatement` result key `:sql` | `:statement` |
+| `QueryGeneration.extract_response/1` → `%{sql: ...}` | `%{statement: ...}` |
+
+Two of these were already true in code and wrong only in the docs, so check
+your call sites rather than trusting a pre-v1 guide:
+
+- `Lotus.AI.explain_query/1` reads `opts[:statement]`. The docs said `:sql`.
+- `Lotus.AI.generate_query/1` returns `result.statement`. The docs showed
+  `result.sql`.
+
+### Prompt content moved from core to adapters
+
+Core's generation prompt no longer ships SQL-specific guidance ("use JOINs",
+"add LIMIT", "never generate INSERT / UPDATE / DELETE") to every source. Core
+now owns prompt structure only; adapters supply language content through two
+new optional `ai_context/1` keys, `:generation_notes` and `:read_only_notes`.
+Core keeps a generic default for each, so an adapter that supplies neither is
+unaffected.
+
+This matters if you author an adapter: move write-operation prohibitions out
+of `:syntax_notes` and into `:read_only_notes`, where they replace core's
+generic text instead of following it. See the [source adapters
+guide](source-adapters.md#what-belongs-in-which-field).
+
+The fence the LLM is asked for is now labelled with the adapter's language
+family (`sql`, `json`) instead of always `sql`.
 
 Public entry points (`Lotus.AI.generate_query/1`,
 `Lotus.AI.generate_query_with_context/1`, `Lotus.AI.explain_query/1`) are
@@ -341,7 +410,8 @@ Order matters — do these in sequence:
 2. [ ] **DB migration (Postgres)** — run `mix ecto.migrate` to apply the
    `data_repo` → `data_source` rename.
 3. [ ] **DB migration (MySQL / SQLite)** — run the manual `ALTER TABLE`
-   before deploying.
+   statements before deploying: the `data_repo` rename **and** the new
+   `query_language` column (§3).
 4. [ ] **Callers** — grep for `Lotus.run_sql`, `Lotus.data_repos`,
    `Lotus.get_table_schema`, `Lotus.default_data_repo`, `run_sql_with_context`
    etc. Rename per §2.
@@ -350,7 +420,8 @@ Order matters — do these in sequence:
 6. [ ] **Telemetry handlers** — `:sql`/`:params` → `statement.text`/`statement.params`.
 7. [ ] **Cache tag invalidations** — `repo:<name>` → `source:<name>`.
 8. [ ] **AI callers** — `suggest_optimizations` takes `:statement`; check for
-   `{:error, {:ai_feature_unsupported, _, _}}` in error paths.
+   `{:error, {:ai_feature_unsupported, _, _}}` in error paths; grep for
+   `ExecuteSQL`, `ValidateSQL`, `"execute_sql"` and `"validate_sql"` (§6).
 9. [ ] **Custom adapters** — see §8 above and the [authoring guide](source-adapters.md).
 10. [ ] **Run tests.** `mix compile --warnings-as-errors` + your suite will
     catch most mismatches (the removed names fail at compile time).

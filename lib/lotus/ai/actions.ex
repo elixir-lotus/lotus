@@ -7,7 +7,7 @@ defmodule Lotus.AI.Actions do
   """
 
   alias __MODULE__.{
-    ExecuteSQL,
+    ExecuteStatement,
     GetColumnValues,
     DescribeTable,
     ListDataSources,
@@ -26,6 +26,6 @@ defmodule Lotus.AI.Actions do
   Returns all action modules available to the investigation agent.
   """
   def investigation_actions do
-    [ListDataSources, ListSchemas, ListTables, DescribeTable, GetColumnValues, ExecuteSQL]
+    [ListDataSources, ListSchemas, ListTables, DescribeTable, GetColumnValues, ExecuteStatement]
   end
 end

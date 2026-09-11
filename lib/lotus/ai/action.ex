@@ -36,7 +36,7 @@ defmodule Lotus.AI.Action do
   """
 
   @doc """
-  Returns the tool name used by the LLM (e.g., "list_schemas", "execute_sql").
+  Returns the tool name used by the LLM (e.g., "list_schemas", "execute_statement").
   """
   @callback name() :: String.t()
 
