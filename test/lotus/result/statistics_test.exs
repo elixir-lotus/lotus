@@ -236,13 +236,32 @@ defmodule Lotus.Result.StatisticsTest do
 
     test "handles binaries that are not valid UTF-8" do
       invalid = <<194, 169, 153, 28, 40, 23, 204>>
+      encoded = Base.encode64(invalid)
       r = result(["s"], [[invalid], ["ok"], [invalid]])
       {:ok, stats} = Statistics.compute(r, "s")
 
       assert stats.type == :string
       assert stats.min_length == 2
-      assert stats.max_length == 7
-      assert %{value: ^invalid, count: 2} = hd(stats.top_values)
+      assert stats.max_length == String.length(encoded)
+      assert %{value: ^encoded, count: 2} = hd(stats.top_values)
+    end
+
+    test "statistics for invalid UTF-8 binaries are JSON encodable" do
+      r = result(["s"], [[<<194, 169, 153, 28, 40, 23, 204>>], ["ok"]])
+      {:ok, stats} = Statistics.compute(r, "s")
+
+      assert is_binary(Lotus.JSON.encode!(stats))
+    end
+
+    test "renders 16-byte UUID binaries as UUID strings" do
+      uuid = "550e8400-e29b-41d4-a716-446655440000"
+      {:ok, raw} = Ecto.UUID.dump(uuid)
+      r = result(["id"], [[raw], [raw]])
+      {:ok, stats} = Statistics.compute(r, "id")
+
+      assert stats.type == :string
+      assert stats.min_length == String.length(uuid)
+      assert %{value: ^uuid, count: 2} = hd(stats.top_values)
     end
 
     test "detects atoms as strings" do

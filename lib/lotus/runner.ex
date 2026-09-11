@@ -7,7 +7,7 @@ defmodule Lotus.Runner do
   Pass `read_only: false` to allow write operations.
   """
 
-  alias Lotus.{Middleware, Preflight, Result, Telemetry, Visibility}
+  alias Lotus.{Middleware, Preflight, Result, Telemetry, Value, Visibility}
   alias Lotus.Preflight.Relations
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
@@ -184,14 +184,30 @@ defmodule Lotus.Runner do
   defp apply_mask_policy(_value, _), do: nil
 
   defp to_string_safe(nil), do: ""
+
+  # Binaries stay as they are so a mask sees the stored bytes rather than a
+  # rendering of them. Everything else — maps from `jsonb`, structs, tuples —
+  # goes through the same display normalization the UI and exports use, since
+  # `to_string/1` raises for most of them.
   defp to_string_safe(v) when is_binary(v), do: v
-  defp to_string_safe(v), do: to_string(v)
+  defp to_string_safe(v), do: Value.to_display_string(v)
 
   defp sha256_hex(s) do
     :crypto.hash(:sha256, s) |> Base.encode16(case: :lower)
   end
 
   defp partial_mask(s, opts) when is_binary(s) do
+    if String.valid?(s), do: partial_mask_text(s, opts), else: mask_every_byte(s, opts)
+  end
+
+  # Binary data that is not valid UTF-8 (`bytea`, for example) has no readable
+  # prefix or suffix worth keeping, so none of it survives the mask.
+  defp mask_every_byte(s, opts) do
+    repl = Keyword.get(opts, :replacement, "*")
+    String.duplicate(repl, byte_size(s))
+  end
+
+  defp partial_mask_text(s, opts) do
     keep_last = Keyword.get(opts, :keep_last, 4)
     keep_first = Keyword.get(opts, :keep_first, 0)
     repl = Keyword.get(opts, :replacement, "*")
@@ -201,10 +217,13 @@ defmodule Lotus.Runner do
     right = min(keep_last, max(len - left, 0))
     mid = max(len - left - right, 0)
 
-    left_part = String.slice(s, 0, left)
-    right_part = if right > 0, do: String.slice(s, len - right, right), else: ""
-    masked = String.duplicate(repl, mid)
-    left_part <> masked <> right_part
+    if mid == 0 do
+      String.duplicate(repl, len)
+    else
+      left_part = String.slice(s, 0, left)
+      right_part = if right > 0, do: String.slice(s, len - right, right), else: ""
+      left_part <> String.duplicate(repl, mid) <> right_part
+    end
   end
 
   defp sanitize_opts(opts) do

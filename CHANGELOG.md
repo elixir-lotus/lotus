@@ -482,6 +482,12 @@
 
 ### Changed
 
+- `:sha256` column masks hash a rendered form of values that are neither text
+  nor binary, so digests change for those columns: a `NaiveDateTime` now
+  hashes `"2024-01-01T00:00:00"` rather than `"2024-01-01 00:00:00"`, and an
+  array hashes its JSON form rather than a charlist. Text and binary columns
+  hash exactly the bytes they did before, and `Decimal` renders identically
+  either way. Re-key anything that stores or joins on these digests.
 - `Lotus.Config.load!/0` caches the validated config in
   `:persistent_term` instead of re-running
   `NimbleOptions.validate/2` on every accessor call.
@@ -511,6 +517,20 @@
 
 ### Fixed
 
+- `Lotus.Result.Statistics` normalizes string values through
+  `Lotus.Value.to_display_string/1` before measuring them. Columns whose
+  values are not valid UTF-8 (PostgreSQL `bytea`, for example) raised
+  `ArgumentError` from `String.length/1`; they now report the Base64 form
+  the UI and exports already show, `:min_length` and `:max_length` are
+  always grapheme counts of that displayed form, and `:top_values` is
+  always safe to JSON-encode. Raw 16-byte UUID binaries report as UUID
+  strings rather than an `inspect/1` representation.
+- Column masking renders values that are neither text nor binary instead of
+  failing the query. A `:sha256` or `{:partial, opts}` mask on a `jsonb`
+  column raised `protocol String.Chars not implemented for type Map`, which
+  surfaced as a query error rather than a masked row. Such values now go
+  through `Lotus.Value.to_display_string/1`, the same rendering the UI and
+  exports use.
 - `describe_table/3` and `get_table_stats/3` now propagate adapter
   errors (permission denied, connection errors) instead of masking
   them as "Table not found" (#189).
@@ -535,6 +555,14 @@
 
 ### Security
 
+- The `{:partial, opts}` column mask no longer returns a value in full when
+  `:keep_first` plus `:keep_last` covers its whole length. A four-character
+  value under `keep_last: 4` came through unmasked; such a value is now
+  masked completely.
+- The `{:partial, opts}` column mask hides every byte of a value that is not
+  valid UTF-8 instead of measuring it as text. `String.length/1` and
+  `String.slice/1` report unreliable lengths for such binaries, which let a
+  `bytea` value pass through the mask intact.
 - Filter values are parameterized (bound as `$1`, `?`) instead of
   string-interpolated, eliminating SQL-injection risk via crafted
   filter values (#152).
