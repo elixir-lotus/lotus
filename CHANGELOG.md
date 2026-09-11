@@ -303,6 +303,14 @@
   `%Lotus.Query.Statement{}`) instead of separate `:sql` / `:params`
   keys. Extract via `statement.body` / `statement.params`.
 
+- **`:before_query` plugs can rewrite the statement.** Returning
+  `{:cont, %{payload | statement: rewritten}}` now changes what executes;
+  the runner used to discard the returned payload. This is what row-level
+  security and tenant predicates need. `:before_query` consequently runs
+  *before* statement sanitization and preflight, so the rewritten
+  statement is the one checked — a plug cannot rewrite its way onto a
+  denied table. Plugs that return the payload untouched are unaffected.
+
 - **Telemetry `[:lotus, :query, :start | :stop | :exception]` metadata
   carries `:source` and `:statement`.** The source name moved from
   `:repo` to `:source`, matching the middleware payloads; handlers that

@@ -29,10 +29,14 @@ defmodule Lotus.Runner do
     telemetry_meta = %{source: adapter.name, statement: statement, context: context}
     start_time = Telemetry.query_start(telemetry_meta)
 
+    # `:before_query` runs first because a plug may rewrite the statement —
+    # that is the point of the hook, for row-level security and tenant
+    # predicates. Sanitization and preflight then apply to what will actually
+    # execute, rather than to the text the caller originally supplied.
     result =
-      with :ok <- Adapter.sanitize_query(adapter, statement, sanitize_opts(opts)),
+      with {:ok, %Statement{} = statement} <- run_before_query(adapter, statement, context),
+           :ok <- Adapter.sanitize_query(adapter, statement, sanitize_opts(opts)),
            :ok <- preflight_visibility(adapter, statement, opts),
-           :ok <- run_before_query(adapter, statement, context),
            {:ok, %Result{} = res} <- exec_read_only(adapter, statement, opts),
            {:ok, %Result{} = res} <- run_after_query(adapter, statement, res, context) do
         {:ok, res}
@@ -234,11 +238,16 @@ defmodule Lotus.Runner do
     Keyword.take(opts, [:read_only])
   end
 
+  # Returns the statement to execute. A plug that rewrites `:statement` in the
+  # payload has its version carried forward; one that returns the payload
+  # untouched leaves the original in place. Anything that is not a statement
+  # is ignored rather than trusted.
   defp run_before_query(%Adapter{} = adapter, %Statement{} = statement, context) do
     payload = %{source: adapter.name, statement: statement, context: context}
 
     case Middleware.run(:before_query, payload) do
-      {:cont, _} -> :ok
+      {:cont, %{statement: %Statement{} = rewritten}} -> {:ok, rewritten}
+      {:cont, _} -> {:ok, statement}
       {:halt, reason} -> {:error, reason}
     end
   end
