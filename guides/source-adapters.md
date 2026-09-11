@@ -200,8 +200,8 @@ defmodule MyApp.Dialects.MSSQL do
   def query_language, do: "sql:tsql"
 
   @impl true
-  def limit_query(statement, limit),
-    do: "SELECT TOP #{limit} * FROM (#{statement}) AS t"
+  def limit_query(%Statement{body: body} = statement, limit),
+    do: %{statement | body: "SELECT TOP #{limit} * FROM (#{body}) AS t"}
 
   # -- Transaction & session --------------------------------------------------
   # execute_in_transaction/3, set_statement_timeout/2, set_search_path/2
@@ -385,9 +385,6 @@ defmodule MyApp.Adapters.Echo do
   def query_language(_state), do: "echo:dsl"
 
   @impl true
-  def limit_query(_state, statement, _limit), do: statement
-
-  @impl true
   def editor_config(_state),
     do: %{language: "echo:dsl", keywords: [], types: [], functions: [], context_boundaries: []}
 
@@ -433,6 +430,7 @@ legitimately cannot support a feature.
 | `prepare_for_analysis/2` | `{:error, :unsupported}` | Produce a runnable statement for `query_plan/3` analysis — strips `[[ ... ]]`, neutralizes `{{var}}`. |
 | `hierarchy_label/1` | `"Tables"` | UI label for the top-level hierarchy (e.g. `"Indices"` for Elasticsearch). |
 | `example_query/3` | generic `SELECT` | Source-native example for the query editor's placeholder text. |
+| `limit_query/3` | statement unchanged | Cap a statement at a row limit for the UI's preview affordance — `%Statement{}` in, `%Statement{}` out. |
 
 ## The Security Boundaries
 

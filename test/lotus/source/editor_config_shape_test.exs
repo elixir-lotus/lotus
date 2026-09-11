@@ -75,9 +75,6 @@ defmodule Lotus.Source.EditorConfigShapeTest do
         def supports_feature?(_state, _feature), do: false
 
         @impl true
-        def limit_query(_state, stmt, limit), do: "#{stmt} LIMIT #{limit}"
-
-        @impl true
         def db_type_to_lotus_type(_state, _type), do: :text
       end
     end

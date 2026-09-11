@@ -132,7 +132,8 @@ defmodule Lotus.Source.AdapterTest do
     def supports_feature?(_state, _), do: false
 
     @impl true
-    def limit_query(_state, statement, limit), do: "#{statement} LIMIT #{limit}"
+    def limit_query(_state, %Statement{body: body} = statement, limit),
+      do: %{statement | body: "#{body} LIMIT #{limit}"}
 
     @impl true
     def db_type_to_lotus_type(_state, "integer"), do: :integer
@@ -518,6 +519,41 @@ defmodule Lotus.Source.AdapterTest do
 
       assert {:ok, ctx} = Adapter.ai_context(adapter)
       assert ctx.language == "unknown"
+    end
+  end
+
+  describe "limit_query/3" do
+    setup do
+      {:ok,
+       adapter: %Adapter{
+         name: "main",
+         module: MockAdapter,
+         state: %{db: "test_db"},
+         source_type: :postgres
+       }}
+    end
+
+    test "dispatches the statement to the module and returns a statement", %{adapter: adapter} do
+      statement = Statement.new("SELECT 1", [:bound])
+
+      assert %Statement{body: body, params: params} =
+               Adapter.limit_query(adapter, statement, 10)
+
+      assert body == "SELECT 1 LIMIT 10"
+      assert params == [:bound]
+    end
+
+    test "returns the statement unchanged when the adapter does not implement it" do
+      stub = %Adapter{
+        name: "stub",
+        module: Lotus.Test.StubAdapter,
+        state: nil,
+        source_type: :other
+      }
+
+      statement = Statement.new(%{"query" => %{"match_all" => %{}}})
+
+      assert Adapter.limit_query(stub, statement, 10) == statement
     end
   end
 

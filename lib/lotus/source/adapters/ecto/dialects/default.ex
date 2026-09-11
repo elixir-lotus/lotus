@@ -121,8 +121,8 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Default do
   def query_language, do: "sql"
 
   @impl true
-  def limit_query(statement, limit) do
-    "SELECT * FROM (#{statement}) AS limited_query LIMIT #{limit}"
+  def limit_query(%Statement{body: body} = statement, limit) do
+    %{statement | body: "SELECT * FROM (#{body}) AS limited_query LIMIT #{limit}"}
   end
 
   @impl true

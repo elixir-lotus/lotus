@@ -615,20 +615,22 @@ defmodule Lotus.Source.Adapter do
               {:ok, Statement.t()} | {:error, term()}
 
   @doc """
-  Wrap a raw statement string with a source-specific row limit.
+  Cap a statement at a source-specific row limit.
 
-  **SQL-shaped callback.** The `statement` argument is the raw statement
-  text (typically SQL) and the result is the same text wrapped with a
-  single-page `LIMIT` / `TOP` / `FETCH FIRST` clause (exact syntax varies
-  per dialect). Used by the UI's "preview this query" affordance to cap
-  returned rows without touching the underlying query.
+  Takes a `%Statement{}` and returns a `%Statement{}` whose body carries a
+  single-page limit — a `LIMIT` / `TOP` / `FETCH FIRST` clause for SQL
+  dialects, a `size` key for a JSON DSL, whatever the language calls it.
+  Used by the UI's "preview this query" affordance to cap returned rows
+  without touching the underlying query. `statement.params` is carried
+  through untouched unless the adapter binds the limit itself.
 
-  Non-SQL adapters whose languages don't have a textual limit clause may
-  return the input unchanged — Lotus core treats the callback as best-
-  effort and does not depend on it for correctness.
+  Default (when not implemented): the statement unchanged. Adapters whose
+  language has no notion of a row cap simply omit the callback — Lotus
+  core treats it as best-effort and does not depend on it for
+  correctness.
   """
-  @callback limit_query(state :: term(), statement :: String.t(), limit :: pos_integer()) ::
-              String.t()
+  @callback limit_query(state :: term(), statement :: Statement.t(), limit :: pos_integer()) ::
+              Statement.t()
 
   @doc ~S'Return the human-readable label for the top-level hierarchy (e.g. "Tables", "Indices").'
   @callback hierarchy_label(state :: term()) :: String.t()
@@ -832,7 +834,8 @@ defmodule Lotus.Source.Adapter do
     example_query: 3,
     can_handle?: 1,
     wrap: 2,
-    transform_statement: 2
+    transform_statement: 2,
+    limit_query: 3
   ]
 
   # Conservative fallback deny rules applied when no adapter can be resolved
@@ -1509,9 +1512,11 @@ defmodule Lotus.Source.Adapter do
   end
 
   @doc "Wrap a statement with a limit clause via the adapter."
-  @spec limit_query(t(), String.t(), pos_integer()) :: String.t()
-  def limit_query(%__MODULE__{module: mod, state: state}, statement, limit) do
-    mod.limit_query(state, statement, limit)
+  @spec limit_query(t(), Statement.t(), pos_integer()) :: Statement.t()
+  def limit_query(%__MODULE__{module: mod, state: state}, %Statement{} = statement, limit) do
+    if function_exported?(mod, :limit_query, 3),
+      do: mod.limit_query(state, statement, limit),
+      else: statement
   end
 
   @doc "Return the hierarchy label via the adapter."

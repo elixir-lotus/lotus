@@ -266,13 +266,20 @@ defmodule Lotus.SourcesTest do
   describe "limit_query/3" do
     test "wraps statement with limit from adapter struct" do
       adapter = Source.resolve!("postgres", nil)
-      result = Source.limit_query(adapter, "SELECT * FROM users", 10)
-      assert result == "SELECT * FROM (SELECT * FROM users) AS limited_query LIMIT 10"
+      statement = Lotus.Query.Statement.new("SELECT * FROM users", [:bound])
+
+      assert %Lotus.Query.Statement{body: body, params: params} =
+               Source.limit_query(adapter, statement, 10)
+
+      assert body == "SELECT * FROM (SELECT * FROM users) AS limited_query LIMIT 10"
+      assert params == [:bound]
     end
 
     test "wraps statement with limit from source name" do
-      result = Source.limit_query("postgres", "SELECT * FROM users", 10)
-      assert result == "SELECT * FROM (SELECT * FROM users) AS limited_query LIMIT 10"
+      statement = Lotus.Query.Statement.new("SELECT * FROM users")
+
+      assert %Lotus.Query.Statement{body: body} = Source.limit_query("postgres", statement, 10)
+      assert body == "SELECT * FROM (SELECT * FROM users) AS limited_query LIMIT 10"
     end
   end
 end

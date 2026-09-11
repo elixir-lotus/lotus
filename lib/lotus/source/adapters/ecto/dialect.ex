@@ -88,7 +88,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
   @callback source_type() :: :postgres | :mysql | :sqlite | :other | atom()
   @callback ecto_adapter() :: module() | nil
   @callback query_language() :: String.t()
-  @callback limit_query(statement :: String.t(), limit :: pos_integer()) :: String.t()
+  @callback limit_query(statement :: Statement.t(), limit :: pos_integer()) :: Statement.t()
 
   # ---------------------------------------------------------------------------
   # Optional callbacks — Source identity

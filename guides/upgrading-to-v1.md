@@ -268,6 +268,10 @@ changed:
   expose a plan return `{:ok, nil}` without surfacing an error.
 - **`transform_bound_query/4` arity → `transform_bound_query/3`** — takes
   `(state, %Statement{}, opts)`, not the old `(state, sql, params, opts)`.
+- **`limit_query/3` is now `%Statement{}` in, `%Statement{}` out** and
+  **optional**, defaulting to the statement unchanged. It used to be
+  required and typed on raw statement text, which forced non-SQL adapters
+  to implement a passthrough just to satisfy the behaviour.
 - **New optional callbacks:** `needs_preflight?/2`, `validate_statement/3`,
   `parse_qualified_name/2`, `validate_identifier/3`,
   `supported_filter_operators/1`, `ai_context/1`, `prepare_for_analysis/2`.

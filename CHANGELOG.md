@@ -25,7 +25,9 @@
   is a public facade (not a behaviour) with `resolve!/2`, `list_sources/0`,
   `get_source!/1`, `default_source/0`, `source_type/1`,
   `supports_feature?/2`, `hierarchy_label/1`, `example_query/3`,
-  `query_language/1`, `limit_query/3`, `supported_filter_operators/1`,
+  `query_language/1`, `limit_query/3` (`%Statement{}` in, `%Statement{}`
+  out, optional with a passthrough default),
+  `supported_filter_operators/1`,
   `prepare_for_analysis/2`, `name_from_module!/1`. SQL-specific
   callbacks moved to `Lotus.Source.Adapters.Ecto.Dialect`. The
   `Lotus.Sources` module and all `Lotus.Sources.*` dialect modules
