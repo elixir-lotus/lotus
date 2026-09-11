@@ -177,6 +177,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   def supports_feature?(:make_interval), do: true
   def supports_feature?(:arrays), do: true
   def supports_feature?(:json), do: true
+  def supports_feature?(:dynamic_options), do: true
   def supports_feature?(_), do: false
 
   @impl true

@@ -550,6 +550,15 @@
 
 ### Added
 
+- **`:dynamic_options` feature atom** — `supports_feature?/2` now answers
+  a documented `:dynamic_options` question: whether a query against this
+  source can return a flat list of values suitable for populating a
+  variable's dropdown. Every built-in SQL dialect (Postgres, MySQL,
+  SQLite, and the generic Ecto fallback) answers `true`; adapters whose
+  query language returns shaped documents rather than rows answer
+  `false`, and the dashboard then offers manual option entry only
+  (elixir-lotus/lotus_web#127).
+
 - **`editor_config/1` exposes two optional extension points** —
   `:dialect_spec` (SQL tokenizer options: identifier quotes, operator
   chars, hash / slash / dollar-quoted string rules, PL/SQL quoting,

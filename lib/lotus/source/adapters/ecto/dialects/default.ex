@@ -131,6 +131,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Default do
   end
 
   @impl true
+  def supports_feature?(:dynamic_options), do: true
   def supports_feature?(_), do: false
 
   @impl true
