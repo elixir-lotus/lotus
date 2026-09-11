@@ -8,6 +8,7 @@ defmodule Lotus.Result.Statistics do
   """
 
   alias Lotus.Result
+  alias Lotus.Value
 
   @type column_type :: :numeric | :string | :temporal | :unknown
   @type column_stats :: map()
@@ -17,6 +18,12 @@ defmodule Lotus.Result.Statistics do
 
   Returns a map with `:type` and type-specific statistics keys.
   Returns `{:error, reason}` if the column is not found.
+
+  String values pass through `Lotus.Value.to_display_string/1`, the same
+  normalization the UI and exports use. Binary columns that are not valid
+  UTF-8 (`bytea`, for example) therefore appear Base64-encoded, `:min_length`
+  and `:max_length` are always grapheme counts of that displayed form, and
+  `:top_values` is always safe to JSON-encode.
   """
   @spec compute(Result.t(), String.t()) :: {:ok, column_stats()} | {:error, String.t()}
   def compute(%Result{} = result, column_name) when is_binary(column_name) do
@@ -177,12 +184,12 @@ defmodule Lotus.Result.Statistics do
   defp string_stats(values) do
     base = base_stats(values)
     {non_nil, _} = partition_nil(values)
-    strings = Enum.map(non_nil, &to_string/1)
+    strings = Enum.map(non_nil, &Value.to_display_string/1)
 
     if strings == [] do
       Map.merge(base, %{min_length: nil, max_length: nil, top_values: []})
     else
-      lengths = Enum.map(strings, &safe_length/1)
+      lengths = Enum.map(strings, &String.length/1)
 
       top_values =
         strings
@@ -197,10 +204,6 @@ defmodule Lotus.Result.Statistics do
         top_values: top_values
       })
     end
-  end
-
-  defp safe_length(s) do
-    if String.valid?(s), do: String.length(s), else: byte_size(s)
   end
 
   # --- Temporal statistics ---

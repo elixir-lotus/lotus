@@ -452,6 +452,22 @@ When using `:mask` action, choose from these strategies:
 # "john@example.com" becomes "jo#######.com"
 ```
 
+Partial masking never lets a value through untouched:
+
+```elixir
+{"users", "pin", [action: :mask, mask: {:partial, keep_last: 4}]}
+# "1234" becomes "****", not "1234" — a value no longer than the kept
+# ends has nothing left to mask, so nothing is kept.
+
+{"users", "key_material", [action: :mask, mask: {:partial, keep_last: 4}]}
+# A binary column (`bytea`, `BLOB`, `VARBINARY`) that does not hold text
+# becomes one replacement character per byte. Such data has no readable
+# prefix or suffix worth keeping.
+```
+
+Values that are neither text nor binary — a `jsonb` column, for example —
+are rendered the way the UI and exports render them, then masked as text.
+
 ### Schema Introspection Control
 
 Control whether columns appear in schema introspection:

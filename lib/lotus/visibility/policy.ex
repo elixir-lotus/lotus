@@ -139,6 +139,12 @@ defmodule Lotus.Visibility.Policy do
     - `keep_last: n` - Keep last n characters
     - `replacement: str` - Character to use for masking (default: "*")
 
+  Partial masking keeps nothing when `keep_first` plus `keep_last` covers the
+  whole value, so a value that leaves nothing to mask is masked completely.
+  Binary values that do not hold text (`bytea`, `BLOB`, `VARBINARY`) become one
+  replacement character per byte. Any other value is rendered with
+  `Lotus.Value.to_display_string/1` and then masked as text.
+
   ## Examples
 
       iex> Policy.column_mask(:sha256)

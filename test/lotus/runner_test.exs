@@ -1,15 +1,18 @@
 defmodule Lotus.RunnerTest do
   use Lotus.Case, async: true
+  use Mimic
 
   alias Lotus.Fixtures
   alias Lotus.Query.Statement
   alias Lotus.Runner
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
+  alias Lotus.Test.MysqlRepo
   alias Lotus.Test.Repo
   alias Lotus.Test.SqliteRepo
 
   @pg_adapter EctoAdapter.wrap("postgres", Repo)
   @sqlite_adapter EctoAdapter.wrap("sqlite", SqliteRepo)
+  @mysql_adapter EctoAdapter.wrap("mysql", MysqlRepo)
 
   setup do
     fixtures = Fixtures.setup_test_data()
@@ -1078,6 +1081,137 @@ defmodule Lotus.RunnerTest do
       assert id_a == uuid1
       assert ref_a == uuid2
       assert id_b == uuid2
+    end
+  end
+
+  describe "column masking" do
+    setup do
+      Mimic.copy(Lotus.Config)
+      :ok
+    end
+
+    test "partial mask hides every byte of a value that is not valid UTF-8" do
+      Lotus.Config
+      |> stub(:column_rules_for_source_name, fn _source ->
+        [{"blob", [mask: {:partial, keep_last: 4}]}]
+      end)
+
+      {:ok, result} =
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new("SELECT '\\xdeadbeef'::bytea AS blob")
+        )
+
+      assert %{rows: [["****"]]} = result
+    end
+
+    test "partial mask hides a value no longer than the kept tail" do
+      Lotus.Config
+      |> stub(:column_rules_for_source_name, fn _source ->
+        [{"pin", [mask: {:partial, keep_last: 4}]}]
+      end)
+
+      {:ok, result} =
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new("SELECT '1234'::text AS pin")
+        )
+
+      assert %{rows: [["****"]]} = result
+    end
+
+    test "partial mask still keeps the tail of a valid UTF-8 value" do
+      Lotus.Config
+      |> stub(:column_rules_for_source_name, fn _source ->
+        [{"secret", [mask: {:partial, keep_last: 4}]}]
+      end)
+
+      {:ok, result} =
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new("SELECT 'supersecret'::text AS secret")
+        )
+
+      assert %{rows: [["*******cret"]]} = result
+    end
+
+    test "partial mask renders a jsonb value instead of failing the query" do
+      Lotus.Config
+      |> stub(:column_rules_for_source_name, fn _source ->
+        [{"doc", [mask: {:partial, keep_last: 4}]}]
+      end)
+
+      {:ok, result} =
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new(~s|SELECT '{"a":1}'::jsonb AS doc|)
+        )
+
+      assert %{rows: [["***\":1}"]]} = result
+    end
+
+    test "sha256 mask hashes a jsonb value instead of failing the query" do
+      Lotus.Config
+      |> stub(:column_rules_for_source_name, fn _source ->
+        [{"doc", [mask: :sha256]}]
+      end)
+
+      {:ok, result} =
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new(~s|SELECT '{"a":1}'::jsonb AS doc|)
+        )
+
+      assert %{rows: [[digest]]} = result
+      assert digest =~ ~r/\A[0-9a-f]{64}\z/
+    end
+
+    test "sha256 mask hashes the stored bytes of a value that is not valid UTF-8" do
+      Lotus.Config
+      |> stub(:column_rules_for_source_name, fn _source ->
+        [{"blob", [mask: :sha256]}]
+      end)
+
+      {:ok, result} =
+        Runner.run_statement(
+          @pg_adapter,
+          Statement.new("SELECT '\\xdeadbeef'::bytea AS blob")
+        )
+
+      expected = :crypto.hash(:sha256, <<222, 173, 190, 239>>) |> Base.encode16(case: :lower)
+      assert %{rows: [[^expected]]} = result
+    end
+
+    @tag :sqlite
+    test "partial mask hides every byte of a SQLite blob" do
+      Lotus.Config
+      |> stub(:column_rules_for_source_name, fn _source ->
+        [{"blob", [mask: {:partial, keep_last: 4}]}]
+      end)
+
+      {:ok, result} =
+        Runner.run_statement(
+          @sqlite_adapter,
+          Statement.new("SELECT x'deadbeef' AS blob")
+        )
+
+      assert %{rows: [["****"]]} = result
+    end
+
+    @tag :mysql
+    test "partial mask hides every byte of a MySQL binary value" do
+      Lotus.Config
+      |> stub(:column_rules_for_source_name, fn _source ->
+        [{"payload", [mask: {:partial, keep_last: 4}]}]
+      end)
+
+      {:ok, result} =
+        Runner.run_statement(
+          @mysql_adapter,
+          Statement.new("SELECT CAST(0xDEADBEEF AS BINARY) AS payload")
+        )
+
+      assert %{rows: [["****"]]} = result
     end
   end
 
