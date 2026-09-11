@@ -1,5 +1,15 @@
 defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
-  @moduledoc false
+  @moduledoc """
+  SQLite dialect for `Lotus.Source.Adapters.Ecto`.
+
+  SQLite has a flat namespace: `list_schemas/1` returns `[]` and every
+  relation is `{nil, table}`. Query plans come from `EXPLAIN QUERY PLAN`.
+  Neither a session timeout nor a search path exists, so both hooks are
+  omitted.
+
+  Read alongside `Lotus.Source.Adapters.Ecto.Dialect` when writing a dialect
+  for another SQL engine — this module is the reference implementation.
+  """
 
   @behaviour Lotus.Source.Adapters.Ecto.Dialect
 

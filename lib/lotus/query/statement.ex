@@ -44,9 +44,9 @@ defmodule Lotus.Query.Statement do
   @doc """
   Build a statement from a body and optional bound params.
 
-  Typically the pipeline builds statements via `Lotus.execute_with_options/7`,
-  but callers (Runner integration tests, adapter-author examples) sometimes
-  need to construct one directly.
+  Typically the execution pipeline builds statements itself, but callers
+  (Runner integration tests, adapter-author examples) sometimes need to
+  construct one directly.
   """
   @spec new(body :: term(), params :: list()) :: t()
   def new(body, params \\ []) when is_list(params) do

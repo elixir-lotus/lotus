@@ -421,7 +421,7 @@ legitimately cannot support a feature.
 | `substitute_variable/5` | `{:error, :unsupported}` | Support `{{var}}` in stored queries. **Security boundary — see below.** |
 | `substitute_list_variable/5` | `{:error, :unsupported}` | Support list variables. |
 | `validate_statement/3` | `:ok` (trust-on-execute) | Validate a draft via an engine's `_validate` endpoint without executing. |
-| `parse_qualified_name/2` | `{:ok, [name]}` | Adapters with multi-level namespace hierarchies (`schema.table`, `db.collection`). |
+| `parse_qualified_name/2` | `{:ok, [name]}` | Adapters with a two-level namespace (`schema.table`, `db.collection`). See [Relations are two-level](#relations-are-two-level). |
 | `validate_identifier/3` | `:ok` (permissive) | Enforce your query language's identifier grammar. |
 | `supported_filter_operators/1` | all of `Lotus.Query.Filter.operators/0` | Declare the subset of filter operators your `apply_filters/3` actually handles. |
 | `extract_accessed_resources/2` | `{:unrestricted, reason}` | Return `{:ok, MapSet}` of accessed `{schema, table}` tuples so visibility rules apply. **See below.** |
@@ -572,6 +572,34 @@ Fields:
 For large function lists, extract into a dedicated `EditorConfig` submodule
 (see `lotus_clickhouse` for an example with 300+ functions).
 
+## Relations are Two-Level
+
+Everywhere Lotus names a resource it uses exactly two levels:
+`{schema | nil, table}`. Visibility rules, deny lists, `describe_table/3`,
+`resolve_table_namespace/3`, the preflight relation set and
+`extract_accessed_resources/2` all speak this shape, and core never grows a
+third element.
+
+`nil` in the first position means unqualified — either a source with no
+namespace concept (SQLite tables, Elasticsearch indices) or a name the
+caller left unqualified.
+
+If your engine has a **deeper** hierarchy, flatten everything above the leaf
+into the schema part, keeping your query language's own separator:
+
+| Engine shape | Lotus relation |
+|---|---|
+| `schema.table` | `{"schema", "table"}` |
+| flat (`index`) | `{nil, "index"}` |
+| `project.dataset.table` | `{"project.dataset", "table"}` |
+| `catalog.schema.table` | `{"catalog.schema", "table"}` |
+
+Your adapter owns the flattening, in `parse_qualified_name/2` and
+`resolve_table_namespace/3`. Core treats the schema part as an opaque string
+and compares it verbatim against visibility rules — so a deny rule a host
+writes has to match the spelling your adapter emits. Document that spelling
+in your adapter's README.
+
 ## A Note on the "schema" Word
 
 Lotus's surface uses "schema" for two distinct concepts historically — in
@@ -614,7 +642,7 @@ established meaning and are kept for recognizability:
 - `Lotus.AI.Conversation.schema_context` field → `source_context`
   (internal). The field stores tables the AI has analyzed — "source
   context" is the accurate term now that non-SQL sources are first-class.
-- `Lotus.AI.Conversation.update_schema_context/2` →
+- `Lotus.AI.Conversation.update_source_context/2` →
   `update_source_context/2` (internal).
 - Optimization prompt type enum: `"schema"` → `"structure"` in suggestion
   JSON contract. LLMs now respond with

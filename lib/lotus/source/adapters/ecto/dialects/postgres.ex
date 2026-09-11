@@ -1,5 +1,14 @@
 defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
-  @moduledoc false
+  @moduledoc """
+  PostgreSQL dialect for `Lotus.Source.Adapters.Ecto`.
+
+  Namespaces are PostgreSQL schemas. Query plans come from
+  `EXPLAIN (FORMAT JSON)`, run inside a read-only transaction.
+  `set_search_path/2` and `set_statement_timeout/2` are both honoured.
+
+  Read alongside `Lotus.Source.Adapters.Ecto.Dialect` when writing a dialect
+  for another SQL engine — this module is the reference implementation.
+  """
 
   @behaviour Lotus.Source.Adapters.Ecto.Dialect
 

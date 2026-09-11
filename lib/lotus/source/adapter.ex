@@ -36,13 +36,39 @@ defmodule Lotus.Source.Adapter do
   ## Pipeline Statement contract
 
   All pipeline callbacks operate on a `%Lotus.Query.Statement{}` struct that
-  carries the adapter-native payload (`:text`, opaque term), `:params`, and
+  carries the adapter-native payload (`:body`, an opaque term), `:params`, and
   adapter-specific `:meta`. Adapters return a new statement with the relevant
   field updated — the pipeline is a series of pure `statement -> statement`
   transforms.
 
   Introspection callbacks consistently return `{:ok, result} | {:error, reason}`
   tuples so callers can handle failures uniformly.
+
+  ## Relations are two-level
+
+  Everywhere Lotus names a resource it uses exactly two levels:
+  `{schema | nil, table}`. That shape is fixed — visibility rules, deny
+  lists, `describe_table/3`, `resolve_table_namespace/3`, the preflight
+  relation set and `extract_accessed_resources/2` all speak it, and core
+  never grows a third element.
+
+  `nil` in the first position means "unqualified" — a source with no
+  namespace concept at all (SQLite tables, Elasticsearch indices), or a
+  name the caller left unqualified.
+
+  Engines with a **deeper** hierarchy flatten everything above the leaf
+  into the schema part, keeping the separator their own query language
+  uses:
+
+    * BigQuery `project.dataset.table` → `{"project.dataset", "table"}`
+    * A catalog/schema/table engine → `{"catalog.schema", "table"}`
+
+  Adapters own that flattening in `parse_qualified_name/2` and
+  `resolve_table_namespace/3`; core treats the schema part as an opaque
+  string and compares it verbatim against visibility rules. The practical
+  consequence for adapter authors: a deny rule the host writes must match
+  the flattened form your adapter produces, so document the spelling your
+  adapter emits.
 
   ## Dispatch helpers
 
@@ -199,7 +225,7 @@ defmodule Lotus.Source.Adapter do
   @doc """
   Rewrite the statement after variable substitution.
 
-  Pipeline position: fires inside `Lotus.execute_with_options/7` **after**
+  Pipeline position: fires inside the execution pipeline **after**
   `{{var}}` placeholders have been resolved into `statement.params`, and
   **before** `apply_filters`, `apply_sorts`, and `apply_pagination` mutate
   the statement.
@@ -331,7 +357,7 @@ defmodule Lotus.Source.Adapter do
 
   **Security note.** Adapters that inline values are the only defense
   against injection at this layer. Never interpolate raw strings —
-  delegate to `Lotus.JSON.encode!/1` or an equivalent escaper for the target
+  delegate to `Lotus.JSON` or an equivalent escaper for the target
   language.
 
   Default (when not implemented): `{:error, :unsupported}`.
@@ -396,13 +422,16 @@ defmodule Lotus.Source.Adapter do
   Parse a qualified resource name into its hierarchy components.
 
   The return is an ordered list: the most-coarse component first, the leaf
-  last. Component count should match `hierarchy_label/1` depth.
+  last. At most two components — see "Relations are two-level" above; an
+  engine with a deeper hierarchy flattens the upper levels into the first
+  component.
 
   Examples across query languages:
 
     * SQL: `"public.users"` → `["public", "users"]`
     * Elasticsearch: `"logs-2025-01"` → `["logs-2025-01"]` (flat)
     * Mongo: `"mydb.users"` → `["mydb", "users"]`
+    * BigQuery: `"proj.ds.tbl"` → `["proj.ds", "tbl"]` (flattened)
 
   Used by discovery UIs and AI actions to route a user-supplied name to
   the right introspection call.
@@ -595,7 +624,7 @@ defmodule Lotus.Source.Adapter do
   Callers (`Lotus.AI.QueryOptimizer`) run this first so the adapter can
   resolve any `[[ ... ]]` optional clauses and replace `{{var}}`
   placeholders with language-appropriate null-ish literals (`NULL` for
-  SQL, `null` for JSON DSLs). The returned statement's `:text` must be
+  SQL, `null` for JSON DSLs). The returned statement's `:body` must be
   syntactically valid in the adapter's language without bound params
   so the engine's EXPLAIN / profile endpoint can parse it.
 

@@ -1,5 +1,15 @@
 defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
-  @moduledoc false
+  @moduledoc """
+  MySQL dialect for `Lotus.Source.Adapters.Ecto`.
+
+  MySQL has no schema-within-database concept, so databases serve as
+  namespaces. Query plans come from `EXPLAIN FORMAT=JSON`, and the
+  statement timeout is applied as `max_execution_time`. There is no search
+  path, so `set_search_path/2` is not implemented.
+
+  Read alongside `Lotus.Source.Adapters.Ecto.Dialect` when writing a dialect
+  for another SQL engine — this module is the reference implementation.
+  """
 
   @behaviour Lotus.Source.Adapters.Ecto.Dialect
 

@@ -102,7 +102,7 @@ Everything lives under `lib/lotus/`. The library is roughly split into a public 
 - [`Lotus.Dashboards`](../lib/lotus/dashboards.ex) — CRUD and orchestration for dashboards (cards, filters, filter mappings). Uses the task supervisor to fan out card execution.
 - [`Lotus.Viz`](../lib/lotus/viz.ex) — CRUD and validation for per-query visualization configs.
 - [`Lotus.Query.Filter`](../lib/lotus/query/filter.ex) / [`Lotus.Query.Sort`](../lib/lotus/query/sort.ex) — Runtime filter/sort structs that the source adapters inject into already-prepared SQL.
-- [`Lotus.SQL.*`](../lib/lotus/sql/) — Low-level SQL helpers (sanitizer, identifier quoting, filter/sort injectors, validator, transformer).
+- `Lotus.Source.Adapters.Ecto.SQL.*` (`lib/lotus/source/adapters/ecto/sql/`) — Low-level SQL helpers (sanitizer, identifier quoting, filter/sort injectors, validator, transformer).
 
 **Introspection and visibility**
 
@@ -136,7 +136,7 @@ Everything lives under `lib/lotus/`. The library is roughly split into a public 
 - [`Lotus.AI.SQLGenerator`](../lib/lotus/ai/sql_generator.ex), [`QueryExplainer`](../lib/lotus/ai/query_explainer.ex), [`QueryOptimizer`](../lib/lotus/ai/query_optimizer.ex) — Request orchestration for each AI capability.
 - [`Lotus.AI.Conversation`](../lib/lotus/ai/conversation.ex) — Multi-turn conversation state used for iterative refinement.
 - [`Lotus.AI.Actions`](../lib/lotus/ai/actions.ex) and `lib/lotus/ai/actions/` — Tool definitions the LLM can call (schema listing, column value sampling, SQL validation/execution).
-- [`Lotus.AI.Prompts`](../lib/lotus/ai/prompts/) — Prompt templates for SQL generation, explanation, optimization, and variable inference.
+- `Lotus.AI.Prompts.*` (`lib/lotus/ai/prompts/`) — Prompt templates for SQL generation, explanation, optimization, and variable inference.
 - [`Lotus.AI.SchemaOptimizer`](../lib/lotus/ai/schema_optimizer.ex) — Trims schema context before it is sent to the LLM.
 
 ### Query Execution Pipeline
