@@ -1,6 +1,7 @@
 defmodule Lotus.SourcesTest do
   use Lotus.Case, async: true
 
+  alias Lotus.Query.Statement
   alias Lotus.Source
   alias Lotus.Source.Adapter
 
@@ -264,19 +265,18 @@ defmodule Lotus.SourcesTest do
   describe "limit_query/3" do
     test "wraps statement with limit from adapter struct" do
       adapter = Source.resolve!("postgres", nil)
-      statement = Lotus.Query.Statement.new("SELECT * FROM users", [:bound])
+      statement = Statement.new("SELECT * FROM users", [:bound])
 
-      assert %Lotus.Query.Statement{body: body, params: params} =
-               Source.limit_query(adapter, statement, 10)
+      assert %Statement{body: body, params: params} = Source.limit_query(adapter, statement, 10)
 
       assert body == "SELECT * FROM (SELECT * FROM users) AS limited_query LIMIT 10"
       assert params == [:bound]
     end
 
     test "wraps statement with limit from source name" do
-      statement = Lotus.Query.Statement.new("SELECT * FROM users")
+      statement = Statement.new("SELECT * FROM users")
 
-      assert %Lotus.Query.Statement{body: body} = Source.limit_query("postgres", statement, 10)
+      assert %Statement{body: body} = Source.limit_query("postgres", statement, 10)
       assert body == "SELECT * FROM (SELECT * FROM users) AS limited_query LIMIT 10"
     end
   end
