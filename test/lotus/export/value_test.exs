@@ -62,6 +62,14 @@ defmodule Lotus.Export.ValueTest do
       assert Value.to_csv_string(decimal) == "999999999999999999999999.123456789"
     end
 
+    test "renders a Decimal wider than Decimal's default output cap" do
+      digits = 7017
+      decimal = %Decimal{sign: 1, coef: String.to_integer(String.duplicate("7", digits)), exp: 0}
+
+      assert Value.to_csv_string(decimal) == String.duplicate("7", digits)
+      assert Value.for_json(decimal) == String.duplicate("7", digits)
+    end
+
     test "handles Decimal NaN" do
       decimal = %Decimal{sign: 1, coef: :NaN, exp: 0}
       assert Value.to_csv_string(decimal) == "NaN"
