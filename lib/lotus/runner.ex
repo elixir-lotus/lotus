@@ -18,7 +18,8 @@ defmodule Lotus.Runner do
           timeout: non_neg_integer(),
           statement_timeout_ms: non_neg_integer(),
           read_only: boolean(),
-          search_path: String.t() | nil
+          search_path: String.t() | nil,
+          scope: term()
         ]
 
   @spec run_statement(Adapter.t(), Statement.t(), opts()) ::
@@ -63,7 +64,7 @@ defmodule Lotus.Runner do
             Adapter.execute_query(adapter, body, params, opts ++ [timeout: timeout])
           end)
 
-        handle_query_result(res, elapsed_us, adapter)
+        handle_query_result(res, elapsed_us, adapter, Keyword.get(opts, :scope))
       end,
       opts
     )
@@ -78,7 +79,8 @@ defmodule Lotus.Runner do
   defp handle_query_result(
          {:ok, %{columns: cols, rows: rows} = raw},
          elapsed_us,
-         %Adapter{} = adapter
+         %Adapter{} = adapter,
+         scope
        ) do
     num_rows = Map.get(raw, :num_rows, length(rows || []))
     command = normalize_command(Map.get(raw, :command))
@@ -87,7 +89,9 @@ defmodule Lotus.Runner do
     rels = Relations.take()
 
     policies =
-      Enum.map(cols || [], fn c -> Visibility.column_policy_for(adapter.name, rels, c) end)
+      Enum.map(cols || [], fn c ->
+        Visibility.column_policy_for(adapter.name, rels, c, scope)
+      end)
 
     case enforce_column_policies(cols || [], rows || [], policies) do
       {:error, msg} ->
@@ -109,11 +113,11 @@ defmodule Lotus.Runner do
     end
   end
 
-  defp handle_query_result({:error, err}, _elapsed_us, _adapter) do
+  defp handle_query_result({:error, err}, _elapsed_us, _adapter, _scope) do
     {:error, err}
   end
 
-  defp handle_query_result(other, _elapsed_us, _adapter) do
+  defp handle_query_result(other, _elapsed_us, _adapter, _scope) do
     other
   end
 
@@ -256,8 +260,9 @@ defmodule Lotus.Runner do
   defp preflight_visibility(%Adapter{} = adapter, %Statement{} = statement, opts) do
     if Adapter.needs_preflight?(adapter, statement) do
       search_path = Keyword.get(opts, :search_path)
+      scope = Keyword.get(opts, :scope)
 
-      case Preflight.authorize(adapter, statement, search_path) do
+      case Preflight.authorize(adapter, statement, search_path, scope) do
         :ok -> :ok
         {:error, msg} -> {:error, msg}
       end

@@ -25,6 +25,81 @@ defmodule Lotus.PreflightTest do
     end
   end
 
+  describe "scoped visibility at execution time" do
+    setup :set_mimic_from_context
+
+    setup do
+      Mimic.copy(Lotus.Config)
+      :ok
+    end
+
+    defmodule TenantResolver do
+      @moduledoc """
+      Denies `test_users` for tenant 2 only. Models the per-tenant rules a
+      host plugs in: the same source, different visible tables per actor.
+      """
+      @behaviour Lotus.Visibility.Resolver
+
+      @impl true
+      def schema_rules_for(_source, _scope), do: []
+
+      @impl true
+      def table_rules_for(_source, %{tenant_id: 2}),
+        do: [deny: [{"public", "test_users"}]]
+
+      def table_rules_for(_source, _scope), do: []
+
+      @impl true
+      def column_rules_for(_source, _scope), do: []
+    end
+
+    test "a scoped deny blocks the query, it does not only hide the table" do
+      stub(Lotus.Config, :visibility_resolver, fn -> TenantResolver end)
+
+      statement = Statement.new("SELECT id FROM test_users", [])
+
+      assert {:error, message} =
+               Preflight.authorize(@pg_adapter, statement, nil, %{tenant_id: 2})
+
+      assert message =~ "blocked table"
+      assert message =~ "test_users"
+    end
+
+    test "a scope the rules allow runs normally" do
+      stub(Lotus.Config, :visibility_resolver, fn -> TenantResolver end)
+
+      statement = Statement.new("SELECT id FROM test_users", [])
+
+      assert :ok = Preflight.authorize(@pg_adapter, statement, nil, %{tenant_id: 1})
+    end
+
+    test "omitting the scope keeps the previous unscoped behaviour" do
+      stub(Lotus.Config, :visibility_resolver, fn -> TenantResolver end)
+
+      statement = Statement.new("SELECT id FROM test_users", [])
+
+      assert :ok = Preflight.authorize(@pg_adapter, statement)
+    end
+
+    test "Lotus.run_statement/3 carries :scope all the way into preflight" do
+      stub(Lotus.Config, :visibility_resolver, fn -> TenantResolver end)
+
+      assert {:error, message} =
+               Lotus.run_statement("SELECT id FROM test_users", [],
+                 repo: "postgres",
+                 scope: %{tenant_id: 2}
+               )
+
+      assert message =~ "test_users"
+
+      assert {:ok, _result} =
+               Lotus.run_statement("SELECT id FROM test_users", [],
+                 repo: "postgres",
+                 scope: %{tenant_id: 1}
+               )
+    end
+  end
+
   describe "unrestricted adapter behavior" do
     setup :set_mimic_from_context
 

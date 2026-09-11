@@ -320,6 +320,15 @@
 
 #### Visibility
 
+- **Scoped visibility is enforced at execution, not only in the explorer.**
+  `Lotus.Preflight.authorize/4` takes the caller's `:scope` and passes it to
+  the visibility resolver, and the runner threads `:scope` from
+  `Lotus.run_query/2` and `Lotus.run_statement/3` into both preflight and
+  column policies. Previously a resolver that denied a table for one tenant
+  hid it from the schema browser while a query against it still returned
+  rows. Resolvers that ignore scope (including the shipped
+  `Lotus.Visibility.Resolvers.Static`) behave exactly as before.
+
 - **`Lotus.Visibility.Resolver` callbacks gained a `scope` argument:**
   `schema_rules_for/2`, `table_rules_for/2`, `column_rules_for/2`.
   Existing custom resolvers must accept (and may ignore) the argument.
