@@ -96,7 +96,8 @@ defmodule Lotus.Source.AdapterTest do
     end
 
     @impl true
-    def query_plan(_state, sql, _params, _opts), do: {:ok, "Seq Scan on #{sql}"}
+    def query_plan(_state, %Statement{body: sql, params: params}, _opts),
+      do: {:ok, "Seq Scan on #{sql} with #{length(params)} params"}
 
     # --- Safety & Visibility ---
     @impl true
@@ -119,9 +120,6 @@ defmodule Lotus.Source.AdapterTest do
     @impl true
     def format_error(_state, error), do: "Mock error: #{inspect(error)}"
 
-    @impl true
-    def handled_errors(_state), do: [RuntimeError]
-
     # --- Source Identity ---
     @impl true
     def source_type(_state), do: :postgres
@@ -131,7 +129,8 @@ defmodule Lotus.Source.AdapterTest do
     def supports_feature?(_state, _), do: false
 
     @impl true
-    def limit_query(_state, statement, limit), do: "#{statement} LIMIT #{limit}"
+    def limit_query(_state, %Statement{body: body} = statement, limit),
+      do: %{statement | body: "#{body} LIMIT #{limit}"}
 
     @impl true
     def db_type_to_lotus_type(_state, "integer"), do: :integer
@@ -203,9 +202,11 @@ defmodule Lotus.Source.AdapterTest do
       assert :ok = Adapter.health_check(adapter)
     end
 
-    test "query_plan/4 dispatches to module with state", %{adapter: adapter} do
-      assert {:ok, plan} = Adapter.query_plan(adapter, "SELECT 1", [], [])
-      assert plan =~ "Seq Scan"
+    test "query_plan/3 dispatches the statement to module with state", %{adapter: adapter} do
+      statement = Statement.new("SELECT 1 WHERE id = $1", [7])
+
+      assert {:ok, plan} = Adapter.query_plan(adapter, statement, [])
+      assert plan == "Seq Scan on SELECT 1 WHERE id = $1 with 1 params"
     end
 
     test "describe_table/3 dispatches to module with state", %{adapter: adapter} do
@@ -309,8 +310,9 @@ defmodule Lotus.Source.AdapterTest do
       assert "Mock error: :boom" == Adapter.format_error(adapter, :boom)
     end
 
-    test "handled_errors/1 dispatches with state", %{adapter: adapter} do
-      assert [RuntimeError] = Adapter.handled_errors(adapter)
+    test "handled_errors/1 is not part of the behaviour" do
+      refute Enum.any?(Adapter.behaviour_info(:callbacks), &match?({:handled_errors, _}, &1))
+      refute function_exported?(Adapter, :handled_errors, 1)
     end
   end
 
@@ -339,7 +341,7 @@ defmodule Lotus.Source.AdapterTest do
       @impl true
       def apply_sorts(_, s, _), do: s
       @impl true
-      def query_plan(_, _, _, _), do: {:ok, ""}
+      def query_plan(_, _, _), do: {:ok, ""}
       @impl true
       def builtin_denies(_), do: []
       @impl true
@@ -352,8 +354,6 @@ defmodule Lotus.Source.AdapterTest do
       def disconnect(_), do: :ok
       @impl true
       def format_error(_, e), do: inspect(e)
-      @impl true
-      def handled_errors(_), do: []
       @impl true
       def source_type(_), do: :other
       @impl true
@@ -458,7 +458,7 @@ defmodule Lotus.Source.AdapterTest do
       @impl true
       def apply_sorts(_, s, _), do: s
       @impl true
-      def query_plan(_, _, _, _), do: {:ok, ""}
+      def query_plan(_, _, _), do: {:ok, ""}
       @impl true
       def builtin_denies(_), do: []
       @impl true
@@ -471,8 +471,6 @@ defmodule Lotus.Source.AdapterTest do
       def disconnect(_), do: :ok
       @impl true
       def format_error(_, e), do: inspect(e)
-      @impl true
-      def handled_errors(_), do: []
       @impl true
       def source_type(_), do: :other
       @impl true
@@ -518,6 +516,198 @@ defmodule Lotus.Source.AdapterTest do
     end
   end
 
+  describe "table_stats/3" do
+    defmodule StatsAdapter do
+      @moduledoc false
+      @behaviour Lotus.Source.Adapter
+
+      @impl true
+      def execute_query(_state, _body, _params, _opts),
+        do: {:ok, %{columns: [], rows: [], num_rows: 0}}
+
+      @impl true
+      def transaction(state, fun, _opts), do: {:ok, fun.(state)}
+
+      @impl true
+      def list_tables(_state, _schemas, _opts), do: {:ok, []}
+
+      @impl true
+      def describe_table(_state, _schema, _table), do: {:ok, []}
+
+      @impl true
+      def builtin_denies(_state), do: []
+
+      @impl true
+      def health_check(_state), do: :ok
+
+      @impl true
+      def disconnect(_state), do: :ok
+
+      @impl true
+      def format_error(_state, error), do: inspect(error)
+
+      @impl true
+      def source_type(_state), do: :other
+
+      @impl true
+      def table_stats(_state, schema, table),
+        do: {:ok, %{row_count: 42, schema: schema, table: table}}
+    end
+
+    test "dispatches to the adapter when it implements the callback" do
+      adapter = %Adapter{
+        name: "stats",
+        module: StatsAdapter,
+        state: nil,
+        source_type: :other
+      }
+
+      assert {:ok, %{row_count: 42, schema: "logs", table: "events"}} =
+               Adapter.table_stats(adapter, "logs", "events")
+    end
+
+    test "reports :unsupported when the adapter does not implement it" do
+      adapter = %Adapter{
+        name: "stub",
+        module: Lotus.Test.StubAdapter,
+        state: nil,
+        source_type: :other
+      }
+
+      assert {:error, :unsupported} = Adapter.table_stats(adapter, nil, "events")
+    end
+  end
+
+  describe "SQL-shaped callbacks are optional" do
+    defmodule MinimalAdapter do
+      @moduledoc """
+      The smallest adapter a non-SQL source can get away with: it executes
+      statements and says who it is. Everything SQL-shaped is left out.
+      """
+      @behaviour Lotus.Source.Adapter
+
+      @impl true
+      def execute_query(_state, _body, _params, _opts),
+        do: {:ok, %{columns: [], rows: [], num_rows: 0}}
+
+      @impl true
+      def transaction(state, fun, _opts), do: {:ok, fun.(state)}
+
+      @impl true
+      def list_tables(_state, _schemas, _opts), do: {:ok, []}
+
+      @impl true
+      def describe_table(_state, _schema, _table), do: {:ok, []}
+
+      @impl true
+      def builtin_denies(_state), do: []
+
+      @impl true
+      def health_check(_state), do: :ok
+
+      @impl true
+      def disconnect(_state), do: :ok
+
+      @impl true
+      def format_error(_state, error), do: inspect(error)
+
+      @impl true
+      def source_type(_state), do: :other
+    end
+
+    setup do
+      {:ok,
+       adapter: %Adapter{
+         name: "minimal",
+         module: MinimalAdapter,
+         state: nil,
+         source_type: :other
+       }}
+    end
+
+    test "quote_identifier/2 returns the identifier unchanged", %{adapter: adapter} do
+      assert Adapter.quote_identifier(adapter, "users") == "users"
+    end
+
+    test "query_plan/3 reports no plan", %{adapter: adapter} do
+      assert {:ok, nil} = Adapter.query_plan(adapter, Statement.new("anything"), [])
+    end
+
+    test "apply_filters/3 and apply_sorts/3 pass the statement through", %{adapter: adapter} do
+      statement = Statement.new(%{"match_all" => %{}})
+
+      assert Adapter.apply_filters(adapter, statement, [:a_filter]) == statement
+      assert Adapter.apply_sorts(adapter, statement, [:a_sort]) == statement
+    end
+
+    test "list_schemas/1 reports a flat namespace", %{adapter: adapter} do
+      assert {:ok, []} = Adapter.list_schemas(adapter)
+    end
+
+    test "resolve_table_namespace/3 resolves to no namespace", %{adapter: adapter} do
+      assert {:ok, nil} = Adapter.resolve_table_namespace(adapter, "logs", [])
+    end
+
+    test "default_schemas/1 and builtin_schema_denies/1 are empty", %{adapter: adapter} do
+      assert Adapter.default_schemas(adapter) == []
+      assert Adapter.builtin_schema_denies(adapter) == []
+    end
+
+    test "supports_feature?/2 answers false for everything", %{adapter: adapter} do
+      refute Adapter.supports_feature?(adapter, :schema_hierarchy)
+      refute Adapter.supports_feature?(adapter, :search_path)
+      refute Adapter.supports_feature?(adapter, :anything_at_all)
+    end
+
+    test "db_type_to_lotus_type/2 falls back to :text", %{adapter: adapter} do
+      assert Adapter.db_type_to_lotus_type(adapter, "whatever") == :text
+    end
+
+    test "editor_config/1 returns an empty editor shape", %{adapter: adapter} do
+      config = Adapter.editor_config(adapter)
+
+      assert config.keywords == []
+      assert config.types == []
+      assert config.functions == []
+      assert config.context_boundaries == []
+    end
+  end
+
+  describe "limit_query/3" do
+    setup do
+      {:ok,
+       adapter: %Adapter{
+         name: "main",
+         module: MockAdapter,
+         state: %{db: "test_db"},
+         source_type: :postgres
+       }}
+    end
+
+    test "dispatches the statement to the module and returns a statement", %{adapter: adapter} do
+      statement = Statement.new("SELECT 1", [:bound])
+
+      assert %Statement{body: body, params: params} =
+               Adapter.limit_query(adapter, statement, 10)
+
+      assert body == "SELECT 1 LIMIT 10"
+      assert params == [:bound]
+    end
+
+    test "returns the statement unchanged when the adapter does not implement it" do
+      stub = %Adapter{
+        name: "stub",
+        module: Lotus.Test.StubAdapter,
+        state: nil,
+        source_type: :other
+      }
+
+      statement = Statement.new(%{"query" => %{"match_all" => %{}}})
+
+      assert Adapter.limit_query(stub, statement, 10) == statement
+    end
+  end
+
   describe "prepare_for_analysis/2" do
     test "returns {:error, :unsupported} when adapter does not implement the callback" do
       stub = %Adapter{
@@ -556,7 +746,7 @@ defmodule Lotus.Source.AdapterTest do
       @impl true
       def apply_sorts(_, s, _), do: s
       @impl true
-      def query_plan(_, _, _, _), do: {:ok, ""}
+      def query_plan(_, _, _), do: {:ok, ""}
       @impl true
       def builtin_denies(_), do: []
       @impl true
@@ -569,8 +759,6 @@ defmodule Lotus.Source.AdapterTest do
       def disconnect(_), do: :ok
       @impl true
       def format_error(_, e), do: inspect(e)
-      @impl true
-      def handled_errors(_), do: []
       @impl true
       def source_type(_), do: :other
       @impl true
@@ -666,7 +854,7 @@ defmodule Lotus.Source.AdapterTest do
         @impl true
         def apply_sorts(_, s, _), do: s
         @impl true
-        def query_plan(_, _, _, _), do: {:ok, ""}
+        def query_plan(_, _, _), do: {:ok, ""}
         @impl true
         def builtin_denies(_), do: []
         @impl true
@@ -680,7 +868,6 @@ defmodule Lotus.Source.AdapterTest do
         @impl true
         def format_error(_, e), do: inspect(e)
         @impl true
-        def handled_errors(_), do: []
         @impl true
         def source_type(_), do: :other
         @impl true

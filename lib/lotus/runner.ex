@@ -2,9 +2,13 @@ defmodule Lotus.Runner do
   @moduledoc """
   Statement execution with safety checks, param binding, and result shaping.
 
-  By default, all statements are read-only. Destructive operations (INSERT,
-  UPDATE, DELETE, DDL) are blocked at both the application and database level.
-  Pass `read_only: false` to allow write operations.
+  By default, all statements are read-only. Destructive operations (writes,
+  schema changes — INSERT, UPDATE, DELETE and DDL in SQL terms) are blocked
+  at both the application and database level. Pass `read_only: false` to
+  allow write operations.
+
+  What counts as a write is the adapter's judgement, via
+  `c:Lotus.Source.Adapter.sanitize_query/3`.
   """
 
   alias Lotus.{Middleware, Preflight, Result, Telemetry, Value, Visibility}
@@ -18,20 +22,25 @@ defmodule Lotus.Runner do
           timeout: non_neg_integer(),
           statement_timeout_ms: non_neg_integer(),
           read_only: boolean(),
-          search_path: String.t() | nil
+          search_path: String.t() | nil,
+          scope: term()
         ]
 
   @spec run_statement(Adapter.t(), Statement.t(), opts()) ::
           {:ok, query_result()} | {:error, term()}
   def run_statement(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
     context = Keyword.get(opts, :context)
-    telemetry_meta = %{repo: adapter.name, statement: statement, context: context}
+    telemetry_meta = %{source: adapter.name, statement: statement, context: context}
     start_time = Telemetry.query_start(telemetry_meta)
 
+    # `:before_query` runs first because a plug may rewrite the statement —
+    # that is the point of the hook, for row-level security and tenant
+    # predicates. Sanitization and preflight then apply to what will actually
+    # execute, rather than to the text the caller originally supplied.
     result =
-      with :ok <- Adapter.sanitize_query(adapter, statement, sanitize_opts(opts)),
+      with {:ok, %Statement{} = statement} <- run_before_query(adapter, statement, context),
+           :ok <- Adapter.sanitize_query(adapter, statement, sanitize_opts(opts)),
            :ok <- preflight_visibility(adapter, statement, opts),
-           :ok <- run_before_query(adapter, statement, context),
            {:ok, %Result{} = res} <- exec_read_only(adapter, statement, opts),
            {:ok, %Result{} = res} <- run_after_query(adapter, statement, res, context) do
         {:ok, res}
@@ -63,7 +72,7 @@ defmodule Lotus.Runner do
             Adapter.execute_query(adapter, body, params, opts ++ [timeout: timeout])
           end)
 
-        handle_query_result(res, elapsed_us, adapter)
+        handle_query_result(res, elapsed_us, adapter, Keyword.get(opts, :scope))
       end,
       opts
     )
@@ -78,7 +87,8 @@ defmodule Lotus.Runner do
   defp handle_query_result(
          {:ok, %{columns: cols, rows: rows} = raw},
          elapsed_us,
-         %Adapter{} = adapter
+         %Adapter{} = adapter,
+         scope
        ) do
     num_rows = Map.get(raw, :num_rows, length(rows || []))
     command = normalize_command(Map.get(raw, :command))
@@ -87,7 +97,9 @@ defmodule Lotus.Runner do
     rels = Relations.take()
 
     policies =
-      Enum.map(cols || [], fn c -> Visibility.column_policy_for(adapter.name, rels, c) end)
+      Enum.map(cols || [], fn c ->
+        Visibility.column_policy_for(adapter.name, rels, c, scope)
+      end)
 
     case enforce_column_policies(cols || [], rows || [], policies) do
       {:error, msg} ->
@@ -109,11 +121,11 @@ defmodule Lotus.Runner do
     end
   end
 
-  defp handle_query_result({:error, err}, _elapsed_us, _adapter) do
+  defp handle_query_result({:error, err}, _elapsed_us, _adapter, _scope) do
     {:error, err}
   end
 
-  defp handle_query_result(other, _elapsed_us, _adapter) do
+  defp handle_query_result(other, _elapsed_us, _adapter, _scope) do
     other
   end
 
@@ -230,11 +242,16 @@ defmodule Lotus.Runner do
     Keyword.take(opts, [:read_only])
   end
 
+  # Returns the statement to execute. A plug that rewrites `:statement` in the
+  # payload has its version carried forward; one that returns the payload
+  # untouched leaves the original in place. Anything that is not a statement
+  # is ignored rather than trusted.
   defp run_before_query(%Adapter{} = adapter, %Statement{} = statement, context) do
     payload = %{source: adapter.name, statement: statement, context: context}
 
     case Middleware.run(:before_query, payload) do
-      {:cont, _} -> :ok
+      {:cont, %{statement: %Statement{} = rewritten}} -> {:ok, rewritten}
+      {:cont, _} -> {:ok, statement}
       {:halt, reason} -> {:error, reason}
     end
   end
@@ -256,8 +273,9 @@ defmodule Lotus.Runner do
   defp preflight_visibility(%Adapter{} = adapter, %Statement{} = statement, opts) do
     if Adapter.needs_preflight?(adapter, statement) do
       search_path = Keyword.get(opts, :search_path)
+      scope = Keyword.get(opts, :scope)
 
-      case Preflight.authorize(adapter, statement, search_path) do
+      case Preflight.authorize(adapter, statement, search_path, scope) do
         :ok -> :ok
         {:error, msg} -> {:error, msg}
       end

@@ -5,7 +5,7 @@ defmodule Lotus.AI.Actions.ListSchemasTest do
 
   describe "run/2" do
     test "returns list of schemas" do
-      stub(Lotus.Schema, :list_schemas, fn _source ->
+      stub(Lotus.Schema, :list_schemas, fn _source, _opts ->
         {:ok, ["public", "reporting", "analytics"]}
       end)
 
@@ -14,7 +14,7 @@ defmodule Lotus.AI.Actions.ListSchemasTest do
     end
 
     test "returns error when schema introspection fails" do
-      stub(Lotus.Schema, :list_schemas, fn _source ->
+      stub(Lotus.Schema, :list_schemas, fn _source, _opts ->
         {:error, "Connection failed"}
       end)
 

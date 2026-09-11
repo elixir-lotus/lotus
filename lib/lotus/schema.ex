@@ -433,9 +433,13 @@ defmodule Lotus.Schema do
 
       {:ok, stats} = Lotus.Schema.get_table_stats("postgres", "customers", schema: "reporting")
       # Gets stats for reporting.customers
+
+  Sources whose adapter implements `c:Lotus.Source.Adapter.table_stats/3`
+  answer from that callback and may return additional keys alongside
+  `:row_count`. Everything else falls back to `SELECT COUNT(*)`.
   """
   @spec get_table_stats(module() | String.t(), String.t(), keyword()) ::
-          {:ok, %{row_count: non_neg_integer()}} | {:error, binary()}
+          {:ok, map()} | {:error, binary()}
   def get_table_stats(repo_or_name, table_name, opts \\ []) do
     adapter = Source.resolve!(repo_or_name, nil)
     scope = Keyword.get(opts, :scope)
@@ -492,31 +496,41 @@ defmodule Lotus.Schema do
 
     exec_with_cache(opts[:cache], profile, key, tags, fn ->
       if Visibility.allowed_relation?(adapter.name, {resolved_schema, table_name}, scope) do
-        try do
-          count_sql =
-            if resolved_schema do
-              qi = &Adapter.quote_identifier(adapter, &1)
-              "SELECT COUNT(*) FROM #{qi.(resolved_schema)}.#{qi.(table_name)}"
-            else
-              qi = &Adapter.quote_identifier(adapter, &1)
-              "SELECT COUNT(*) FROM #{qi.(table_name)}"
-            end
-
-          case Adapter.execute_query(adapter, count_sql, [], []) do
-            {:ok, %{rows: [[count]]}} ->
-              {:ok, %{row_count: count}}
-
-            {:error, reason} ->
-              {:error, to_string(reason)}
-          end
-        rescue
-          e -> {:error, Exception.message(e)}
-        end
+        fetch_table_stats(adapter, resolved_schema, table_name)
       else
         {:error,
          "Table '#{if resolved_schema, do: "#{resolved_schema}.#{table_name}", else: table_name}' is not visible by Lotus policy"}
       end
     end)
+  end
+
+  # Adapters that can answer this themselves do. The COUNT(*) fallback below
+  # assumes SQL, so it is reached only by adapters that did not implement
+  # `table_stats/3`.
+  defp fetch_table_stats(adapter, resolved_schema, table_name) do
+    case Adapter.table_stats(adapter, resolved_schema, table_name) do
+      {:ok, stats} -> {:ok, stats}
+      {:error, :unsupported} -> count_rows(adapter, resolved_schema, table_name)
+      {:error, reason} -> {:error, to_string(reason)}
+    end
+  end
+
+  defp count_rows(adapter, resolved_schema, table_name) do
+    qi = &Adapter.quote_identifier(adapter, &1)
+
+    count_sql =
+      if resolved_schema do
+        "SELECT COUNT(*) FROM #{qi.(resolved_schema)}.#{qi.(table_name)}"
+      else
+        "SELECT COUNT(*) FROM #{qi.(table_name)}"
+      end
+
+    case Adapter.execute_query(adapter, count_sql, [], []) do
+      {:ok, %{rows: [[count]]}} -> {:ok, %{row_count: count}}
+      {:error, reason} -> {:error, to_string(reason)}
+    end
+  rescue
+    e -> {:error, Exception.message(e)}
   end
 
   @doc """

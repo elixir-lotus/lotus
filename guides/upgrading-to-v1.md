@@ -261,11 +261,23 @@ changed:
 - **`get_table_schema/3` → `describe_table/3`**, **`resolve_table_schema/3`
   → `resolve_table_namespace/3`**. The "schema" word was used with two
   distinct meanings; the new names disambiguate.
-- **`explain_plan/4` → `query_plan/4`** with return type widened to
+- **`explain_plan/4` → `query_plan/3`** — takes `(state, %Statement{}, opts)`,
+  not the old `(state, sql, params, opts)`; bound values travel in
+  `statement.params`. Return type widened to
   `{:ok, String.t() | nil} | {:error, term()}`. Non-SQL engines that don't
   expose a plan return `{:ok, nil}` without surfacing an error.
 - **`transform_bound_query/4` arity → `transform_bound_query/3`** — takes
   `(state, %Statement{}, opts)`, not the old `(state, sql, params, opts)`.
+- **`limit_query/3` is now `%Statement{}` in, `%Statement{}` out** and
+  **optional**, defaulting to the statement unchanged. It used to be
+  required and typed on raw statement text, which forced non-SQL adapters
+  to implement a passthrough just to satisfy the behaviour.
+- **`handled_errors/1` was removed** from `Lotus.Source.Adapter`, and
+  `handled_errors/0` from `Lotus.Source.Adapters.Ecto.Dialect`. It was
+  documented as feeding the Runner's rescue clause, but the Runner always
+  routed every raised exception through `format_error/2`, which already
+  falls back to a generic message for types it does not recognise. Delete
+  the implementation from your adapter; nothing replaces it.
 - **New optional callbacks:** `needs_preflight?/2`, `validate_statement/3`,
   `parse_qualified_name/2`, `validate_identifier/3`,
   `supported_filter_operators/1`, `ai_context/1`, `prepare_for_analysis/2`.

@@ -8,6 +8,8 @@ defmodule Lotus.AI.Actions.GetColumnValues do
 
   @behaviour Lotus.AI.Action
 
+  import Lotus.AI.Action, only: [actor_opts: 1]
+
   alias Lotus.Source
   alias Lotus.Source.Adapter
 
@@ -43,13 +45,13 @@ defmodule Lotus.AI.Actions.GetColumnValues do
   end
 
   @impl true
-  def run(params, _context) do
+  def run(params, context) do
     adapter = Source.resolve!(params.data_source, nil)
 
     with {:ok, {schema, table}} <- parse_name(adapter, params.table_name),
          :ok <- validate_parts(adapter, schema, table),
          :ok <- Adapter.validate_identifier(adapter, :column, params.column_name) do
-      execute_query(schema, table, params)
+      execute_query(schema, table, params, actor_opts(context))
     end
   end
 
@@ -78,22 +80,22 @@ defmodule Lotus.AI.Actions.GetColumnValues do
     end
   end
 
-  defp execute_query(nil, table, params) do
+  defp execute_query(nil, table, params, opts) do
     query =
       ~s(SELECT DISTINCT "#{params.column_name}" FROM "#{table}" WHERE "#{params.column_name}" IS NOT NULL ORDER BY "#{params.column_name}" LIMIT 100)
 
-    run_and_format(query, params)
+    run_and_format(query, params, opts)
   end
 
-  defp execute_query(schema, table, params) do
+  defp execute_query(schema, table, params, opts) do
     query =
       ~s(SELECT DISTINCT "#{params.column_name}" FROM "#{schema}"."#{table}" WHERE "#{params.column_name}" IS NOT NULL ORDER BY "#{params.column_name}" LIMIT 100)
 
-    run_and_format(query, params)
+    run_and_format(query, params, opts)
   end
 
-  defp run_and_format(query, params) do
-    case Lotus.run_statement(query, [], repo: params.data_source) do
+  defp run_and_format(query, params, opts) do
+    case Lotus.run_statement(query, [], [repo: params.data_source] ++ opts) do
       {:ok, result} ->
         values = Enum.map(result.rows, fn [value] -> Lotus.Normalizer.normalize(value) end)
 

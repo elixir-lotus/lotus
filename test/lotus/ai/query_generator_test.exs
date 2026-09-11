@@ -8,7 +8,7 @@ defmodule Lotus.AI.QueryGeneratorTest do
       setup_mocks()
 
       stub(Lotus.Source, :source_type, fn _ -> :postgres end)
-      stub(Lotus.Schema, :list_tables, fn _ -> {:ok, table_list()} end)
+      stub(Lotus.Schema, :list_tables, fn _, _opts -> {:ok, table_list()} end)
 
       :ok
     end

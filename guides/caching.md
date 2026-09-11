@@ -321,7 +321,7 @@ When no `key_builder` is configured, `Lotus.Cache.KeyBuilder.Default` is used, w
 All Lotus schema introspection functions are automatically cached:
 
 - `Lotus.list_tables/2` - Lists tables and views in database
-- `Lotus.get_table_schema/3` - Gets column information for tables
+- `Lotus.describe_table/3` - Gets column information for tables
 - `Lotus.get_table_stats/3` - Gets row counts and table statistics
 - `Lotus.list_relations/2` - Lists tables with schema information
 

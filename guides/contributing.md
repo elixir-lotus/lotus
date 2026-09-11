@@ -102,7 +102,7 @@ Everything lives under `lib/lotus/`. The library is roughly split into a public 
 - [`Lotus.Dashboards`](../lib/lotus/dashboards.ex) — CRUD and orchestration for dashboards (cards, filters, filter mappings). Uses the task supervisor to fan out card execution.
 - [`Lotus.Viz`](../lib/lotus/viz.ex) — CRUD and validation for per-query visualization configs.
 - [`Lotus.Query.Filter`](../lib/lotus/query/filter.ex) / [`Lotus.Query.Sort`](../lib/lotus/query/sort.ex) — Runtime filter/sort structs that the source adapters inject into already-prepared SQL.
-- [`Lotus.SQL.*`](../lib/lotus/sql/) — Low-level SQL helpers (sanitizer, identifier quoting, filter/sort injectors, validator, transformer).
+- `Lotus.Source.Adapters.Ecto.SQL.*` (`lib/lotus/source/adapters/ecto/sql/`) — Low-level SQL helpers (sanitizer, identifier quoting, filter/sort injectors, validator, transformer).
 
 **Introspection and visibility**
 
@@ -136,7 +136,7 @@ Everything lives under `lib/lotus/`. The library is roughly split into a public 
 - [`Lotus.AI.SQLGenerator`](../lib/lotus/ai/sql_generator.ex), [`QueryExplainer`](../lib/lotus/ai/query_explainer.ex), [`QueryOptimizer`](../lib/lotus/ai/query_optimizer.ex) — Request orchestration for each AI capability.
 - [`Lotus.AI.Conversation`](../lib/lotus/ai/conversation.ex) — Multi-turn conversation state used for iterative refinement.
 - [`Lotus.AI.Actions`](../lib/lotus/ai/actions.ex) and `lib/lotus/ai/actions/` — Tool definitions the LLM can call (schema listing, column value sampling, SQL validation/execution).
-- [`Lotus.AI.Prompts`](../lib/lotus/ai/prompts/) — Prompt templates for SQL generation, explanation, optimization, and variable inference.
+- `Lotus.AI.Prompts.*` (`lib/lotus/ai/prompts/`) — Prompt templates for SQL generation, explanation, optimization, and variable inference.
 - [`Lotus.AI.SchemaOptimizer`](../lib/lotus/ai/schema_optimizer.ex) — Trims schema context before it is sent to the LLM.
 
 ### Query Execution Pipeline
@@ -176,10 +176,10 @@ When you call `Lotus.run_query(query, opts)` the request flows through roughly t
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │ Lotus.Runner.run_statement                                           │
-│  1. assert_single_statement/1                                        │
-│  2. assert_not_denied/2 (skipped when read_only: false)              │
-│  3. Lotus.Preflight.authorize (EXPLAIN + visibility check)           │
-│  4. Middleware.run(:before_query, _)                                 │
+│  1. Middleware.run(:before_query, _) — may rewrite the statement     │
+│  2. assert_single_statement/1                                        │
+│  3. assert_not_denied/2 (skipped when read_only: false)              │
+│  4. Lotus.Preflight.authorize (EXPLAIN + visibility check)           │
 │  5. Adapter.transaction (read-only) → Adapter.execute_query          │
 │  6. Column policy enforcement (omit / mask / error)                  │
 │  7. Middleware.run(:after_query, _)                                  │
@@ -193,11 +193,11 @@ When you call `Lotus.run_query(query, opts)` the request flows through roughly t
 A few notes on the pipeline:
 
 - **Variable binding** happens inside `Lotus.Storage.Query.compile/2`, which also consults `Lotus.Storage.SchemaCache` for type-aware casting of user-supplied values.
-- **Filters and sorts** are injected through the source adapter, not concatenated naively — see `Lotus.SQL.FilterInjector` and `Lotus.SQL.SortInjector`.
+- **Filters and sorts** are injected through the source adapter, not concatenated naively — see `Lotus.Source.Adapters.Ecto.SQL.FilterInjector` and `Lotus.Source.Adapters.Ecto.SQL.SortInjector`.
 - **Windowed pagination** rewrites the SQL to fetch a page and (optionally) issue a separate `COUNT(*)` for the exact total.
 - **Caching** is optional. When no cache adapter is configured, `Lotus.Cache` is a pass-through and the fetcher always runs.
 - **Preflight** issues `EXPLAIN` against the target source. The relations it discovers are stashed in `Lotus.Preflight.Relations` so the runner can look up column visibility policies without re-parsing the SQL.
-- **Middleware** runs after preflight and before the actual execution — halting the pipeline from a `:before_query` plug yields `{:error, reason}` to the caller.
+- **Middleware** runs first, because a `:before_query` plug may rewrite the statement; sanitization and preflight then apply to whatever it returns. Halting the pipeline from a `:before_query` plug yields `{:error, reason}` to the caller.
 
 ### Schema Introspection Flow
 
