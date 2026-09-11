@@ -83,7 +83,14 @@ defmodule Lotus.Config do
           table_visibility: map(),
           column_visibility: map(),
           schema_visibility: map(),
-          cache: cache_config()
+          allow_unrestricted_resources: boolean(),
+          cache: cache_config(),
+          ai: keyword() | map() | nil,
+          source_adapters: [module()],
+          trusted_source_adapters: [module()],
+          source_resolver: module(),
+          visibility_resolver: module(),
+          middleware: %{atom() => [{module(), term()}]}
         }
 
   @type cache_config :: %{

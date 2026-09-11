@@ -25,13 +25,15 @@ Each middleware receives a payload map whose contents depend on the pipeline eve
 
 | Event | Triggered | Payload keys |
 |-------|-----------|--------------|
-| `:before_query` | Before sanitization, preflight and execution | `:statement`, `:source`, `:context` |
-| `:after_query` | After execution, before result returned to caller | `:result`, `:statement`, `:source`, `:context` |
+| `:before_query` | Before sanitization, preflight and execution | `:statement`, `:source`, `:context`, `:vars` |
+| `:after_query` | After execution, before result returned to caller | `:result`, `:statement`, `:source`, `:context`, `:vars` |
 | `:after_list_schemas` | After schema discovery and visibility filtering | `:schemas`, `:source`, `:scope`, `:context` |
 | `:after_list_tables` | After table discovery and visibility filtering | `:tables`, `:source`, `:scope`, `:context` |
-| `:after_get_table_schema` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
+| `:after_describe_table` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
 | `:after_list_relations` | After relation discovery and visibility filtering | `:relations`, `:source`, `:scope`, `:context` |
 | `:after_discover` | After any discovery call, following the kind-specific `:after_list_*` event | `:kind`, `:result`, `:source`, `:scope`, `:context` |
+
+`:vars` is the map of bound query variables by name, after defaults and caller-supplied values are merged. It is `%{}` for a raw statement run through `Lotus.run_statement/3`.
 
 ### Discovery event ordering
 
@@ -160,14 +162,14 @@ Block queries that don't include a tenant filter:
 defmodule MyApp.TenantMiddleware do
   def init(opts), do: opts
 
-  def call(%{sql: sql, context: context} = payload, _opts) do
+  def call(%{statement: statement, context: context} = payload, _opts) do
     tenant_id = Map.get(context || %{}, :tenant_id)
 
     cond do
       is_nil(tenant_id) ->
         {:halt, "tenant context required"}
 
-      not String.contains?(String.downcase(sql), "tenant_id") ->
+      not String.contains?(String.downcase(statement.body), "tenant_id") ->
         {:halt, "queries must filter by tenant_id"}
 
       true ->
@@ -178,6 +180,34 @@ end
 ```
 
 > **Note:** The `String.contains?` check above is intentionally simplified for illustration. It can be bypassed (e.g. via SQL comments). For real row-level security, inject a parameterized filter using the `:filters` option on `Lotus.run_query/2` instead of inspecting raw SQL text.
+
+### Limiting Variable Values
+
+Reject a query when the caller picks a date range that is too wide. The plug reads the bound variables from `:vars`, so it works on every path that runs a saved query: the editor, dashboards, exports and the AI assistant.
+
+```elixir
+config :lotus,
+  middleware: %{before_query: [{MyApp.DateRangeLimit, max_days: 5}]}
+
+defmodule MyApp.DateRangeLimit do
+  def init(opts), do: opts
+
+  def call(%{vars: %{"start_date" => from, "end_date" => to}} = payload, opts) do
+    with {:ok, from} <- Date.from_iso8601(to_string(from)),
+         {:ok, to} <- Date.from_iso8601(to_string(to)),
+         true <- Date.diff(to, from) <= opts[:max_days] do
+      {:cont, payload}
+    else
+      _ -> {:halt, "Date range must be #{opts[:max_days]} days or less"}
+    end
+  end
+
+  # Queries without those variables are not affected.
+  def call(payload, _opts), do: {:cont, payload}
+end
+```
+
+Use `payload.context` in the same plug for per-user exceptions, or `payload.source` for per-source limits.
 
 ### Redacting Sensitive Data in Results
 
