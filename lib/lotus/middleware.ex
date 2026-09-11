@@ -19,13 +19,19 @@ defmodule Lotus.Middleware do
 
   | Event | Triggered | Payload keys |
   |-------|-----------|--------------|
-  | `:before_query` | After preflight visibility check, before execution | `:statement` (`%Lotus.Query.Statement{}`), `:source`, `:context` |
-  | `:after_query` | After execution, before result returned to caller | `:result`, `:statement` (`%Lotus.Query.Statement{}`), `:source`, `:context` |
+  | `:before_query` | After preflight visibility check, before execution | `:statement` (`%Lotus.Query.Statement{}`), `:source`, `:context`, `:vars` |
+  | `:after_query` | After execution, before result returned to caller | `:result`, `:statement` (`%Lotus.Query.Statement{}`), `:source`, `:context`, `:vars` |
   | `:after_list_schemas` | After schema discovery and visibility filtering | `:schemas`, `:source`, `:scope`, `:context` |
   | `:after_list_tables` | After table discovery and visibility filtering | `:tables`, `:source`, `:scope`, `:context` |
   | `:after_describe_table` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
   | `:after_list_relations` | After relation discovery and visibility filtering | `:relations`, `:source`, `:scope`, `:context` |
   | `:after_discover` | After any discovery call, following the kind-specific `:after_list_*` event | `:kind`, `:result`, `:source`, `:scope`, `:context` |
+
+  `:vars` is the map of bound query variables, by name, after defaults and
+  caller-supplied values are merged (`%{"start_date" => "2026-01-01"}`).
+  It is `%{}` for a raw statement run through `Lotus.run_statement/3`. A plug
+  can enforce rules on the values a caller picked (date-range limits, tenant
+  checks) without parsing the statement.
 
   ### Discovery event ordering
 

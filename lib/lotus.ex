@@ -459,7 +459,7 @@ defmodule Lotus do
 
     if language_compatible?(q.query_language, adapter_language) do
       search_path = Keyword.get(opts, :search_path) || q.search_path
-      runner_opts = prepare_final_opts(opts, search_path)
+      runner_opts = opts |> prepare_final_opts(search_path) |> Keyword.put(:vars, vars)
 
       execute_with_options(adapter, body, params, opts, runner_opts, vars, q.id)
     else
