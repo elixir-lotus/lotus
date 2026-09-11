@@ -26,8 +26,6 @@ Every app eventually needs analytics, reporting, or an internal SQL tool. The us
 
 Lotus takes a different approach: it mounts inside your Phoenix app. Add the dependency, run a migration, add one line to your router, and you have a full BI interface — SQL editor, charts, dashboards — running on your existing infrastructure. Read-only by design, production-safe from day one.
 
-We're running Lotus in production at [Accomplish](https://accomplish.dev).
-
 ## See It in Action
 
 [Try the live demo](https://lotus.typhoon.works/) — a full Lotus Web instance with sample data.

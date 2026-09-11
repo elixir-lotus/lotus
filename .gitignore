@@ -73,7 +73,6 @@ Thumbs.db
 /priv/*.db*
 
 # Tools
-.accomplish.toml
 plans/
 .claude/*
 !.claude/settings.json
