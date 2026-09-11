@@ -232,9 +232,6 @@ defmodule Lotus.Source.Adapters.Ecto do
 
       @impl true
       def format_error(_repo, error), do: @dialect.format_error(error)
-
-      @impl true
-      def handled_errors(_repo), do: @dialect.handled_errors()
     end
   end
 
@@ -566,11 +563,6 @@ defmodule Lotus.Source.Adapters.Ecto do
   @impl true
   def format_error(_repo, error) do
     @default_dialect.format_error(error)
-  end
-
-  @impl true
-  def handled_errors(_repo) do
-    @default_dialect.handled_errors()
   end
 
   # ---------------------------------------------------------------------------

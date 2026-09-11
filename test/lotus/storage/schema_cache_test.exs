@@ -33,7 +33,6 @@ defmodule Lotus.Storage.SchemaCacheTest do
     def health_check(_), do: :ok
     def disconnect(_), do: :ok
     def format_error(_, e), do: inspect(e)
-    def handled_errors(_), do: []
     def source_type(_), do: :postgres
     def supports_feature?(_, _), do: false
     def limit_query(_, statement, _limit), do: statement

@@ -69,9 +69,6 @@ defmodule Lotus.Source.EditorConfigShapeTest do
         def format_error(_state, err), do: inspect(err)
 
         @impl true
-        def handled_errors(_state), do: []
-
-        @impl true
         def supports_feature?(_state, _feature), do: false
 
         @impl true

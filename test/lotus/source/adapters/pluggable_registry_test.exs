@@ -59,8 +59,6 @@ defmodule Lotus.Source.Adapters.PluggableRegistryTest do
     @impl true
     def format_error(_, e), do: inspect(e)
     @impl true
-    def handled_errors(_), do: []
-    @impl true
     def source_type(_), do: :custom
     @impl true
     def supports_feature?(_, _), do: false
@@ -232,8 +230,6 @@ defmodule Lotus.Source.Adapters.PluggableRegistryTest do
     def disconnect(_), do: :ok
     @impl true
     def format_error(_, e), do: inspect(e)
-    @impl true
-    def handled_errors(_), do: []
     @impl true
     def source_type(_), do: :echo
     @impl true

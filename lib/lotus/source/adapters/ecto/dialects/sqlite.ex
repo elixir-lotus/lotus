@@ -104,9 +104,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def handled_errors, do: [Exqlite.Error]
-
-  @impl true
   def query_language, do: "sql:sqlite"
 
   @impl true

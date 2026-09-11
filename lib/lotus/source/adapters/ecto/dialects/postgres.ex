@@ -98,9 +98,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   end
 
   @impl true
-  def handled_errors, do: [Postgrex.Error]
-
-  @impl true
   def query_language, do: "sql:postgres"
 
   @impl true

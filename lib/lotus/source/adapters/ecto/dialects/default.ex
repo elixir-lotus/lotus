@@ -115,9 +115,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Default do
   end
 
   @impl true
-  def handled_errors, do: []
-
-  @impl true
   def query_language, do: "sql"
 
   @impl true

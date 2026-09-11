@@ -120,7 +120,7 @@
 
 - **Callback signatures take `state` as the first argument** for
   SQL-generation (`quote_identifier/2`, `query_plan/3`) and
-  error-handling (`format_error/2`, `handled_errors/1`) callbacks.
+  error-handling (`format_error/2`) callbacks.
 
 - **`execute_query/4` typespec widened** — `sql :: String.t()` →
   `sql :: term()`. This is the driver boundary; adapters receive the

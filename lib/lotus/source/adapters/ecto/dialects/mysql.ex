@@ -184,9 +184,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   end
 
   @impl true
-  def handled_errors, do: [MyXQL.Error]
-
-  @impl true
   def query_language, do: "sql:mysql"
 
   @impl true

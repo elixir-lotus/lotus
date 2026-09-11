@@ -39,8 +39,6 @@ defmodule Lotus.Test.NoOpAdapter do
   @impl true
   def format_error(_state, error), do: inspect(error)
   @impl true
-  def handled_errors(_state), do: []
-  @impl true
   def source_type(_state), do: :other
   @impl true
   def supports_feature?(_state, _feature), do: false
@@ -89,8 +87,6 @@ defmodule Lotus.Test.StubAdapter do
   def disconnect(_state), do: :ok
   @impl true
   def format_error(_state, error), do: inspect(error)
-  @impl true
-  def handled_errors(_state), do: []
   @impl true
   def source_type(_state), do: :other
   @impl true

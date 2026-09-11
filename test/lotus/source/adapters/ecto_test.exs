@@ -363,13 +363,6 @@ defmodule Lotus.Source.Adapters.EctoTest do
       error = %RuntimeError{message: "boom"}
       assert is_binary(Adapter.format_error(adapter, error))
     end
-
-    test "handled_errors/0 returns list of exception modules" do
-      adapter = EctoAdapter.wrap("main", Repo)
-      errors = Adapter.handled_errors(adapter)
-      assert is_list(errors)
-      assert Postgrex.Error in errors
-    end
   end
 
   describe "validate_statement/3" do

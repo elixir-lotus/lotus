@@ -366,9 +366,6 @@ defmodule Lotus.Test.InMemoryAdapter do
   @impl true
   def format_error(_state, error), do: inspect(error)
 
-  @impl true
-  def handled_errors(_state), do: []
-
   # ---------------------------------------------------------------------------
   # Identity & presentation
   # ---------------------------------------------------------------------------

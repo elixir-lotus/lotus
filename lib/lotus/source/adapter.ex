@@ -30,7 +30,7 @@ defmodule Lotus.Source.Adapter do
     * **Safety & visibility** — `builtin_denies/1`, `builtin_schema_denies/1`,
       `default_schemas/1`
     * **Lifecycle** — `health_check/1`, `disconnect/1`
-    * **Error handling** — `format_error/2`, `handled_errors/1`
+    * **Error handling** — `format_error/2`
     * **Source identity** — `source_type/1`, `supports_feature?/2`
 
   ## Pipeline Statement contract
@@ -491,15 +491,6 @@ defmodule Lotus.Source.Adapter do
   message. Called from `Lotus.Runner` when the execution phase raises.
   """
   @callback format_error(state :: term(), any()) :: String.t()
-
-  @doc """
-  Return the exception modules this adapter knows how to format.
-
-  Used by `Lotus.Runner`'s rescue clause to match a raised exception
-  against the adapter's `format_error/2`. Returning the narrow set the
-  adapter actually handles lets unrelated exceptions propagate.
-  """
-  @callback handled_errors(state :: term()) :: [module()]
 
   # ---------------------------------------------------------------------------
   # Callbacks — Source Identity
@@ -1158,12 +1149,6 @@ defmodule Lotus.Source.Adapter do
   @spec format_error(t(), any()) :: String.t()
   def format_error(%__MODULE__{module: mod, state: state}, error) do
     mod.format_error(state, error)
-  end
-
-  @doc "Return handled error modules via the adapter."
-  @spec handled_errors(t()) :: [module()]
-  def handled_errors(%__MODULE__{module: mod, state: state}) do
-    mod.handled_errors(state)
   end
 
   @doc "Return the source type via the adapter."

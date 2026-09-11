@@ -207,7 +207,7 @@ defmodule MyApp.Dialects.MSSQL do
   # execute_in_transaction/3, set_statement_timeout/2, set_search_path/2
 
   # -- Error handling ---------------------------------------------------------
-  # format_error/1, handled_errors/0
+  # format_error/1
 
   # -- SQL generation ---------------------------------------------------------
   # quote_identifier/1, param_placeholder/3, limit_offset_placeholders/2,
@@ -242,7 +242,6 @@ implemented; optional callbacks have sensible defaults.
 | `set_statement_timeout/2` | Transaction & session |
 | `set_search_path/2` | Transaction & session |
 | `format_error/1` | Error handling |
-| `handled_errors/0` | Error handling |
 | `quote_identifier/1` | SQL generation |
 | `param_placeholder/3` | SQL generation |
 | `limit_offset_placeholders/2` | SQL generation |
@@ -370,9 +369,6 @@ defmodule MyApp.Adapters.Echo do
   # -- Error handling ---------------------------------------------------------
   @impl true
   def format_error(_state, error), do: inspect(error)
-
-  @impl true
-  def handled_errors(_state), do: []
 
   # -- Identity & presentation ------------------------------------------------
   @impl true

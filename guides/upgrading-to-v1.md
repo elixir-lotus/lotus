@@ -272,6 +272,12 @@ changed:
   **optional**, defaulting to the statement unchanged. It used to be
   required and typed on raw statement text, which forced non-SQL adapters
   to implement a passthrough just to satisfy the behaviour.
+- **`handled_errors/1` was removed** from `Lotus.Source.Adapter`, and
+  `handled_errors/0` from `Lotus.Source.Adapters.Ecto.Dialect`. It was
+  documented as feeding the Runner's rescue clause, but the Runner always
+  routed every raised exception through `format_error/2`, which already
+  falls back to a generic message for types it does not recognise. Delete
+  the implementation from your adapter; nothing replaces it.
 - **New optional callbacks:** `needs_preflight?/2`, `validate_statement/3`,
   `parse_qualified_name/2`, `validate_identifier/3`,
   `supported_filter_operators/1`, `ai_context/1`, `prepare_for_analysis/2`.

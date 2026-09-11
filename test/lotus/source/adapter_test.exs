@@ -120,9 +120,6 @@ defmodule Lotus.Source.AdapterTest do
     @impl true
     def format_error(_state, error), do: "Mock error: #{inspect(error)}"
 
-    @impl true
-    def handled_errors(_state), do: [RuntimeError]
-
     # --- Source Identity ---
     @impl true
     def source_type(_state), do: :postgres
@@ -313,8 +310,9 @@ defmodule Lotus.Source.AdapterTest do
       assert "Mock error: :boom" == Adapter.format_error(adapter, :boom)
     end
 
-    test "handled_errors/1 dispatches with state", %{adapter: adapter} do
-      assert [RuntimeError] = Adapter.handled_errors(adapter)
+    test "handled_errors/1 is not part of the behaviour" do
+      refute Enum.any?(Adapter.behaviour_info(:callbacks), &match?({:handled_errors, _}, &1))
+      refute function_exported?(Adapter, :handled_errors, 1)
     end
   end
 
@@ -356,8 +354,6 @@ defmodule Lotus.Source.AdapterTest do
       def disconnect(_), do: :ok
       @impl true
       def format_error(_, e), do: inspect(e)
-      @impl true
-      def handled_errors(_), do: []
       @impl true
       def source_type(_), do: :other
       @impl true
@@ -475,8 +471,6 @@ defmodule Lotus.Source.AdapterTest do
       def disconnect(_), do: :ok
       @impl true
       def format_error(_, e), do: inspect(e)
-      @impl true
-      def handled_errors(_), do: []
       @impl true
       def source_type(_), do: :other
       @impl true
@@ -609,8 +603,6 @@ defmodule Lotus.Source.AdapterTest do
       @impl true
       def format_error(_, e), do: inspect(e)
       @impl true
-      def handled_errors(_), do: []
-      @impl true
       def source_type(_), do: :other
       @impl true
       def supports_feature?(_, _), do: false
@@ -719,7 +711,6 @@ defmodule Lotus.Source.AdapterTest do
         @impl true
         def format_error(_, e), do: inspect(e)
         @impl true
-        def handled_errors(_), do: []
         @impl true
         def source_type(_), do: :other
         @impl true

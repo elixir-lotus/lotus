@@ -18,8 +18,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
   # ---------------------------------------------------------------------------
 
   @callback format_error(any()) :: String.t()
-  @callback handled_errors() :: [module()]
-
   # ---------------------------------------------------------------------------
   # Required callbacks — SQL generation
   # ---------------------------------------------------------------------------
