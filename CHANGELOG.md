@@ -550,6 +550,12 @@
 
 ### Added
 
+- **An empty middleware config clears the compiled pipeline** —
+  `Lotus.Middleware.compile/1` used to ignore an empty or missing config,
+  so a config reload could add middleware but never take it away. It now
+  erases the compiled pipeline, which also lets a host app (or a test)
+  turn middleware off at runtime.
+
 - **`:dynamic_options` feature atom** — `supports_feature?/2` now answers
   a documented `:dynamic_options` question: whether a query against this
   source can return a flat list of values suitable for populating a

@@ -87,6 +87,9 @@ defmodule Lotus.Middleware do
   @doc """
   Compiles all middleware by calling `init/1` on each module and stores
   the result in `:persistent_term` for fast runtime access.
+
+  An empty config clears the compiled pipeline, so reloading a config that
+  no longer declares middleware actually turns it off.
   """
   @spec compile(map()) :: :ok
   def compile(middleware_config) when is_map(middleware_config) and middleware_config != %{} do
@@ -103,7 +106,10 @@ defmodule Lotus.Middleware do
     :persistent_term.put(@persistent_term_key, compiled)
   end
 
-  def compile(_), do: :ok
+  def compile(_) do
+    :persistent_term.erase(@persistent_term_key)
+    :ok
+  end
 
   @doc """
   Runs the middleware pipeline for the given event.
