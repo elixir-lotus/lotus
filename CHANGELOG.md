@@ -105,9 +105,10 @@
   word "schema" meant two things (namespace vs. column definitions).
   Hard renames, no aliases: `get_table_schema/3` → `describe_table/3`,
   `resolve_table_schema/3` → `resolve_table_namespace/3`,
-  `explain_plan/4` → `query_plan/4` (return widened to
-  `{:ok, String.t() | nil} | {:error, term()}` so non-SQL engines can
-  return `{:ok, nil}` without surfacing an error). Renames apply to
+  `explain_plan/4` → `query_plan/3` (now takes `(state, %Statement{},
+  opts)`; return widened to `{:ok, String.t() | nil} | {:error, term()}`
+  so non-SQL engines can return `{:ok, nil}` without surfacing an
+  error). Renames apply to
   `Lotus.Source.Adapter`, `Lotus.Source.Adapters.Ecto.Dialect`, all
   four built-in Ecto dialect impls, and the middle-layer
   `Lotus.Schema.get_table_schema/3`. `list_schemas/1` and
@@ -116,7 +117,7 @@
   double-meaning.
 
 - **Callback signatures take `state` as the first argument** for
-  SQL-generation (`quote_identifier/2`, `query_plan/4`) and
+  SQL-generation (`quote_identifier/2`, `query_plan/3`) and
   error-handling (`format_error/2`, `handled_errors/1`) callbacks.
 
 - **`execute_query/4` typespec widened** — `sql :: String.t()` →

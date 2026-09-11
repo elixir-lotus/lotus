@@ -268,7 +268,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   end
 
   @impl true
-  def query_plan(repo, sql, params, opts) do
+  def query_plan(repo, %Statement{body: sql, params: params}, opts) do
     explain_sql = "EXPLAIN (FORMAT JSON) " <> sql
     search_path = Keyword.get(opts, :search_path)
 

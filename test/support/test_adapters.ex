@@ -25,7 +25,7 @@ defmodule Lotus.Test.NoOpAdapter do
   @impl true
   def apply_sorts(_state, statement, _sorts), do: statement
   @impl true
-  def query_plan(_state, _sql, _params, _opts), do: {:ok, ""}
+  def query_plan(_state, _statement, _opts), do: {:ok, ""}
   @impl true
   def builtin_denies(_state), do: []
   @impl true
@@ -76,7 +76,7 @@ defmodule Lotus.Test.StubAdapter do
   @impl true
   def apply_sorts(_state, statement, _sorts), do: statement
   @impl true
-  def query_plan(_state, _sql, _params, _opts), do: {:ok, ""}
+  def query_plan(_state, _statement, _opts), do: {:ok, ""}
   @impl true
   def builtin_denies(_state), do: []
   @impl true

@@ -211,7 +211,7 @@ defmodule MyApp.Dialects.MSSQL do
 
   # -- SQL generation ---------------------------------------------------------
   # quote_identifier/1, param_placeholder/3, limit_offset_placeholders/2,
-  # apply_filters/2, apply_sorts/2, query_plan/4
+  # apply_filters/2, apply_sorts/2, query_plan/3
 
   # -- Visibility & deny rules -----------------------------------------------
   # builtin_denies/1, builtin_schema_denies/1, default_schemas/1
@@ -248,7 +248,7 @@ implemented; optional callbacks have sensible defaults.
 | `limit_offset_placeholders/2` | SQL generation |
 | `apply_filters/2` | SQL generation |
 | `apply_sorts/2` | SQL generation |
-| `query_plan/4` | SQL generation |
+| `query_plan/3` | SQL generation |
 | `builtin_denies/1` | Visibility & deny rules |
 | `builtin_schema_denies/1` | Visibility & deny rules |
 | `default_schemas/1` | Visibility & deny rules |
@@ -348,7 +348,7 @@ defmodule MyApp.Adapters.Echo do
   def apply_sorts(_state, statement, _sorts), do: statement
 
   @impl true
-  def query_plan(_state, _sql, _params, _opts), do: {:ok, nil}
+  def query_plan(_state, _statement, _opts), do: {:ok, nil}
 
   # -- Safety & visibility ----------------------------------------------------
   @impl true
@@ -430,7 +430,7 @@ legitimately cannot support a feature.
 | `supported_filter_operators/1` | all of `Lotus.Query.Filter.operators/0` | Declare the subset of filter operators your `apply_filters/3` actually handles. |
 | `extract_accessed_resources/2` | `{:unrestricted, reason}` | Return `{:ok, MapSet}` of accessed `{schema, table}` tuples so visibility rules apply. **See below.** |
 | `ai_context/1` | `{:error, :ai_not_supported}` | Opt into Lotus.AI — language identifier, example query, syntax notes, error patterns, capability gates. |
-| `prepare_for_analysis/2` | `{:error, :unsupported}` | Produce a runnable statement for `query_plan/4` analysis — strips `[[ ... ]]`, neutralizes `{{var}}`. |
+| `prepare_for_analysis/2` | `{:error, :unsupported}` | Produce a runnable statement for `query_plan/3` analysis — strips `[[ ... ]]`, neutralizes `{{var}}`. |
 | `hierarchy_label/1` | `"Tables"` | UI label for the top-level hierarchy (e.g. `"Indices"` for Elasticsearch). |
 | `example_query/3` | generic `SELECT` | Source-native example for the query editor's placeholder text. |
 

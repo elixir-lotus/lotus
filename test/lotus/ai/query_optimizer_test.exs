@@ -20,7 +20,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
         }
       end)
 
-      stub(Lotus.Source.Adapter, :query_plan, fn _adapter, _sql, _params, _opts ->
+      stub(Lotus.Source.Adapter, :query_plan, fn _adapter, %Statement{}, _opts ->
         {:ok, postgres_explain_plan()}
       end)
 
@@ -67,7 +67,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
     end
 
     test "works when execution plan is unavailable" do
-      stub(Lotus.Source.Adapter, :query_plan, fn _adapter, _sql, _params, _opts ->
+      stub(Lotus.Source.Adapter, :query_plan, fn _adapter, %Statement{}, _opts ->
         {:error, "permission denied"}
       end)
 
@@ -136,7 +136,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
     end
 
     test "sanitizes Lotus variable syntax before calling query_plan" do
-      expect(Lotus.Source.Adapter, :query_plan, fn _adapter, sql, _params, _opts ->
+      expect(Lotus.Source.Adapter, :query_plan, fn _adapter, %Statement{body: sql}, _opts ->
         refute sql =~ "{{"
         refute sql =~ "}}"
         assert sql =~ "NULL"
@@ -157,7 +157,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
     end
 
     test "sanitizes optional clause brackets before calling query_plan" do
-      expect(Lotus.Source.Adapter, :query_plan, fn _adapter, sql, _params, _opts ->
+      expect(Lotus.Source.Adapter, :query_plan, fn _adapter, %Statement{body: sql}, _opts ->
         refute sql =~ "[["
         refute sql =~ "]]"
         assert sql =~ "AND name ILIKE"
@@ -182,7 +182,7 @@ defmodule Lotus.AI.QueryOptimizerTest do
     end
 
     test "sends original SQL with Lotus syntax to AI prompt" do
-      stub(Lotus.Source.Adapter, :query_plan, fn _adapter, _sql, _params, _opts ->
+      stub(Lotus.Source.Adapter, :query_plan, fn _adapter, %Statement{}, _opts ->
         {:ok, postgres_explain_plan()}
       end)
 

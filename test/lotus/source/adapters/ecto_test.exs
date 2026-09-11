@@ -513,7 +513,7 @@ defmodule Lotus.Source.Adapters.EctoTest do
                )
     end
 
-    test "returns the prepared statement validatable by query_plan/4" do
+    test "returns the prepared statement validatable by query_plan/3" do
       adapter = EctoAdapter.wrap("main", Repo)
 
       {:ok, prepared} =
@@ -522,7 +522,7 @@ defmodule Lotus.Source.Adapters.EctoTest do
           Statement.new("SELECT id FROM test_users WHERE id = {{id}} [[AND name = {{name}}]]")
         )
 
-      assert {:ok, _plan} = Adapter.query_plan(adapter, prepared.body, prepared.params, [])
+      assert {:ok, _plan} = Adapter.query_plan(adapter, prepared, [])
     end
   end
 end

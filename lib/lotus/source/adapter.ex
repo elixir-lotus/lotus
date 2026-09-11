@@ -19,7 +19,7 @@ defmodule Lotus.Source.Adapter do
     * **Query execution** — `execute_query/4`, `transaction/3`
     * **Introspection** — `list_schemas/1`, `list_tables/3`, `describe_table/3`,
       `resolve_table_namespace/3`
-    * **SQL generation** — `quote_identifier/2`, `query_plan/4`
+    * **SQL generation** — `quote_identifier/2`, `query_plan/3`
     * **Pipeline** — `transform_statement/2`, `transform_bound_query/3`,
       `apply_filters/3`, `apply_sorts/3`, `apply_pagination/3`,
       `needs_preflight?/2`, `sanitize_query/3`,
@@ -170,8 +170,11 @@ defmodule Lotus.Source.Adapter do
   cheaply) may legitimately return `{:ok, nil}` or `{:error, :unsupported}`;
   Lotus callers treat both as "no plan available" without surfacing an
   error to the user.
+
+  The statement carries its own bound values in `statement.params`; there is
+  no separate params argument.
   """
-  @callback query_plan(state :: term(), sql :: String.t(), params :: list(), opts :: keyword()) ::
+  @callback query_plan(state :: term(), statement :: Statement.t(), opts :: keyword()) ::
               {:ok, String.t() | nil} | {:error, term()}
 
   # ---------------------------------------------------------------------------
@@ -595,7 +598,7 @@ defmodule Lotus.Source.Adapter do
   @callback ai_context(state :: term()) :: {:ok, ai_context_map()} | {:error, term()}
 
   @doc """
-  Return a statement safe to pass to `query_plan/4` for optimization
+  Return a statement safe to pass to `query_plan/3` for optimization
   analysis.
 
   Callers (`Lotus.AI.QueryOptimizer`) run this first so the adapter can
@@ -928,11 +931,11 @@ defmodule Lotus.Source.Adapter do
     mod.resolve_table_namespace(state, table, schemas)
   end
 
-  @doc "Get the execution plan for a query via the adapter."
-  @spec query_plan(t(), String.t(), list(), keyword()) ::
+  @doc "Get the execution plan for a statement via the adapter."
+  @spec query_plan(t(), Statement.t(), keyword()) ::
           {:ok, String.t() | nil} | {:error, term()}
-  def query_plan(%__MODULE__{module: mod, state: state}, sql, params, opts) do
-    mod.query_plan(state, sql, params, opts)
+  def query_plan(%__MODULE__{module: mod, state: state}, %Statement{} = statement, opts) do
+    mod.query_plan(state, statement, opts)
   end
 
   @doc "Return built-in deny rules via the adapter."

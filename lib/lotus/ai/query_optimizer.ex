@@ -4,7 +4,7 @@ defmodule Lotus.AI.QueryOptimizer do
 
   Runs the adapter's `prepare_for_analysis/2` to resolve Lotus template
   syntax into a form parseable by the engine's diagnostic endpoint, calls
-  `query_plan/4` to get an execution plan (when available), and sends
+  `query_plan/3` to get an execution plan (when available), and sends
   both the statement and the plan to the LLM for review.
 
   The module is adapter-agnostic — SQL dialects produce EXPLAIN output,
@@ -87,7 +87,7 @@ defmodule Lotus.AI.QueryOptimizer do
   # suggestions.
   defp get_execution_plan(adapter, %Statement{} = statement, opts) do
     with {:ok, prepared} <- Adapter.prepare_for_analysis(adapter, statement),
-         {:ok, plan} <- Adapter.query_plan(adapter, prepared.body, prepared.params, opts) do
+         {:ok, plan} <- Adapter.query_plan(adapter, prepared, opts) do
       plan
     else
       _ -> nil

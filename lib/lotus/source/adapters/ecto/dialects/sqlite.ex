@@ -230,7 +230,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def query_plan(repo, sql, params, _opts) do
+  def query_plan(repo, %Statement{body: sql, params: params}, _opts) do
     explain_sql = "EXPLAIN QUERY PLAN " <> sql
 
     case repo.query(explain_sql, params) do

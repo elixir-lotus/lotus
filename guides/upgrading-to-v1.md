@@ -261,7 +261,9 @@ changed:
 - **`get_table_schema/3` → `describe_table/3`**, **`resolve_table_schema/3`
   → `resolve_table_namespace/3`**. The "schema" word was used with two
   distinct meanings; the new names disambiguate.
-- **`explain_plan/4` → `query_plan/4`** with return type widened to
+- **`explain_plan/4` → `query_plan/3`** — takes `(state, %Statement{}, opts)`,
+  not the old `(state, sql, params, opts)`; bound values travel in
+  `statement.params`. Return type widened to
   `{:ok, String.t() | nil} | {:error, term()}`. Non-SQL engines that don't
   expose a plan return `{:ok, nil}` without surfacing an error.
 - **`transform_bound_query/4` arity → `transform_bound_query/3`** — takes

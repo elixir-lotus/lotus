@@ -96,7 +96,8 @@ defmodule Lotus.Source.AdapterTest do
     end
 
     @impl true
-    def query_plan(_state, sql, _params, _opts), do: {:ok, "Seq Scan on #{sql}"}
+    def query_plan(_state, %Statement{body: sql, params: params}, _opts),
+      do: {:ok, "Seq Scan on #{sql} with #{length(params)} params"}
 
     # --- Safety & Visibility ---
     @impl true
@@ -203,9 +204,11 @@ defmodule Lotus.Source.AdapterTest do
       assert :ok = Adapter.health_check(adapter)
     end
 
-    test "query_plan/4 dispatches to module with state", %{adapter: adapter} do
-      assert {:ok, plan} = Adapter.query_plan(adapter, "SELECT 1", [], [])
-      assert plan =~ "Seq Scan"
+    test "query_plan/3 dispatches the statement to module with state", %{adapter: adapter} do
+      statement = Statement.new("SELECT 1 WHERE id = $1", [7])
+
+      assert {:ok, plan} = Adapter.query_plan(adapter, statement, [])
+      assert plan == "Seq Scan on SELECT 1 WHERE id = $1 with 1 params"
     end
 
     test "describe_table/3 dispatches to module with state", %{adapter: adapter} do
@@ -339,7 +342,7 @@ defmodule Lotus.Source.AdapterTest do
       @impl true
       def apply_sorts(_, s, _), do: s
       @impl true
-      def query_plan(_, _, _, _), do: {:ok, ""}
+      def query_plan(_, _, _), do: {:ok, ""}
       @impl true
       def builtin_denies(_), do: []
       @impl true
@@ -458,7 +461,7 @@ defmodule Lotus.Source.AdapterTest do
       @impl true
       def apply_sorts(_, s, _), do: s
       @impl true
-      def query_plan(_, _, _, _), do: {:ok, ""}
+      def query_plan(_, _, _), do: {:ok, ""}
       @impl true
       def builtin_denies(_), do: []
       @impl true
@@ -556,7 +559,7 @@ defmodule Lotus.Source.AdapterTest do
       @impl true
       def apply_sorts(_, s, _), do: s
       @impl true
-      def query_plan(_, _, _, _), do: {:ok, ""}
+      def query_plan(_, _, _), do: {:ok, ""}
       @impl true
       def builtin_denies(_), do: []
       @impl true
@@ -666,7 +669,7 @@ defmodule Lotus.Source.AdapterTest do
         @impl true
         def apply_sorts(_, s, _), do: s
         @impl true
-        def query_plan(_, _, _, _), do: {:ok, ""}
+        def query_plan(_, _, _), do: {:ok, ""}
         @impl true
         def builtin_denies(_), do: []
         @impl true

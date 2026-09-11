@@ -45,7 +45,7 @@ defmodule Lotus.Source.Adapters.PluggableRegistryTest do
     @impl true
     def apply_sorts(_, statement, _), do: statement
     @impl true
-    def query_plan(_, _, _, _), do: {:ok, "plan"}
+    def query_plan(_, _, _), do: {:ok, "plan"}
     @impl true
     def builtin_denies(_), do: []
     @impl true
@@ -214,7 +214,7 @@ defmodule Lotus.Source.Adapters.PluggableRegistryTest do
     @impl true
     def apply_sorts(_, statement, _), do: statement
     @impl true
-    def query_plan(_, _, _, _), do: {:ok, "echo-plan"}
+    def query_plan(_, _, _), do: {:ok, "echo-plan"}
 
     # Echo adapter has no real relations — return an empty set so preflight
     # passes without needing the :allow_unrestricted_resources opt-in.

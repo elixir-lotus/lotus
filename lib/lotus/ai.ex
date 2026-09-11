@@ -191,7 +191,7 @@ defmodule Lotus.AI do
   @doc """
   Get AI-powered optimization suggestions for a statement.
 
-  Runs the adapter's `prepare_for_analysis/2` + `query_plan/4` to get an
+  Runs the adapter's `prepare_for_analysis/2` + `query_plan/3` to get an
   execution plan (when the engine exposes one), then asks the AI to
   review the statement and the plan for potential improvements. Adapters
   that can't produce a plan still get structural suggestions.

@@ -26,7 +26,7 @@ defmodule Lotus.Storage.SchemaCacheTest do
     def quote_identifier(_, id), do: ~s("#{id}")
     def apply_filters(_, statement, _), do: statement
     def apply_sorts(_, statement, _), do: statement
-    def query_plan(_, _, _, _), do: {:ok, "plan"}
+    def query_plan(_, _, _), do: {:ok, "plan"}
     def builtin_denies(_), do: []
     def builtin_schema_denies(_), do: []
     def default_schemas(_), do: ["public"]

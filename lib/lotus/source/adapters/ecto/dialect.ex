@@ -44,7 +44,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
   @callback apply_sorts(statement :: Statement.t(), sorts :: [Lotus.Query.Sort.t()]) ::
               Statement.t()
 
-  @callback query_plan(repo, sql :: String.t(), params :: list(), opts :: keyword()) ::
+  @callback query_plan(repo, statement :: Statement.t(), opts :: keyword()) ::
               {:ok, String.t() | nil} | {:error, term()}
 
   # ---------------------------------------------------------------------------

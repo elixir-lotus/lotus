@@ -48,7 +48,7 @@ defmodule Lotus.Source.EditorConfigShapeTest do
         def apply_sorts(_state, %Statement{} = s, _sorts), do: s
 
         @impl true
-        def query_plan(_state, _sql, _params, _opts), do: {:ok, nil}
+        def query_plan(_state, _statement, _opts), do: {:ok, nil}
 
         @impl true
         def builtin_denies(_state), do: []
