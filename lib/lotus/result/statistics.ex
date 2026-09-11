@@ -182,7 +182,7 @@ defmodule Lotus.Result.Statistics do
     if strings == [] do
       Map.merge(base, %{min_length: nil, max_length: nil, top_values: []})
     else
-      lengths = Enum.map(strings, &String.length/1)
+      lengths = Enum.map(strings, &safe_length/1)
 
       top_values =
         strings
@@ -197,6 +197,10 @@ defmodule Lotus.Result.Statistics do
         top_values: top_values
       })
     end
+  end
+
+  defp safe_length(s) do
+    if String.valid?(s), do: String.length(s), else: byte_size(s)
   end
 
   # --- Temporal statistics ---

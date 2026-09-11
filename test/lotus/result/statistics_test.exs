@@ -234,6 +234,17 @@ defmodule Lotus.Result.StatisticsTest do
       assert stats.type == :unknown
     end
 
+    test "handles binaries that are not valid UTF-8" do
+      invalid = <<194, 169, 153, 28, 40, 23, 204>>
+      r = result(["s"], [[invalid], ["ok"], [invalid]])
+      {:ok, stats} = Statistics.compute(r, "s")
+
+      assert stats.type == :string
+      assert stats.min_length == 2
+      assert stats.max_length == 7
+      assert %{value: ^invalid, count: 2} = hd(stats.top_values)
+    end
+
     test "detects atoms as strings" do
       r = result(["s"], [[:active], [:inactive], [:active]])
       {:ok, stats} = Statistics.compute(r, "s")
