@@ -37,7 +37,8 @@ defmodule Lotus.Middleware do
 
   `:before_execute` fires after sanitization and preflight pass and before the
   statement executes. Its `:statement` is the rewritten one, and its
-  `:relations` is what preflight proved the statement touches. The two hooks
+  `:relations` is what preflight proved the statement touches — read back from
+  the cache entry when the result is served from the cache. The two hooks
   answer different questions: `:before_query` asks which statement should run,
   `:before_execute` asks whether the statement may proceed given what it
   provably touches.
@@ -62,6 +63,27 @@ defmodule Lotus.Middleware do
   It is `%{}` for a raw statement run through `Lotus.run_statement/3`. A plug
   can enforce rules on the values a caller picked (date-range limits, tenant
   checks) without parsing the statement.
+
+  ### Caching
+
+  Every query event fires on a cache hit. Only the raw execution is cached, and
+  the relations preflight found are stored with it, so `:before_execute` carries
+  them whether the result came from the source or from the cache. Middleware is
+  therefore safe to make context-dependent — per-user access control, audit —
+  without keying the cache on `:context`.
+
+  A `:before_query` plug that rewrites the statement keys its own entry: the
+  event runs before pagination and before the key is built, so the body, the
+  bound values and the window all describe what will execute. What an
+  `:after_query` plug makes of the result goes to that caller and is not written
+  back; a halt there withholds the result from that caller, and the rows stay
+  cached for one whose plugs let them through.
+
+  What a hit does skip is the work between sanitization and the rows: statement
+  sanitization, preflight table authorization, and column visibility. Those read
+  `:scope`, which is part of the cache key — so a visibility resolver must
+  decide from `(source, relations, column, scope)` alone. Per-actor logic that
+  cannot be expressed that way belongs in middleware.
 
   ### Discovery event ordering
 

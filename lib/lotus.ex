@@ -493,22 +493,102 @@ defmodule Lotus do
     :ok = validate_sort_columns!(adapter, sorts)
     statement = Adapter.apply_sorts(adapter, statement, sorts)
 
-    {statement, pagination_meta, cache_bound} =
-      maybe_paginate(statement, adapter, search_path, Keyword.get(opts, :window))
+    # The middleware runs outside the cache callback, as discovery middleware
+    # does: a plug that varies on `:context` — access control, audit — must see
+    # every call, not only the one that fills the cache, and `:context` is not
+    # part of the cache key. Only the raw execution is stored: what
+    # `:after_query` makes of the result is not written back.
+    #
+    # `:before_query` runs before pagination, so a plug is handed the query the
+    # caller wrote rather than a `LIMIT` wrapper around it, and the page and its
+    # count are both built from the statement the plug returned. Everything that
+    # keys the entry — the body, the bound values, the window — therefore
+    # describes what will actually execute.
+    with {:ok, %Statement{} = statement} <- Runner.before_query(adapter, statement, runner_opts),
+         {statement, pagination_meta, cache_bound} =
+           maybe_paginate(statement, adapter, search_path, Keyword.get(opts, :window)),
+         {:ok, %Result{} = res} <-
+           exec_cached_statement(
+             adapter,
+             statement,
+             runner_opts,
+             [
+               mode: opts[:cache],
+               key:
+                 result_key(
+                   statement.body,
+                   bound_identity(cache_bound || cache_identity, statement.params),
+                   adapter.name,
+                   search_path,
+                   Keyword.get(opts, :scope)
+                 ),
+               tags: build_cache_tags(query_id, adapter.name, opts),
+               profile: determine_cache_profile(opts)
+             ],
+             pagination_meta
+           ) do
+      Runner.after_query(adapter, statement, res, runner_opts)
+    end
+  end
 
-    scope = Keyword.get(opts, :scope)
+  # The bound values in the key come from the statement that will execute. A
+  # plug that filters rows through a parameter rather than through the statement
+  # text leaves the body alone, and two callers would otherwise share an entry.
+  defp bound_identity(identity, params) when is_map(identity),
+    do: Map.put(identity, :__params__, params)
 
-    key =
-      result_key(statement.body, cache_bound || cache_identity, adapter.name, search_path, scope)
+  defp bound_identity(_identity, params), do: %{__params__: params}
 
-    tags = build_cache_tags(query_id, adapter.name, opts)
-    profile = determine_cache_profile(opts)
-
-    exec_with_cache(opts[:cache], profile, key, tags, fn ->
-      with {:ok, %Result{} = res} <- Runner.run_statement(adapter, statement, runner_opts) do
-        {:ok, merge_pagination_meta(res, pagination_meta)}
+  # Only the execution is cached, and it is stored with the relations preflight
+  # found, so `:before_execute` can run on a hit as well. On a miss it runs
+  # inside the callback, where it still gates execution.
+  defp exec_cached_statement(adapter, statement, runner_opts, cache, pagination_meta) do
+    fetch = fn ->
+      with {:ok, %{result: res, relations: relations}} <-
+             Runner.execute_statement(adapter, statement, runner_opts) do
+        {:ok, %{result: merge_pagination_meta(res, pagination_meta), relations: relations}}
       end
-    end)
+    end
+
+    case exec_with_cache_origin(cache, fetch) do
+      {:ok, %{result: %Result{} = res, relations: relations}, :hit} ->
+        with :ok <- Runner.before_execute(adapter, statement, relations, runner_opts) do
+          {:ok, res}
+        end
+
+      {:ok, %{result: %Result{} = res}, _executed} ->
+        {:ok, res}
+
+      # An entry stored before results carried their relations. `:before_execute`
+      # has nothing to gate on, so the entry is of no use: execute, and replace
+      # it with one that carries them.
+      {:ok, _stale, :hit} ->
+        with {:ok, %{result: %Result{} = res}} = fresh <- fetch.() do
+          put_cache_entry(cache, elem(fresh, 1))
+          {:ok, res}
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp exec_with_cache_origin(cache, fetch) do
+    exec_with_cache_origin(
+      Keyword.get(cache, :mode),
+      Keyword.fetch!(cache, :profile),
+      Keyword.fetch!(cache, :key),
+      Keyword.fetch!(cache, :tags),
+      fetch
+    )
+  end
+
+  defp put_cache_entry(cache, val) do
+    mode = Keyword.get(cache, :mode)
+    ttl = choose_ttl(mode, Keyword.fetch!(cache, :profile))
+    options = build_cache_options(mode, Keyword.fetch!(cache, :tags))
+
+    Lotus.Cache.put(Keyword.fetch!(cache, :key), val, ttl, options)
   end
 
   defp prepare_final_opts(opts, nil),
@@ -806,24 +886,21 @@ defmodule Lotus do
     end
   end
 
-  defp exec_with_cache(cache_opts, ttl_default_profile, key, tags, fun) do
+  # Reports where the value came from: `:hit` for one the store already held,
+  # `:executed` for one `fun` produced. The query path needs the distinction,
+  # because a value from the store skipped the checks inside `fun` and its
+  # caller has to make up for them.
+  defp exec_with_cache_origin(cache_opts, ttl_default_profile, key, tags, fun) do
     case cache_mode(cache_opts) do
-      :off ->
-        fun.()
-
-      :bypass ->
-        fun.()
+      mode when mode in [:off, :bypass] ->
+        executed(fun)
 
       :refresh ->
-        case fun.() do
-          {:ok, val} ->
-            ttl = choose_ttl(cache_opts, ttl_default_profile)
-            cache_options = build_cache_options(cache_opts, tags)
-            :ok = Lotus.Cache.put(key, val, ttl, cache_options)
-            {:ok, val}
-
-          error ->
-            error
+        with {:ok, val} <- fun.() do
+          ttl = choose_ttl(cache_opts, ttl_default_profile)
+          cache_options = build_cache_options(cache_opts, tags)
+          :ok = Lotus.Cache.put(key, val, ttl, cache_options)
+          {:ok, val, :executed}
         end
 
       :use ->
@@ -838,12 +915,17 @@ defmodule Lotus do
       cache_options = build_cache_options(cache_opts, tags)
 
       case Lotus.Cache.get_or_store(key, ttl, fn -> cache_value_or_throw(fun) end, cache_options) do
-        {:ok, val, _} -> {:ok, val}
-        {:error, _} -> fun.()
+        {:ok, val, :hit} -> {:ok, val, :hit}
+        {:ok, val, _stored} -> {:ok, val, :executed}
+        {:error, _} -> executed(fun)
       end
     catch
       {:lotus_cache_error, e} -> {:error, e}
     end
+  end
+
+  defp executed(fun) do
+    with {:ok, val} <- fun.(), do: {:ok, val, :executed}
   end
 
   defp cache_value_or_throw(fun) do

@@ -16,9 +16,39 @@
   preflight, and `{:unrestricted, reason}` when the adapter cannot name the
   relations a statement touches; both mean "unknown", not "touches nothing",
   and a plug that gates on the list must refuse rather than read them as an
-  empty set.
+  empty set. The event fires on a result served from the result cache too: the
+  relations are stored with the result, so a plug that authorizes a statement
+  against its tables is not skipped once the cache is warm.
 
 ### Fixed
+
+- **Middleware is no longer skipped on a result cache hit.** The query events
+  ran inside the cache callback, so a plug saw only the call that filled the
+  cache: a `:before_query` plug that halts for one user let the same statement
+  through for the next one while the entry was warm, and an audit plug on
+  `:after_query` recorded one execution in place of many. `:context` is not part
+  of the cache key, so two callers with different contexts and the same scope
+  shared one entry. All three query events now fire on a hit. Only the execution
+  is cached, and it is stored together with the relations preflight found, so
+  `:before_execute` gates on those relations whether the rows came from the
+  source or from the store. What `:after_query` returns is not written back; a
+  halt there withholds the result from that caller.
+
+  `Lotus.Runner` exposes the pipeline as `before_query/3`, `before_execute/4`,
+  `execute_statement/3` and `after_query/4`; `run_statement/3` composes them and
+  behaves as before, except that `[:lotus, :query, *]` telemetry now brackets the
+  execution phase alone, so a middleware halt emits no query events. Result cache
+  entries carry the relations, so entries written by an earlier version are
+  replaced the first time each key is read.
+
+- **A `:before_query` plug now sees the query the caller wrote, not a `LIMIT`
+  wrapper around it, and what it returns is what gets paginated, keyed and
+  counted.** Pagination ran before the event, so a plug adding a tenant predicate
+  to a windowed query was handed the wrapper, and `meta.total_count` counted the
+  rows of the statement the plug had replaced. The bound parameters were captured
+  before the event as well, so a plug that filters through a parameter rather
+  than through the statement text did not change the cache key at all and two
+  callers shared one entry.
 
 - **A failed statement no longer hands its tables to the next statement in
   the same process.** Preflight records the relations it authorised in the
