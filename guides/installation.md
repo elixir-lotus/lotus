@@ -282,9 +282,8 @@ With Lotus Web, your team gets:
 
 | Lotus Version | Lotus Web Version |
 |---------------|-------------------|
-| 0.9.x         | 0.4.x            |
-| 0.8.x         | 0.3.x            |
-| 0.6.x - 0.7.x | 0.3.x            |
+| 1.0.x         | 1.0.x             |
+| 0.16.x        | 0.14.x            |
 
 The dependency constraints in `mix.exs` will automatically ensure compatible versions are installed.
 
