@@ -48,20 +48,32 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
     e -> {:error, Exception.message(e)}
   end
 
+  # ecto_sqlite3 is optional. A `rescue ... in [Exqlite.Error]` clause or a
+  # `%Exqlite.Error{}` pattern makes a compile-time reference, which warns in
+  # projects without exqlite. Module.concat/1 gives the same atom without it.
+  @exqlite_error Module.concat(["Exqlite", "Error"])
+
   defp setup_read_only_pragma(_repo, false), do: {false, nil}
 
   defp setup_read_only_pragma(repo, true) do
     check_and_set_pragma(repo)
   rescue
-    error in [Exqlite.Error] ->
-      msg = error.message || Exception.message(error)
-
-      if msg =~ "no such pragma" or msg =~ "unknown pragma" do
+    error ->
+      if exqlite_error?(error) and pragma_unsupported?(exqlite_message(error)) do
         log_pragma_warning()
         {false, nil}
       else
         reraise error, __STACKTRACE__
       end
+  end
+
+  defp exqlite_error?(%{__struct__: @exqlite_error}), do: true
+  defp exqlite_error?(_), do: false
+
+  defp exqlite_message(error), do: Map.get(error, :message) || Exception.message(error)
+
+  defp pragma_unsupported?(message) do
+    message =~ "no such pragma" or message =~ "unknown pragma"
   end
 
   defp check_and_set_pragma(repo) do
@@ -93,8 +105,8 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def format_error(%{__struct__: mod} = e) when mod == Exqlite.Error do
-    "SQLite Error: " <> (Map.get(e, :message) || Exception.message(e))
+  def format_error(%{__struct__: @exqlite_error} = error) do
+    "SQLite Error: " <> exqlite_message(error)
   end
 
   def format_error(other), do: Default.format_error(other)
