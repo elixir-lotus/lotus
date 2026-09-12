@@ -41,12 +41,13 @@ defmodule Lotus.Runner do
     # predicates. Sanitization and preflight then apply to what will actually
     # execute, rather than to the text the caller originally supplied.
     #
-    # Preflight records its relations in the process dictionary, and only the
-    # success path consumes them. Clearing on both sides of the pipeline keeps
-    # them from crossing a statement boundary: on entry, because
-    # `Preflight.authorize/4` is public and a caller may have left its own
-    # behind, and in `after` on every exit, raises included, so a statement
-    # that fails cannot hand its tables to the next one in the same process.
+    # Preflight records its relations in the process dictionary, and
+    # `preflight_visibility/3` reads them out once and carries them down the
+    # pipeline explicitly. Clearing on both sides keeps them from crossing a
+    # statement boundary: on entry, because `Preflight.authorize/4` is public
+    # and a caller may have left its own behind, and in `after` on every exit,
+    # raises included, so a statement that fails cannot hand its tables to the
+    # next one in the same process.
     result =
       try do
         Relations.clear()
@@ -54,8 +55,9 @@ defmodule Lotus.Runner do
         with {:ok, %Statement{} = statement} <-
                run_before_query(adapter, statement, context, vars),
              :ok <- Adapter.sanitize_query(adapter, statement, sanitize_opts(opts)),
-             :ok <- preflight_visibility(adapter, statement, opts),
-             {:ok, %Result{} = res} <- exec_read_only(adapter, statement, opts),
+             {:ok, relations} <- preflight_visibility(adapter, statement, opts),
+             :ok <- run_before_execute(adapter, statement, relations, context, vars),
+             {:ok, %Result{} = res} <- exec_read_only(adapter, statement, relations, opts),
              {:ok, %Result{} = res} <- run_after_query(adapter, statement, res, context, vars) do
           {:ok, res}
         end
@@ -78,7 +80,12 @@ defmodule Lotus.Runner do
     end
   end
 
-  defp exec_read_only(%Adapter{} = adapter, %Statement{body: body, params: params}, opts) do
+  defp exec_read_only(
+         %Adapter{} = adapter,
+         %Statement{body: body, params: params},
+         relations,
+         opts
+       ) do
     Adapter.transaction(
       adapter,
       fn _state ->
@@ -89,7 +96,7 @@ defmodule Lotus.Runner do
             Adapter.execute_query(adapter, body, params, opts ++ [timeout: timeout])
           end)
 
-        handle_query_result(res, elapsed_us, adapter, Keyword.get(opts, :scope))
+        handle_query_result(res, elapsed_us, adapter, relations, Keyword.get(opts, :scope))
       end,
       opts
     )
@@ -105,13 +112,14 @@ defmodule Lotus.Runner do
          {:ok, %{columns: cols, rows: rows} = raw},
          elapsed_us,
          %Adapter{} = adapter,
+         relations,
          scope
        ) do
     num_rows = Map.get(raw, :num_rows, length(rows || []))
     command = normalize_command(Map.get(raw, :command))
     duration_ms = System.convert_time_unit(elapsed_us, :microsecond, :millisecond)
 
-    rels = Relations.take()
+    rels = Relations.to_list(relations)
 
     policies =
       Enum.map(cols || [], fn c ->
@@ -138,11 +146,11 @@ defmodule Lotus.Runner do
     end
   end
 
-  defp handle_query_result({:error, err}, _elapsed_us, _adapter, _scope) do
+  defp handle_query_result({:error, err}, _elapsed_us, _adapter, _relations, _scope) do
     {:error, err}
   end
 
-  defp handle_query_result(other, _elapsed_us, _adapter, _scope) do
+  defp handle_query_result(other, _elapsed_us, _adapter, _relations, _scope) do
     other
   end
 
@@ -273,6 +281,31 @@ defmodule Lotus.Runner do
     end
   end
 
+  # Fires once sanitization and preflight have passed, with the relations
+  # preflight proved the statement touches. A plug may inspect but not rewrite
+  # here — the statement has already been authorized, so the one that executes
+  # must be the one preflight saw.
+  defp run_before_execute(
+         %Adapter{} = adapter,
+         %Statement{} = statement,
+         relations,
+         context,
+         vars
+       ) do
+    payload = %{
+      source: adapter.name,
+      statement: statement,
+      relations: relations,
+      context: context,
+      vars: vars
+    }
+
+    case Middleware.run(:before_execute, payload) do
+      {:cont, _payload} -> :ok
+      {:halt, reason} -> {:error, reason}
+    end
+  end
+
   defp run_after_query(
          %Adapter{} = adapter,
          %Statement{} = statement,
@@ -294,17 +327,21 @@ defmodule Lotus.Runner do
     end
   end
 
+  # Returns what preflight proved the statement touches: a list of
+  # `{schema, table}`, or `{:unrestricted, reason}` for an adapter that cannot
+  # name them. An adapter that needs no preflight yields `[]` — nothing was
+  # analysed, so nothing is known.
   defp preflight_visibility(%Adapter{} = adapter, %Statement{} = statement, opts) do
     if Adapter.needs_preflight?(adapter, statement) do
       search_path = Keyword.get(opts, :search_path)
       scope = Keyword.get(opts, :scope)
 
       case Preflight.authorize(adapter, statement, search_path, scope) do
-        :ok -> :ok
+        :ok -> {:ok, Relations.get()}
         {:error, msg} -> {:error, msg}
       end
     else
-      :ok
+      {:ok, []}
     end
   rescue
     e -> {:error, Exception.message(e)}

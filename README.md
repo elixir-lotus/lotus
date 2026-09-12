@@ -126,7 +126,7 @@ For the complete setup guide (caching, multiple databases, visibility controls),
 - **AI query optimization** — get actionable optimization suggestions (indexes, rewrites, schema changes) powered by query-plan analysis
 - **Adapter-driven AI** — each adapter describes its own query language, example query, syntax notes, and error patterns through `ai_context/1`, so the assistant speaks the engine's dialect instead of assuming SQL. Free-form adapter text only reaches the prompt for adapters you list in `:trusted_source_adapters`
 - **Three-level visibility** — schema, table, and column rules, with schema taking precedence over table and per-column `:omit` / `{:mask, _}` / `:error` policies applied to result rows
-- **Middleware** — a plug-style pipeline with `:before_query`, `:after_query`, and `:after_list_*` hooks for auditing, access control, and per-tenant statement rewriting
+- **Middleware** — a plug-style pipeline with `:before_query`, `:before_execute`, `:after_query`, and `:after_list_*` hooks for auditing, access control, per-tenant statement rewriting, and authorizing on the tables a statement provably touches
 - **Telemetry** — `[:lotus, ...]` events for query execution, schema introspection, and cache hits and misses
 - **Read-only by default** — all queries run in read-only transactions with automatic timeout controls and session state management (opt out per-query with `read_only: false`)
 

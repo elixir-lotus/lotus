@@ -12,7 +12,9 @@ defmodule Lotus.Preflight do
   When an adapter returns `{:unrestricted, reason}` the statement is allowed
   through only if the host application has opted in via
   `config :lotus, :allow_unrestricted_resources`; otherwise preflight returns
-  an error.
+  an error. The opted-in case records `{:unrestricted, reason}` rather than a
+  relation list, so a later consumer can tell "touches no table" apart from
+  "this adapter cannot name its tables".
   """
 
   alias Lotus.Config
@@ -56,6 +58,7 @@ defmodule Lotus.Preflight do
 
   defp handle_unrestricted(%Adapter{name: name}, reason) do
     if Config.allow_unrestricted_resources?(name) do
+      Relations.put({:unrestricted, reason})
       :ok
     else
       {:error,
