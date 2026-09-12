@@ -1,19 +1,5 @@
 # Changelog
 
-## [Unreleased]
-
-### Fixed
-
-- **Normalizing a `Decimal` no longer depends on which Decimal an
-  application resolved.** `Lotus.Normalizer` rendered one with
-  `Decimal.to_string/3` and `max_digits: :infinity`, so a numeric wider than
-  Decimal's default output cap renders in full instead of raising. That arity
-  arrived in Decimal 2.4.0, and Lotus pins no Decimal of its own, so an
-  application on an older one got an `UndefinedFunctionError` the moment a
-  query returned a numeric column. The impl now picks its arity at compile
-  time, the way `Lotus.JSON` picks its JSON library. Both branches render the
-  same output, since the versions without the option have no cap to lift.
-
 ## [1.0.0] - 2026-09-12
 
 > **v1.0 is a large rewrite and not a drop-in upgrade from the v0.16.x
@@ -742,6 +728,16 @@
   `:schema` keys). Documentation now matches the code (#173).
 
 ### Fixed
+
+- **Normalizing a `Decimal` no longer depends on which Decimal an
+  application resolved.** `Lotus.Normalizer` rendered one with
+  `Decimal.to_string/3` and `max_digits: :infinity`, so a numeric wider than
+  Decimal's default output cap renders in full instead of raising. That arity
+  arrived in Decimal 2.4.0, and Lotus pins no Decimal of its own, so an
+  application on an older one got an `UndefinedFunctionError` the moment a
+  query returned a numeric column. The impl now picks its arity at compile
+  time, the way `Lotus.JSON` picks its JSON library. Both branches render the
+  same output, since the versions without the option have no cap to lift.
 
 - `Lotus.Result.Statistics` normalizes string values through
   `Lotus.Value.to_display_string/1` before measuring them. Columns whose
