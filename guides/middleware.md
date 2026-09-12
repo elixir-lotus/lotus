@@ -26,6 +26,7 @@ Each middleware receives a payload map whose contents depend on the pipeline eve
 | Event | Triggered | Payload keys |
 |-------|-----------|--------------|
 | `:before_query` | Before sanitization, preflight and execution | `:statement`, `:source`, `:context`, `:vars` |
+| `:before_execute` | After sanitization and preflight pass, before execution | `:statement`, `:relations`, `:source`, `:context`, `:vars` |
 | `:after_query` | After execution, before result returned to caller | `:result`, `:statement`, `:source`, `:context`, `:vars` |
 | `:after_list_schemas` | After schema discovery and visibility filtering | `:schemas`, `:source`, `:scope`, `:context` |
 | `:after_list_tables` | After table discovery and visibility filtering | `:tables`, `:source`, `:scope`, `:context` |
@@ -89,6 +90,54 @@ in force.
 Returning the payload unchanged leaves the original statement in place, so
 existing audit and access-control plugs need no changes.
 
+## Authorizing on the Tables a Statement Touches
+
+`:before_query` runs before the statement is analysed, so at that point Lotus
+does not yet know which tables it reads. `:before_execute` runs after
+sanitization and preflight have passed and before the statement executes, and
+its payload carries `:relations` — the `{schema, table}` pairs preflight proved
+the statement touches, for the statement a `:before_query` plug rewrote:
+
+```elixir
+defmodule MyApp.TableAuthz do
+  def init(opts), do: opts
+
+  def call(%{relations: relations, context: %{user: user}} = payload, _opts)
+      when is_list(relations) and relations != [] do
+    if Enum.all?(relations, &MyApp.Authz.may_read?(user, &1)) do
+      {:cont, payload}
+    else
+      {:halt, "not authorized for one of the tables this query reads"}
+    end
+  end
+
+  # `[]` and `{:unrestricted, reason}` both mean Lotus could not name the
+  # tables, not that the statement touches none. A plug that gates on the
+  # list must refuse rather than read either as an empty set.
+  def call(_payload, _opts), do: {:halt, "cannot determine which tables this query reads"}
+end
+```
+
+Halting returns `{:error, reason}` to the caller and the statement never runs.
+
+`:relations` is `[]` when the adapter's `needs_preflight?/2` returns false for
+the statement — no analysis ran. It is `{:unrestricted, reason}` when the
+adapter cannot name the relations a statement touches (Elasticsearch, for one)
+and the host opted in via `:allow_unrestricted_resources`. The two forms are
+distinct so a plug can log which case it hit.
+
+The two query hooks answer different questions, and both can be registered:
+
+| Hook | Question |
+|------|----------|
+| `:before_query` | May this caller run a statement, and what statement should run? |
+| `:before_execute` | Given what this statement provably touches, may it proceed? |
+
+A row-level-security plug that rewrites the statement uses the first. An
+authorization plug that gates on tables uses the second. A `:before_execute`
+plug may not rewrite the statement: preflight has already authorized the one in
+the payload, and that is the one that executes.
+
 ## Configuration
 
 Register middleware in your Lotus config. Each entry is a `{module, opts}` tuple — `opts` is passed to `init/1` at compile time:
@@ -99,6 +148,9 @@ config :lotus,
     before_query: [
       {MyApp.AccessControlMiddleware, []},
       {MyApp.QueryAuditMiddleware, [repo: MyApp.AuditRepo]}
+    ],
+    before_execute: [
+      {MyApp.TableAuthz, []}
     ],
     after_query: [
       {MyApp.ResultRedactionMiddleware, [fields: ~w(email phone ssn)]}
@@ -128,7 +180,7 @@ payload.
 `:scope` identifies *who is asking*. Lotus hashes it into cache keys and passes
 it to the visibility resolver, so a resolver can hide tables or mask columns per
 tenant or per role. It is present on the discovery event payloads
-(`:after_list_*`, `:after_discover`), not on `:before_query` / `:after_query`.
+(`:after_list_*`, `:after_discover`), not on the query events.
 
 ```elixir
 # Pass both when running a query

@@ -265,8 +265,8 @@ defmodule Lotus.Config do
 
       Format: %{event => [{Module, opts}]}
 
-      Events: :before_query, :after_query, :after_list_schemas, :after_list_tables,
-      :after_describe_table, :after_list_relations, :after_discover
+      Events: :before_query, :before_execute, :after_query, :after_list_schemas,
+      :after_list_tables, :after_describe_table, :after_list_relations, :after_discover
 
       ## Example
 

@@ -20,12 +20,42 @@ defmodule Lotus.Middleware do
   | Event | Triggered | Payload keys |
   |-------|-----------|--------------|
   | `:before_query` | First, before sanitization, preflight and execution | `:statement` (`%Lotus.Query.Statement{}`), `:source`, `:context`, `:vars` |
+  | `:before_execute` | After sanitization and preflight pass, before execution | `:statement` (`%Lotus.Query.Statement{}`), `:relations`, `:source`, `:context`, `:vars` |
   | `:after_query` | After execution, before result returned to caller | `:result`, `:statement` (`%Lotus.Query.Statement{}`), `:source`, `:context`, `:vars` |
   | `:after_list_schemas` | After schema discovery and visibility filtering | `:schemas`, `:source`, `:scope`, `:context` |
   | `:after_list_tables` | After table discovery and visibility filtering | `:tables`, `:source`, `:scope`, `:context` |
   | `:after_describe_table` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
   | `:after_list_relations` | After relation discovery and visibility filtering | `:relations`, `:source`, `:scope`, `:context` |
   | `:after_discover` | After any discovery call, following the kind-specific `:after_list_*` event | `:kind`, `:result`, `:source`, `:scope`, `:context` |
+
+  ### Query event ordering
+
+  `:before_query` fires first, before sanitization and preflight, because a
+  plug may rewrite the statement — row-level security and tenant predicates
+  are the point of the hook. Sanitization and preflight then apply to what
+  will actually execute.
+
+  `:before_execute` fires after sanitization and preflight pass and before the
+  statement executes. Its `:statement` is the rewritten one, and its
+  `:relations` is what preflight proved the statement touches. The two hooks
+  answer different questions: `:before_query` asks which statement should run,
+  `:before_execute` asks whether the statement may proceed given what it
+  provably touches.
+
+  #### The `:relations` payload
+
+  `:relations` is a list of `{schema, table}` tuples, where `schema` is `nil`
+  for a source that has no schemas. Two values mean "Lotus cannot name the
+  tables", not "the statement touches none":
+
+    * `[]` — the adapter's `needs_preflight?/2` returned false for this
+      statement, so no analysis ran.
+    * `{:unrestricted, reason}` — the adapter cannot name the relations a
+      statement touches (Elasticsearch, for one), and the host opted in via
+      `:allow_unrestricted_resources`.
+
+  A plug that authorizes on the table list must treat both as unknown and
+  halt, rather than read them as an empty set of tables.
 
   `:vars` is the map of bound query variables, by name, after defaults and
   caller-supplied values are merged (`%{"start_date" => "2026-01-01"}`).
@@ -74,6 +104,7 @@ defmodule Lotus.Middleware do
 
   @type event ::
           :before_query
+          | :before_execute
           | :after_query
           | :after_list_schemas
           | :after_list_tables

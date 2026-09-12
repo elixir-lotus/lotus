@@ -486,9 +486,9 @@ config :lotus,
 **Type**: `map()` or `nil` — `%{event => [{Module, opts}]}`
 **Default**: `nil`
 
-**Events**: `:before_query`, `:after_query`, `:after_list_schemas`, `:after_list_tables`, `:after_describe_table`, `:after_list_relations`, `:after_discover`.
+**Events**: `:before_query`, `:before_execute`, `:after_query`, `:after_list_schemas`, `:after_list_tables`, `:after_describe_table`, `:after_list_relations`, `:after_discover`.
 
-In v1.0 the payload key for the data source is `:source` (it was `:repo`), and `:before_query` / `:after_query` carry a `%Lotus.Query.Statement{}` under `:statement` instead of separate `:sql` and `:params` keys. A `:before_query` plug that returns `{:cont, %{payload | statement: rewritten}}` changes what actually executes, and the rewritten statement is the one that sanitization and preflight then check. See the [Middleware Guide](middleware.md).
+In v1.0 the payload key for the data source is `:source` (it was `:repo`), and `:before_query` / `:after_query` carry a `%Lotus.Query.Statement{}` under `:statement` instead of separate `:sql` and `:params` keys. A `:before_query` plug that returns `{:cont, %{payload | statement: rewritten}}` changes what actually executes, and the rewritten statement is the one that sanitization and preflight then check. `:before_execute` runs after preflight and adds a `:relations` key — the `{schema, table}` pairs preflight proved the statement touches — for plugs that authorize on tables rather than rewrite. See the [Middleware Guide](middleware.md).
 
 #### `ai`
 

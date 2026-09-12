@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`:before_execute` middleware event.** A plug that must authorise a
+  statement against the tables it touches had no way to learn them:
+  `:before_query` runs before the statement is analysed, on purpose, so a
+  rewriting plug can still change what gets analysed. The new event fires
+  after sanitization and preflight pass and before the statement executes,
+  and its payload carries `:relations` — the `{schema, table}` pairs preflight
+  proved the statement touches — alongside `:statement`, `:source`,
+  `:context` and `:vars`. A halt returns `{:error, reason}` to the caller, as
+  the other events do. `:relations` is `[]` when the adapter needs no
+  preflight, and `{:unrestricted, reason}` when the adapter cannot name the
+  relations a statement touches; both mean "unknown", not "touches nothing",
+  and a plug that gates on the list must refuse rather than read them as an
+  empty set.
+
 ### Fixed
 
 - **A failed statement no longer hands its tables to the next statement in

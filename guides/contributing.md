@@ -116,10 +116,10 @@ Everything lives under `lib/lotus/`. The library is roughly split into a public 
 **Query pipeline**
 
 - [`Lotus.Query.Statement`](../lib/lotus/query/statement.ex) — The opaque carrier threaded through the whole pipeline: `:adapter`, `:body` (adapter-native term — SQL text, a JSON map, a DSL AST), `:params` (list for positional binds, map for named binds), and `:meta`.
-- [`Lotus.Runner`](../lib/lotus/runner.ex) — Execution engine. Runs `:before_query` middleware, asks the adapter to sanitize the statement, invokes preflight, executes inside a read-only transaction, and applies column-level visibility policies to the result.
+- [`Lotus.Runner`](../lib/lotus/runner.ex) — Execution engine. Runs `:before_query` middleware, asks the adapter to sanitize the statement, invokes preflight, runs `:before_execute` middleware with the relations preflight found, executes inside a read-only transaction, and applies column-level visibility policies to the result.
 - [`Lotus.Preflight`](../lib/lotus/preflight.ex) — Asks the adapter which relations a statement will touch before executing it (`EXPLAIN` for the Ecto adapter) and checks them against visibility rules.
 - [`Lotus.Preflight.Relations`](../lib/lotus/preflight/relations.ex) — Process-local staging for relations discovered during preflight so the runner can reuse them when applying column policies.
-- [`Lotus.Middleware`](../lib/lotus/middleware.ex) — Plug-style pipeline compiled into `:persistent_term`. Supports `:before_query`, `:after_query`, `:after_list_schemas`, `:after_list_tables`, `:after_describe_table`, `:after_list_relations`, and `:after_discover`.
+- [`Lotus.Middleware`](../lib/lotus/middleware.ex) — Plug-style pipeline compiled into `:persistent_term`. Supports `:before_query`, `:before_execute`, `:after_query`, `:after_list_schemas`, `:after_list_tables`, `:after_describe_table`, `:after_list_relations`, and `:after_discover`.
 - [`Lotus.Result`](../lib/lotus/result.ex) / [`Lotus.Result.Statistics`](../lib/lotus/result/statistics.ex) — The struct returned from query execution.
 - [`Lotus.UnsupportedOperatorError`](../lib/lotus/unsupported_operator_error.ex) — Raised when a filter asks for an operator the adapter did not declare in `supported_filter_operators/1`. Silent degradation is not an option.
 
@@ -218,10 +218,11 @@ When you call `Lotus.run_query(query, opts)` the request flows through roughly t
 │  2. Middleware.run(:before_query, _) — may rewrite the statement     │
 │  3. Adapter.sanitize_query (single statement + deny list)            │
 │  4. Adapter.needs_preflight? → Lotus.Preflight.authorize             │
-│  5. Adapter.transaction (read-only) → Adapter.execute_query          │
-│  6. Column policy enforcement (omit / mask / error)                  │
-│  7. Middleware.run(:after_query, _)                                  │
-│  8. Telemetry.query_stop / query_exception                           │
+│  5. Middleware.run(:before_execute, _) — carries the relations       │
+│  6. Adapter.transaction (read-only) → Adapter.execute_query          │
+│  7. Column policy enforcement (omit / mask / error)                  │
+│  8. Middleware.run(:after_query, _)                                  │
+│  9. Telemetry.query_stop / query_exception                           │
 └─────────────────────────────────────────────────────────────────────┘
                                │
                                ▼
@@ -234,8 +235,8 @@ A few notes on the pipeline:
 - **Filters and sorts** are injected through the adapter, not concatenated naively — see `Lotus.Source.Adapters.Ecto.SQL.FilterInjector` and `SortInjector`. An adapter must declare the operators it handles via `supported_filter_operators/1`; anything else raises `Lotus.UnsupportedOperatorError`.
 - **Pagination** has two strategies for `count: :exact`. An engine that returns the total as a side-effect of the main query puts it in `execute_query/4`'s `:total_count` key; everything else places a count spec in `statement.meta[:count_spec]` and Lotus core runs it. The inline count wins when both are present.
 - **Caching** is optional. When no cache adapter is configured, `Lotus.Cache` is a pass-through and the fetcher always runs.
-- **Preflight** is skipped when `needs_preflight?/2` returns false (the Ecto adapter keeps the `EXPLAIN` / `SHOW` / `PRAGMA` heuristic internally). The relations it discovers are stashed in `Lotus.Preflight.Relations` so the runner can look up column visibility policies without re-parsing the statement. An adapter that cannot enumerate resources returns `{:unrestricted, reason}`, which is blocked unless the operator opts in with `:allow_unrestricted_resources`.
-- **Middleware runs first**, before sanitization and preflight, because a `:before_query` plug may rewrite the statement — row-level security and tenant predicates are the point of the hook. Sanitization and preflight then apply to whatever will actually execute. Halting from a `:before_query` plug yields `{:error, reason}` to the caller.
+- **Preflight** is skipped when `needs_preflight?/2` returns false (the Ecto adapter keeps the `EXPLAIN` / `SHOW` / `PRAGMA` heuristic internally). The relations it discovers are stashed in `Lotus.Preflight.Relations`, from where the runner reads them once and carries them down the pipeline — to `:before_execute` middleware, and to column visibility policy lookup, without re-parsing the statement. An adapter that cannot enumerate resources returns `{:unrestricted, reason}`, which is blocked unless the operator opts in with `:allow_unrestricted_resources`.
+- **Middleware runs first**, before sanitization and preflight, because a `:before_query` plug may rewrite the statement — row-level security and tenant predicates are the point of the hook. Sanitization and preflight then apply to whatever will actually execute. Halting from a `:before_query` plug yields `{:error, reason}` to the caller. A plug that needs the table list instead of the chance to rewrite registers `:before_execute`, which runs once preflight has named the relations.
 
 ### Schema Introspection Flow
 

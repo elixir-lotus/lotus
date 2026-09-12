@@ -25,6 +25,24 @@ defmodule Lotus.Preflight.RelationsTest do
       assert :ok = Relations.put([])
       assert Process.get(:lotus_preflight_relations) == []
     end
+
+    test "stores an unrestricted outcome" do
+      assert :ok = Relations.put({:unrestricted, "adapter cannot name its tables"})
+
+      assert Process.get(:lotus_preflight_relations) ==
+               {:unrestricted, "adapter cannot name its tables"}
+    end
+  end
+
+  describe "to_list/1" do
+    test "returns a relation list unchanged" do
+      assert Relations.to_list([{"public", "users"}]) == [{"public", "users"}]
+      assert Relations.to_list([]) == []
+    end
+
+    test "narrows an unrestricted outcome to no relations" do
+      assert Relations.to_list({:unrestricted, "cannot name its tables"}) == []
+    end
   end
 
   describe "get/0" do
