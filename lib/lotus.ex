@@ -506,7 +506,7 @@ defmodule Lotus do
     # describes what will actually execute.
     with {:ok, %Statement{} = statement} <- Runner.before_query(adapter, statement, runner_opts),
          {statement, pagination_meta, cache_bound} =
-           maybe_paginate(statement, adapter, search_path, Keyword.get(opts, :window)),
+           maybe_paginate(statement, adapter, runner_opts, Keyword.get(opts, :window)),
          {:ok, %Result{} = res} <-
            exec_cached_statement(
              adapter,
@@ -1016,19 +1016,20 @@ defmodule Lotus do
     :ok
   end
 
-  defp maybe_paginate(%Statement{} = statement, _adapter, _search_path, nil),
+  defp maybe_paginate(%Statement{} = statement, _adapter, _runner_opts, nil),
     do: {statement, nil, nil}
 
   defp maybe_paginate(
          %Statement{params: params} = statement,
          adapter,
-         search_path,
+         runner_opts,
          pagination_opts
        )
        when is_list(pagination_opts) do
     limit = resolve_window_limit(pagination_opts)
     offset = Keyword.get(pagination_opts, :offset, 0)
     count_mode = Keyword.get(pagination_opts, :count, :none)
+    search_path = Keyword.get(runner_opts, :search_path)
 
     callback_opts = [limit: limit, offset: offset, count: count_mode, search_path: search_path]
 
@@ -1039,12 +1040,14 @@ defmodule Lotus do
     # chose to fulfil it. Strategy A adapters (inline count via the main
     # query result) don't set :count_spec but still need :exact plumbed
     # through so merge_pagination_meta/2 surfaces the total.
+    # The count run is Lotus's own statement, derived from the caller's, and it
+    # must run as the caller: same context, scope, vars and read-only setting.
     pagination_meta = %{
       window: %{limit: limit, offset: offset},
       total_mode: count_mode,
       count_spec: count_spec,
       adapter: adapter,
-      search_path: search_path
+      runner_opts: runner_opts
     }
 
     cache_bound = %{
@@ -1092,33 +1095,31 @@ defmodule Lotus do
     }
   end
 
-  defp do_count(%{count_spec: %{query: q, params: ps}, adapter: adapter} = meta) do
-    runner_opts = build_runner_opts(meta)
+  # The count statement is derived from the statement `:before_query` already
+  # returned, so that hook does not run again: a rewriting plug would apply its
+  # predicate twice. `:after_query` does not run either: it shapes a result the
+  # caller reads, and the count has none. Sanitization, preflight and
+  # `:before_execute` do run, with the caller's options, because the count
+  # touches the same tables as the page and must be authorised the same way.
+  defp do_count(%{count_spec: %{query: q, params: ps}, adapter: adapter, runner_opts: opts}) do
     statement = %Statement{adapter: adapter.module, body: q, params: ps}
 
     adapter
-    |> Runner.run_statement(statement, runner_opts)
+    |> Runner.execute_statement(statement, opts)
     |> parse_count_result()
   end
 
-  defp build_runner_opts(meta) do
-    case Map.get(meta, :search_path) do
-      sp when is_binary(sp) and byte_size(sp) > 0 -> [search_path: sp]
-      _ -> []
-    end
-  end
-
-  defp parse_count_result({:ok, %Result{rows: [[n]]}} = _result) when is_integer(n) do
+  defp parse_count_result({:ok, %{result: %Result{rows: [[n]]}}}) when is_integer(n) do
     {:ok, n}
   end
 
-  defp parse_count_result({:ok, %Result{rows: [[n]]}} = _result) when is_binary(n) do
+  defp parse_count_result({:ok, %{result: %Result{rows: [[n]]}}}) when is_binary(n) do
     case Integer.parse(n) do
       {v, _} -> {:ok, v}
       _ -> {:error, :invalid_count}
     end
   end
 
-  defp parse_count_result({:ok, %Result{rows: _}}), do: {:error, :invalid_count}
+  defp parse_count_result({:ok, %{result: %Result{}}}), do: {:error, :invalid_count}
   defp parse_count_result(other), do: other
 end

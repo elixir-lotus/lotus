@@ -22,6 +22,19 @@
 
 ### Fixed
 
+- **The exact-count run now runs as the caller.** `window: [count: :exact]`
+  runs a second statement to compute `meta.total_count`, and that run dropped
+  the caller's options: preflight ran with no `:scope`, so a scoped table deny
+  that blocked the page did not apply to the count beside it, and middleware
+  saw `context: nil` and `vars: %{}`, so an audit plug recorded the count with
+  no caller and a plug that halts without a caller silently turned the total
+  into `nil`. The count run now carries `:context`, `:scope`, `:vars` and the
+  read-only setting. It fires `:before_execute`, as it touches the same tables
+  as the page, but not `:before_query` — it is derived from the statement that
+  hook already returned, so a rewriting plug would apply twice — and not
+  `:after_query`, because it has no result the caller reads. A halt on the
+  count run still leaves `meta.total_count` as `nil` with the page intact.
+
 - **Middleware is no longer skipped on a result cache hit.** The query events
   ran inside the cache callback, so a plug saw only the call that filled the
   cache: a `:before_query` plug that halts for one user let the same statement

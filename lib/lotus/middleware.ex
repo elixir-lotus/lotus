@@ -58,6 +58,18 @@ defmodule Lotus.Middleware do
   A plug that authorizes on the table list must treat both as unknown and
   halt, rather than read them as an empty set of tables.
 
+  #### Derived statements
+
+  `window: [count: :exact]` runs a second statement, derived from the page
+  statement, to compute `meta.total_count`. That run carries the caller's
+  `:context`, `:vars`, `:scope` and read-only setting, and fires
+  `:before_execute` — it touches the same tables as the page and is
+  authorised the same way. It does not fire `:before_query`, because it is
+  derived from the statement that hook already returned and a rewriting plug
+  would apply twice. It does not fire `:after_query`, because it has no result
+  the caller reads. A halt on the count run leaves `meta.total_count` as `nil`
+  and the page result intact.
+
   `:vars` is the map of bound query variables, by name, after defaults and
   caller-supplied values are merged (`%{"start_date" => "2026-01-01"}`).
   It is `%{}` for a raw statement run through `Lotus.run_statement/3`. A plug
