@@ -1224,39 +1224,68 @@ defmodule Lotus.RunnerTest do
   describe "preflight relations between statements" do
     setup do
       Mimic.copy(Lotus.Config)
-      on_exit(&Lotus.Preflight.Relations.clear/0)
+      Mimic.copy(Lotus.Middleware)
+      Mimic.copy(Lotus.Source.Adapter)
       :ok
     end
 
+    # `CAST(email AS integer)` plans fine and fails only once a row is
+    # evaluated, so preflight passes and records its relations first. The
+    # issue's `1 / 0` cannot stand in for it: constant folding makes that fail
+    # inside preflight's own EXPLAIN, so it never reaches the path covered here.
+    @failing_statement "SELECT CAST(email AS integer) AS boom FROM test_users"
+
     test "clears the relations of a statement that fails during execution" do
-      assert {:error, _} =
-               Runner.run_statement(
-                 @pg_adapter,
-                 Statement.new("SELECT CAST(email AS integer) AS boom FROM test_users")
-               )
+      assert {:error, _} = Runner.run_statement(@pg_adapter, Statement.new(@failing_statement))
 
       assert Lotus.Preflight.Relations.get() == []
     end
 
     test "a failed statement does not lend its tables to the next statement" do
+      show = Statement.new("SHOW search_path")
+
+      assert {:ok, %{rows: [[unmasked_path]]}} = Runner.run_statement(@pg_adapter, show)
+
       Lotus.Config
       |> stub(:column_rules_for_source_name, fn _source ->
         [{"test_users", "search_path", [mask: {:fixed, "REDACTED"}]}]
       end)
 
-      assert {:error, _} =
-               Runner.run_statement(
-                 @pg_adapter,
-                 Statement.new("SELECT CAST(email AS integer) AS boom FROM test_users")
-               )
+      assert {:error, _} = Runner.run_statement(@pg_adapter, Statement.new(@failing_statement))
 
-      # `SHOW` skips preflight, so it never overwrites the relations the failed
-      # statement left behind. Its column must not take the rule for a table it
-      # does not read.
+      # `SHOW` skips preflight — see `EctoAdapter.do_needs_preflight?/2` — so it
+      # never overwrites what the failed statement left behind. Its column must
+      # not take the rule written for `test_users`.
       assert {:ok, %{columns: ["search_path"], rows: [[path]]}} =
-               Runner.run_statement(@pg_adapter, Statement.new("SHOW search_path"))
+               Runner.run_statement(@pg_adapter, show)
 
-      refute path == "REDACTED"
+      assert path == unmasked_path
+    end
+
+    # `exec_read_only/3` rescues, and `Middleware.run/2` turns a raising plug
+    # into `{:halt, _}`, so no exception escapes `run_statement/3` as the code
+    # stands — the `try/after` is defence in depth. Stubbing both boundaries
+    # forces the raise this pins: whatever else changes, an exception must not
+    # strand relations for the next statement.
+    test "a raise does not strand relations for the next statement" do
+      Lotus.Middleware
+      |> stub(:run, fn
+        :before_query, payload ->
+          Lotus.Preflight.Relations.put([{"public", "test_users"}])
+          {:cont, payload}
+
+        _event, payload ->
+          {:cont, payload}
+      end)
+
+      Lotus.Source.Adapter
+      |> stub(:sanitize_query, fn _adapter, _statement, _opts -> raise "boom" end)
+
+      assert_raise RuntimeError, "boom", fn ->
+        Runner.run_statement(@pg_adapter, Statement.new("SELECT 1"))
+      end
+
+      assert Lotus.Preflight.Relations.get() == []
     end
   end
 end
