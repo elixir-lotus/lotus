@@ -1,21 +1,6 @@
 # Changelog
 
-## [Unreleased]
-
-### Added
-
-- **Bound query variables in middleware payloads.** `:before_query` and
-  `:after_query` plugs receive a `:vars` key with the merged variable map
-  (defaults plus caller-supplied values, keyed by variable name), or `%{}`
-  for a raw `Lotus.run_statement/3`. Plugs can enforce rules on the values a
-  user picked — maximum date ranges, tenant checks — without parsing the
-  statement. See the middleware guide for a date-range limit example (#97).
-- **`Lotus.Config.t()` lists every configuration key**, including
-  `:allow_unrestricted_resources`, `:ai`, `:source_adapters`,
-  `:trusted_source_adapters`, `:source_resolver`, `:visibility_resolver`
-  and `:middleware`.
-
-## [1.0.0-rc.1] - 2026-09-11
+## [1.0.0] - 2026-09-12
 
 > **v1.0 is a large rewrite and not a drop-in upgrade from the v0.16.x
 > line.** The motivating goal was to stop assuming every data source is
@@ -565,6 +550,16 @@
 
 ### Added
 
+- **Bound query variables in middleware payloads.** `:before_query` and
+  `:after_query` plugs receive a `:vars` key with the merged variable map
+  (defaults plus caller-supplied values, keyed by variable name), or `%{}`
+  for a raw `Lotus.run_statement/3`. Plugs can enforce rules on the values a
+  user picked — maximum date ranges, tenant checks — without parsing the
+  statement. See the middleware guide for a date-range limit example (#97).
+- **`Lotus.Config.t()` lists every configuration key**, including
+  `:allow_unrestricted_resources`, `:ai`, `:source_adapters`,
+  `:trusted_source_adapters`, `:source_resolver`, `:visibility_resolver`
+  and `:middleware`.
 - **An empty middleware config clears the compiled pipeline** —
   `Lotus.Middleware.compile/1` used to ignore an empty or missing config,
   so a config reload could add middleware but never take it away. It now

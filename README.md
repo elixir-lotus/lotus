@@ -49,8 +49,8 @@ Get a fully working BI dashboard in your Phoenix app in under 5 minutes.
 # mix.exs
 def deps do
   [
-    {:lotus, "~> 1.0.0-rc.1"},
-    {:lotus_web, "~> 1.0.0-rc.1"}
+    {:lotus, "~> 1.0"},
+    {:lotus_web, "~> 1.0"}
   ]
 end
 ```
