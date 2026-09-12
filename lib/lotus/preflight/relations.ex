@@ -1,32 +1,39 @@
 defmodule Lotus.Preflight.Relations do
   @moduledoc """
-  Manages the preflight outcome stored in the process dictionary.
+  The preflight outcome: what Lotus knows about the relations a statement
+  touches.
 
-  This module provides a clean interface for storing and retrieving
-  the relations discovered during SQL preflight authorization, which are
-  later used for column-level visibility policies and handed to
-  `:before_execute` middleware.
+  The outcome is one of:
 
-  The stored value is either a list of `{schema, table}` relations or
-  `{:unrestricted, reason}` for an adapter that cannot name the relations a
-  statement touches. The second form lets a caller tell "this statement
-  touches no table" apart from "this adapter cannot say".
+    * a list of `{schema, table}` relations preflight proved the statement
+      touches — an empty list means it touches none;
+    * `{:unrestricted, reason}` for an adapter that cannot name the relations
+      a statement touches, when the host opted in;
+    * `{:skipped, reason}` for a statement the adapter does not preflight.
+
+  The two tuples both mean "unknown". A consumer that gates on the list
+  matches `when is_list/1` and refuses any tuple rather than reading it as an
+  empty set.
+
+  `Lotus.Preflight.analyze/4` returns the outcome as a value, and
+  `Lotus.Runner` carries it down the pipeline explicitly. The process
+  dictionary functions below are kept for callers that still store an outcome
+  themselves; the runner neither writes nor reads them.
   """
 
   @process_key :lotus_preflight_relations
 
   @type relation :: {String.t() | nil, String.t()}
-  @type outcome :: [relation()] | {:unrestricted, String.t()}
+  @type outcome :: [relation()] | {:unrestricted, String.t()} | {:skipped, String.t()}
 
   @doc """
-  Stores the preflight outcome in the process dictionary.
-
-  Accepts the list of relations discovered during preflight authorization,
-  or `{:unrestricted, reason}` when the adapter cannot name them.
+  Stores a preflight outcome in the process dictionary.
   """
   @spec put(outcome()) :: :ok
   def put(relations) when is_list(relations), do: store(relations)
-  def put({:unrestricted, reason} = outcome) when is_binary(reason), do: store(outcome)
+
+  def put({tag, reason} = outcome) when tag in [:unrestricted, :skipped] and is_binary(reason),
+    do: store(outcome)
 
   defp store(outcome) do
     Process.put(@process_key, outcome)
@@ -34,9 +41,7 @@ defmodule Lotus.Preflight.Relations do
   end
 
   @doc """
-  Retrieves the preflight outcome from the process dictionary.
-
-  Returns an empty list if no outcome has been stored.
+  Retrieves the stored preflight outcome, or an empty list.
   """
   @spec get() :: outcome()
   def get do
@@ -44,10 +49,7 @@ defmodule Lotus.Preflight.Relations do
   end
 
   @doc """
-  Retrieves and clears the preflight outcome from the process dictionary.
-
-  This is typically called after the outcome has been consumed
-  to ensure it doesn't leak to subsequent operations.
+  Retrieves and clears the stored preflight outcome.
   """
   @spec take() :: outcome()
   def take do
@@ -59,16 +61,16 @@ defmodule Lotus.Preflight.Relations do
   @doc """
   Narrows a preflight outcome to the list of relations it names.
 
-  An `{:unrestricted, reason}` outcome names none, so it narrows to `[]`.
-  Column visibility policies use this: a relation Lotus cannot name is a
-  relation it cannot write a policy for.
+  An unknown outcome names none, so it narrows to `[]`. Column visibility
+  policies use this: a relation Lotus cannot name is a relation it cannot
+  write a policy for.
   """
   @spec to_list(outcome()) :: [relation()]
   def to_list(relations) when is_list(relations), do: relations
-  def to_list({:unrestricted, _reason}), do: []
+  def to_list({tag, _reason}) when tag in [:unrestricted, :skipped], do: []
 
   @doc """
-  Clears the stored outcome from the process dictionary.
+  Clears the stored preflight outcome.
   """
   @spec clear() :: :ok
   def clear do

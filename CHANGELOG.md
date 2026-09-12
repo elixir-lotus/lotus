@@ -11,14 +11,42 @@
   after sanitization and preflight pass and before the statement executes,
   and its payload carries `:relations` — the `{schema, table}` pairs preflight
   proved the statement touches — alongside `:statement`, `:source`,
-  `:context` and `:vars`. A halt returns `{:error, reason}` to the caller, as
-  the other events do. `:relations` is `[]` when the adapter needs no
-  preflight, and `{:unrestricted, reason}` when the adapter cannot name the
-  relations a statement touches; both mean "unknown", not "touches nothing",
-  and a plug that gates on the list must refuse rather than read them as an
-  empty set. The event fires on a result served from the result cache too: the
-  relations are stored with the result, so a plug that authorizes a statement
-  against its tables is not skipped once the cache is warm.
+  `:origin`, `:context` and `:vars`. A halt returns `{:error, reason}` to the
+  caller, as the other events do. `:relations` is a list when preflight
+  proved the set — an empty list means the statement touches no relation —
+  and a tuple when nothing is known: `{:unrestricted, reason}` when the
+  adapter cannot name the relations a statement touches, `{:skipped, reason}`
+  when the adapter does not preflight the statement. A plug that gates on the
+  list matches `when is_list/1` and refuses any tuple. The event fires on a
+  result served from the result cache too: the relations are stored with the
+  result, so a plug that authorizes a statement against its tables is not
+  skipped once the cache is warm.
+
+- **`[:lotus, :run, :start | :stop | :exception]` telemetry.** The query
+  events cover only the execute step, so a result served from the cache and a
+  run a plug halted before execution emitted nothing — an audit consumer
+  could see neither a cache-served read nor a refusal unless it was the plug
+  that refused. The run events bracket the whole run, from `:before_query` to
+  `:after_query`, on every path. `:stop` carries the statement that ran, the
+  result, the relations and the origin (`:executed` or `:cached`);
+  `:exception` carries the phase that failed and the reason. All three carry
+  the caller's `:context` and `:vars`.
+
+- **`Lotus.Runner.run/4`** composes the phases of a run around an execute
+  step, so the cached and the uncached paths share one phase order, one set of
+  payloads and one telemetry span. **`Lotus.Preflight.analyze/4`** returns
+  what preflight learned as a value — the relations, or why they are unknown
+  — and the runner carries it down the pipeline; nothing crosses a phase
+  through the process dictionary any more.
+
+### Changed
+
+- **`:after_query` carries `:relations` and `:origin`.** The same relations
+  `:before_execute` received, and whether the result was executed or served
+  from the cache. A plug that shapes a result by table no longer needs a
+  second analysis or a hand-off from an earlier hook. `:before_execute`
+  carries `:origin` too. `Lotus.Runner.before_execute/5` takes the origin and
+  `after_query/3` takes the outcome map; both were unreleased.
 
 ### Fixed
 

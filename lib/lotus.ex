@@ -504,31 +504,26 @@ defmodule Lotus do
     # count are both built from the statement the plug returned. Everything that
     # keys the entry — the body, the bound values, the window — therefore
     # describes what will actually execute.
-    with {:ok, %Statement{} = statement} <- Runner.before_query(adapter, statement, runner_opts),
-         {statement, pagination_meta, cache_bound} =
-           maybe_paginate(statement, adapter, runner_opts, Keyword.get(opts, :window)),
-         {:ok, %Result{} = res} <-
-           exec_cached_statement(
-             adapter,
-             statement,
-             runner_opts,
-             [
-               mode: opts[:cache],
-               key:
-                 result_key(
-                   statement.body,
-                   bound_identity(cache_bound || cache_identity, statement.params),
-                   adapter.name,
-                   search_path,
-                   Keyword.get(opts, :scope)
-                 ),
-               tags: build_cache_tags(query_id, adapter.name, opts),
-               profile: determine_cache_profile(opts)
-             ],
-             pagination_meta
-           ) do
-      Runner.after_query(adapter, statement, res, runner_opts)
-    end
+    Runner.run(adapter, statement, runner_opts, fn %Statement{} = statement ->
+      {statement, pagination_meta, cache_bound} =
+        maybe_paginate(statement, adapter, runner_opts, Keyword.get(opts, :window))
+
+      cache = [
+        mode: opts[:cache],
+        key:
+          result_key(
+            statement.body,
+            bound_identity(cache_bound || cache_identity, statement.params),
+            adapter.name,
+            search_path,
+            Keyword.get(opts, :scope)
+          ),
+        tags: build_cache_tags(query_id, adapter.name, opts),
+        profile: determine_cache_profile(opts)
+      ]
+
+      exec_cached_statement(adapter, statement, runner_opts, cache, pagination_meta)
+    end)
   end
 
   # The bound values in the key come from the statement that will execute. A
@@ -539,33 +534,34 @@ defmodule Lotus do
 
   defp bound_identity(_identity, params), do: %{__params__: params}
 
-  # Only the execution is cached, and it is stored with the relations preflight
-  # found, so `:before_execute` can run on a hit as well. On a miss it runs
-  # inside the callback, where it still gates execution.
+  # The execute step of a cached run. Only the execution is cached, and it is
+  # stored with the relations preflight found, so the runner can fire
+  # `:before_execute` on a hit as well: the step reports `:cached`, and
+  # `Lotus.Runner.run/4` runs the gate with the stored relations. On a miss the
+  # gate runs inside the callback, where it still gates execution. Errors keep
+  # the phase the runner tagged them with, so the run span can report it.
   defp exec_cached_statement(adapter, statement, runner_opts, cache, pagination_meta) do
     fetch = fn ->
       with {:ok, %{result: res, relations: relations}} <-
-             Runner.execute_statement(adapter, statement, runner_opts) do
+             Runner.execute_phases(adapter, statement, runner_opts) do
         {:ok, %{result: merge_pagination_meta(res, pagination_meta), relations: relations}}
       end
     end
 
     case exec_with_cache_origin(cache, fetch) do
       {:ok, %{result: %Result{} = res, relations: relations}, :hit} ->
-        with :ok <- Runner.before_execute(adapter, statement, relations, runner_opts) do
-          {:ok, res}
-        end
+        {:ok, %{statement: statement, result: res, relations: relations, origin: :cached}}
 
-      {:ok, %{result: %Result{} = res}, _executed} ->
-        {:ok, res}
+      {:ok, %{result: %Result{} = res, relations: relations}, _executed} ->
+        {:ok, %{statement: statement, result: res, relations: relations, origin: :executed}}
 
       # An entry stored before results carried their relations. `:before_execute`
       # has nothing to gate on, so the entry is of no use: execute, and replace
       # it with one that carries them.
       {:ok, _stale, :hit} ->
-        with {:ok, %{result: %Result{} = res}} = fresh <- fetch.() do
-          put_cache_entry(cache, elem(fresh, 1))
-          {:ok, res}
+        with {:ok, %{result: %Result{} = res, relations: relations} = fresh} <- fetch.() do
+          put_cache_entry(cache, fresh)
+          {:ok, %{statement: statement, result: res, relations: relations, origin: :executed}}
         end
 
       {:error, _} = error ->

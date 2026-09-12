@@ -26,8 +26,8 @@ Each middleware receives a payload map whose contents depend on the pipeline eve
 | Event | Triggered | Payload keys |
 |-------|-----------|--------------|
 | `:before_query` | Before sanitization, preflight and execution | `:statement`, `:source`, `:context`, `:vars` |
-| `:before_execute` | After sanitization and preflight pass, before execution | `:statement`, `:relations`, `:source`, `:context`, `:vars` |
-| `:after_query` | After execution, before result returned to caller | `:result`, `:statement`, `:source`, `:context`, `:vars` |
+| `:before_execute` | After sanitization and preflight pass, before execution — or, on a cache hit, before the stored result is returned | `:statement`, `:relations`, `:origin`, `:source`, `:context`, `:vars` |
+| `:after_query` | After execution, before result returned to caller | `:result`, `:statement`, `:relations`, `:origin`, `:source`, `:context`, `:vars` |
 | `:after_list_schemas` | After schema discovery and visibility filtering | `:schemas`, `:source`, `:scope`, `:context` |
 | `:after_list_tables` | After table discovery and visibility filtering | `:tables`, `:source`, `:scope`, `:context` |
 | `:after_describe_table` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
@@ -35,6 +35,17 @@ Each middleware receives a payload map whose contents depend on the pipeline eve
 | `:after_discover` | After any discovery call, following the kind-specific `:after_list_*` event | `:kind`, `:result`, `:source`, `:scope`, `:context` |
 
 `:vars` is the map of bound query variables by name, after defaults and caller-supplied values are merged. It is `%{}` for a raw statement run through `Lotus.run_statement/3`.
+
+### The contract
+
+What a plug can rely on, release to release:
+
+- **Phase order is fixed.** `:before_query`, then sanitization, preflight and `:before_execute`, then execution, then `:after_query`. The order lives in one place, `Lotus.Runner.run/4`, whether or not the result cache is involved.
+- **Every query event fires on a cache hit.** See [Caching](#caching). `:before_execute` gets the relations stored with the entry; `:after_query` gets the stored result.
+- **Payload keys are additive.** A release may add a key to a payload; it does not remove or rename one. Match on the keys you use, not on the whole map.
+- **`:relations` follows one rule.** A list is proven, an empty list means "touches nothing", a tuple means "unknown". `:before_execute` and `:after_query` carry the same value.
+- **Halting is final.** A halt returns `{:error, reason}` to the caller and later events for that run do not fire.
+- **Observation is telemetry's job.** A plug sees only its own event. To record every run, including refusals and cache-served reads, attach to `[:lotus, :run, :start | :stop | :exception]` — see `Lotus.Telemetry`.
 
 ### The exact-count run
 
@@ -107,7 +118,7 @@ defmodule MyApp.TableAuthz do
   def init(opts), do: opts
 
   def call(%{relations: relations, context: %{user: user}} = payload, _opts)
-      when is_list(relations) and relations != [] do
+      when is_list(relations) do
     if Enum.all?(relations, &MyApp.Authz.may_read?(user, &1)) do
       {:cont, payload}
     else
@@ -115,20 +126,28 @@ defmodule MyApp.TableAuthz do
     end
   end
 
-  # `[]` and `{:unrestricted, reason}` both mean Lotus could not name the
-  # tables, not that the statement touches none. A plug that gates on the
-  # list must refuse rather than read either as an empty set.
+  # A tuple — `{:unrestricted, reason}` or `{:skipped, reason}` — means Lotus
+  # could not name the tables. A plug that gates on the list refuses rather
+  # than read it as an empty set.
   def call(_payload, _opts), do: {:halt, "cannot determine which tables this query reads"}
 end
 ```
 
 Halting returns `{:error, reason}` to the caller and the statement never runs.
 
-`:relations` is `[]` when the adapter's `needs_preflight?/2` returns false for
-the statement — no analysis ran. It is `{:unrestricted, reason}` when the
-adapter cannot name the relations a statement touches (Elasticsearch, for one)
-and the host opted in via `:allow_unrestricted_resources`. The two forms are
-distinct so a plug can log which case it hit.
+`:relations` is a list when preflight proved the set, and an empty list means
+the statement touches no relation (`SELECT 1` passes the plug above with
+`Enum.all?` over nothing). It is `{:unrestricted, reason}` when the adapter
+cannot name the relations a statement touches (Elasticsearch, for one) and the
+host opted in via `:allow_unrestricted_resources`, and `{:skipped, reason}`
+when the adapter does not preflight the statement at all — the SQL adapters
+skip `EXPLAIN`, `SHOW` and `PRAGMA`. The two tuples are distinct so a plug can
+log which case it hit, and both mean "unknown".
+
+`:after_query` carries the same `:relations`, so a plug that shapes a result
+by table — drop or mask columns of one relation, annotate another — does so
+without a second analysis. Both events also carry `:origin`, `:executed` or
+`:cached`.
 
 The two query hooks answer different questions, and both can be registered:
 
@@ -404,7 +423,9 @@ from the cache:
 - **`:before_execute` gets its relations either way.** The relations preflight
   named are stored with the result, so the event carries them on a hit as well
   as on a miss — a plug that authorizes a statement against its tables is an
-  access control, and one a warm cache skips would be no control at all.
+  access control, and one a warm cache skips would be no control at all. The
+  payload says which case it is: `origin: :cached` on a hit, `:executed` on a
+  miss.
 - **The stored entry keeps the raw result.** `:after_query` runs on the way out,
   so what a plug makes of the result is returned to that caller and never
   written back. A halt there withholds the result from that caller; the rows
