@@ -37,6 +37,12 @@ Three config keys were renamed. No deprecation aliases — the old keys raise at
    }
 ```
 
+Leaving an old key in place raises at boot, naming every rename it found:
+
+    Invalid :lotus config: found configuration keys that were renamed in Lotus v1.0.
+
+      :ecto_repo -> :storage_repo
+
 The accessor names (`Lotus.repo/0`, `Lotus.Config.repo!/0`) did not change.
 Only the config keys moved.
 
@@ -92,10 +98,10 @@ the rename and the v1.0 prep, never in a released 0.16.x. So a host app coming
 from 0.16.x has `data_repo` as the real field name **and** as the real
 attribute key.
 
-### Attribute maps move too — and they fail silently
+### Attribute maps move too
 
-This is the one rename that neither the compiler nor a changeset will catch.
-Read it even if `Lotus.create_query/1` is the only Lotus function you call.
+Read this even if `Lotus.create_query/1` is the only Lotus function you call.
+The compiler cannot catch an attribute key, so the changeset does it instead.
 
 ```diff
  Lotus.create_query(%{
@@ -106,22 +112,22 @@ Read it even if `Lotus.create_query/1` is the only Lotus function you call.
  })
 ```
 
-`data_repo` is no longer a permitted attribute, so `cast/3` drops it.
-`data_source` is not a required attribute, so the changeset stays valid. The
-query saves with `data_source: nil`, and a `nil` source resolves at run time to
-`:default_source` — or, if you set none, to the first configured source.
+`data_repo` is no longer a permitted attribute. The changeset rejects it with
+an error on `:data_source`:
 
-Nothing raises, nothing warns, and `{:ok, query}` comes back.
+    was given as `data_repo`, which was renamed to `data_source` in Lotus v1.0
 
-- **Single-source hosts** keep working, because the default source is the only
-  source. The rows are wrong; the behaviour is not.
-- **Multi-source hosts** silently run those queries against the wrong database.
+Both the atom and the string key are caught, so params arriving from a form
+fail the same way.
 
-So grep for the attribute key, not only for the function names: `data_repo:` in
+Grep for the attribute key, not only for the function names: `data_repo:` in
 every `create_query/1` and `update_query/2` attribute map, in seeds, in test
 fixtures, and in any form or params plumbing that feeds them.
 
-To find rows that a stale key already produced:
+Rows written before you upgraded are a separate problem. A pre-v1 Lotus
+accepted `data_repo` and stored it, but a host that had already switched the
+attribute to `data_source` while still on 0.16 would have had it dropped
+silently and saved `NULL`. To find rows that lost their source that way:
 
 ```sql
 SELECT id, name FROM lotus_queries WHERE data_source IS NULL;
@@ -523,7 +529,7 @@ Order matters — do these in sequence:
    etc. Rename per §2.
 5. [ ] **Attribute maps** — grep for `data_repo:` in `create_query/1` and
    `update_query/2` attrs, seeds, fixtures and form params. This one is
-   silent: the old key is dropped and the changeset still succeeds (§3).
+   the changeset now rejects the old key, so this fails loudly (§3).
 6. [ ] **Middleware** — update `:sql`/`:params` → `:statement`; `:repo`
    → `:source`; `:after_get_table_schema` → `:after_describe_table`.
 7. [ ] **Telemetry handlers** — `:sql`/`:params` → `statement.text`/`statement.params`.
