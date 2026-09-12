@@ -97,7 +97,17 @@ defimpl Lotus.Normalizer, for: Decimal do
   # Query results may hold numerics far wider than Decimal's default output cap
   # (an unconstrained Postgres numeric allows 131072 integer digits), so render
   # them in full rather than raising ArgumentError.
-  def normalize(value), do: Decimal.to_string(value, :scientific, max_digits: :infinity)
+  #
+  # The cap, and the `max_digits` option that lifts it, arrived in Decimal
+  # 2.4.0. Lotus does not pin Decimal — Ecto owns that requirement, and which
+  # major an application is on is its call — so pick the arity at compile time
+  # the way `Lotus.JSON` picks its JSON library. Versions without the cap
+  # render in full anyway, so both branches agree on the output.
+  if Code.ensure_loaded?(Decimal) and function_exported?(Decimal, :to_string, 3) do
+    def normalize(value), do: Decimal.to_string(value, :scientific, max_digits: :infinity)
+  else
+    def normalize(value), do: Decimal.to_string(value, :scientific)
+  end
 end
 
 defimpl Lotus.Normalizer, for: URI do
