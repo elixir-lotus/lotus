@@ -20,8 +20,8 @@ defmodule Lotus.Middleware do
   | Event | Triggered | Payload keys |
   |-------|-----------|--------------|
   | `:before_query` | First, before sanitization, preflight and execution | `:statement` (`%Lotus.Query.Statement{}`), `:source`, `:context`, `:vars` |
-  | `:before_execute` | After sanitization and preflight pass, before execution | `:statement` (`%Lotus.Query.Statement{}`), `:relations`, `:source`, `:context`, `:vars` |
-  | `:after_query` | After execution, before result returned to caller | `:result`, `:statement` (`%Lotus.Query.Statement{}`), `:source`, `:context`, `:vars` |
+  | `:before_execute` | After sanitization and preflight pass, before execution — or, on a cache hit, before the stored result is returned | `:statement` (`%Lotus.Query.Statement{}`), `:relations`, `:origin`, `:source`, `:context`, `:vars` |
+  | `:after_query` | After execution, before result returned to caller | `:result`, `:statement` (`%Lotus.Query.Statement{}`), `:relations`, `:origin`, `:source`, `:context`, `:vars` |
   | `:after_list_schemas` | After schema discovery and visibility filtering | `:schemas`, `:source`, `:scope`, `:context` |
   | `:after_list_tables` | After table discovery and visibility filtering | `:tables`, `:source`, `:scope`, `:context` |
   | `:after_describe_table` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
@@ -45,18 +45,28 @@ defmodule Lotus.Middleware do
 
   #### The `:relations` payload
 
-  `:relations` is a list of `{schema, table}` tuples, where `schema` is `nil`
-  for a source that has no schemas. Two values mean "Lotus cannot name the
-  tables", not "the statement touches none":
+  `:relations` is what preflight knows about the statement. `:before_execute`
+  and `:after_query` carry the same value.
 
-    * `[]` — the adapter's `needs_preflight?/2` returned false for this
-      statement, so no analysis ran.
+    * A list of `{schema, table}` tuples, where `schema` is `nil` for a
+      source that has no schemas, is the set preflight proved the statement
+      touches. An empty list means it touches no relation — `SELECT 1`.
     * `{:unrestricted, reason}` — the adapter cannot name the relations a
       statement touches (Elasticsearch, for one), and the host opted in via
       `:allow_unrestricted_resources`.
+    * `{:skipped, reason}` — the adapter does not preflight this statement
+      (the SQL adapters skip `EXPLAIN`, `SHOW` and `PRAGMA`), so nothing was
+      analysed.
 
-  A plug that authorizes on the table list must treat both as unknown and
-  halt, rather than read them as an empty set of tables.
+  The two tuples mean "unknown". A plug that authorizes on the table list
+  matches `when is_list(relations)` and halts on anything else, rather than
+  read a tuple as an empty set of tables.
+
+  #### The `:origin` payload
+
+  `:origin` is `:executed` when the result came from the source on this call
+  and `:cached` when it was served from the result cache. Both events carry
+  it, so a plug that meters usage or cost can tell a read from an execution.
 
   #### Derived statements
 
@@ -96,6 +106,17 @@ defmodule Lotus.Middleware do
   `:scope`, which is part of the cache key — so a visibility resolver must
   decide from `(source, relations, column, scope)` alone. Per-actor logic that
   cannot be expressed that way belongs in middleware.
+
+  ### Observing a run
+
+  Middleware decides; it does not observe. A halt in `:before_query` or
+  `:before_execute` means `:after_query` never fires, so a plug there cannot
+  see a refusal, and a plug sees only the calls its own event covers. The
+  `[:lotus, :run, :start | :stop | :exception]` telemetry events bracket the
+  whole run instead — every phase, on a cache hit and on a halt alike — and
+  carry the caller's `:context`, the relations, the origin and, on failure,
+  the phase that failed. An audit or usage consumer attaches to those. See
+  `Lotus.Telemetry`.
 
   ### Discovery event ordering
 

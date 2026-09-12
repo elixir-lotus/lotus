@@ -6,6 +6,61 @@ defmodule Lotus.Telemetry do
   and schema introspection. You can attach handlers to these events for monitoring,
   logging, or integration with tools like Phoenix LiveDashboard or AppSignal.
 
+  ## Run Events
+
+  A run is one call to `Lotus.run_query/2`, `Lotus.run_statement/3` or
+  `Lotus.Runner.run_statement/3`: `:before_query`, the execute step (or the
+  result cache), `:before_execute`, `:after_query`. The run events bracket all
+  of it, on every path — a result served from the cache, a statement a plug
+  halted in any phase — and always carry the caller's `:context`. A consumer
+  that records who ran what, whether it was served from the cache and whether
+  it was refused attaches to these three events.
+
+  The query events below cover only the execute step: a result served from
+  the cache emits no query event, and neither does a run a plug halted before
+  execution.
+
+  ### `[:lotus, :run, :start]`
+
+  **Measurements:** `:system_time`.
+
+  **Metadata:**
+
+    * `:source` - The data source name
+    * `:statement` - The `Lotus.Query.Statement` the caller supplied, before
+      any `:before_query` rewrite
+    * `:context` - The caller-supplied context (or `nil`)
+    * `:vars` - The bound query variables, by name
+
+  ### `[:lotus, :run, :stop]`
+
+  Emitted when a run completes and its result is returned to the caller.
+
+  **Measurements:** `:duration` (native units), `:row_count`.
+
+  **Metadata:** the start metadata, with `:statement` now the statement that
+  ran, plus:
+
+    * `:result` - The `Lotus.Result` returned to the caller
+    * `:relations` - What preflight knew about the statement: a list of
+      `{schema, table}`, `{:unrestricted, reason}` or `{:skipped, reason}`
+    * `:origin` - `:executed` or `:cached`
+
+  ### `[:lotus, :run, :exception]`
+
+  Emitted when any phase of a run fails, including a middleware halt.
+
+  **Measurements:** `:duration`.
+
+  **Metadata:** the start metadata plus:
+
+    * `:phase` - `:before_query`, `:sanitize`, `:preflight`,
+      `:before_execute`, `:execute` or `:after_query`
+    * `:reason` - The error or halt reason the caller receives
+    * `:kind` - `:error`
+    * `:statement`, `:relations`, `:origin` - Present when the failure came
+      after the execute step, describing what ran
+
   ## Query Events
 
   ### `[:lotus, :query, :start]`
@@ -166,6 +221,10 @@ defmodule Lotus.Telemetry do
       end
   """
 
+  @run_start [:lotus, :run, :start]
+  @run_stop [:lotus, :run, :stop]
+  @run_exception [:lotus, :run, :exception]
+
   @query_start [:lotus, :query, :start]
   @query_stop [:lotus, :query, :stop]
   @query_exception [:lotus, :query, :exception]
@@ -180,6 +239,9 @@ defmodule Lotus.Telemetry do
   @doc false
   def events do
     [
+      @run_start,
+      @run_stop,
+      @run_exception,
       @query_start,
       @query_stop,
       @query_exception,
@@ -189,6 +251,35 @@ defmodule Lotus.Telemetry do
       @schema_start,
       @schema_stop
     ]
+  end
+
+  @doc false
+  def run_start(metadata) do
+    start_time = System.monotonic_time()
+    :telemetry.execute(@run_start, %{system_time: System.system_time()}, metadata)
+    start_time
+  end
+
+  @doc false
+  def run_stop(start_time, metadata) do
+    duration = System.monotonic_time() - start_time
+
+    :telemetry.execute(
+      @run_stop,
+      %{duration: duration, row_count: metadata[:row_count] || 0},
+      metadata
+    )
+  end
+
+  @doc false
+  def run_exception(start_time, metadata) do
+    duration = System.monotonic_time() - start_time
+
+    :telemetry.execute(
+      @run_exception,
+      %{duration: duration},
+      Map.put_new(metadata, :kind, :error)
+    )
   end
 
   @doc false

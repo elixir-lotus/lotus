@@ -1265,10 +1265,10 @@ defmodule Lotus.RunnerTest do
 
     # `exec_read_only/3` rescues, and `Middleware.run/2` turns a raising plug
     # into `{:halt, _}`, so no exception escapes `run_statement/3` as the code
-    # stands — the `try/after` is defence in depth. Stubbing both boundaries
-    # forces the raise this pins: whatever else changes, an exception must not
-    # strand relations for the next statement.
-    test "a raise does not strand relations for the next statement" do
+    # stands. Stubbing both boundaries forces the raise this pins: whatever a
+    # raising run leaves in the process dictionary, the next statement's column
+    # policies come from its own preflight and nothing else.
+    test "a raise does not lend relations to the next statement" do
       Lotus.Middleware
       |> stub(:run, fn
         :before_query, payload ->
@@ -1286,7 +1286,20 @@ defmodule Lotus.RunnerTest do
         Runner.run_statement(@pg_adapter, Statement.new("SELECT 1"))
       end
 
-      assert Relations.get() == []
+      Lotus.Source.Adapter
+      |> stub(:sanitize_query, fn _adapter, _statement, _opts -> :ok end)
+
+      Lotus.Config
+      |> stub(:column_rules_for_source_name, fn _source ->
+        [{"test_users", "search_path", [mask: {:fixed, "REDACTED"}]}]
+      end)
+
+      # `SHOW` skips preflight, so the stranded value is the only candidate
+      # for its column policy — and it must not be used.
+      assert {:ok, %{columns: ["search_path"], rows: [[path]]}} =
+               Runner.run_statement(@pg_adapter, Statement.new("SHOW search_path"))
+
+      assert path != "REDACTED"
     end
   end
 end

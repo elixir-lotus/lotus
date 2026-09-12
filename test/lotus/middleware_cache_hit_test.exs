@@ -60,16 +60,6 @@ defmodule Lotus.MiddlewareCacheHitTest do
     def call(_payload, _opts), do: {:halt, "withheld"}
   end
 
-  defmodule ReadRelationsPlug do
-    @moduledoc false
-    def init(opts), do: opts
-
-    def call(payload, _opts) do
-      send(self(), {:relations_at_before_query, Relations.get()})
-      {:cont, payload}
-    end
-  end
-
   defmodule DenyRelationPlug do
     @moduledoc false
     def init(opts), do: opts
@@ -349,22 +339,29 @@ defmodule Lotus.MiddlewareCacheHitTest do
   end
 
   describe "preflight relations across a cached call" do
-    test "a call served from the cache leaves no relations behind" do
+    # The process dictionary is not a source of relations for any phase: a
+    # value another statement left there never reaches a payload, on a hit or
+    # on a miss.
+    test "a call served from the cache carries the stored relations, not stranded ones" do
+      Middleware.compile(%{before_execute: [{CapturePlug, [event: :before_execute]}]})
+
       assert {:ok, _} = run(nil)
+      assert_received {:before_execute, %{origin: :executed}}
 
       Relations.put([{"public", "decoy"}])
 
       assert {:ok, _} = run(nil)
-      assert Relations.get() == []
+      assert_received {:before_execute, %{origin: :cached, relations: [{"public", "test_users"}]}}
     end
 
-    test "a :before_query plug never sees relations another statement left behind" do
-      Middleware.compile(%{before_query: [{ReadRelationsPlug, []}]})
+    test "a :before_query payload carries no relations at all" do
+      Middleware.compile(%{before_query: [{CapturePlug, [event: :before_query]}]})
 
       Relations.put([{"public", "test_users"}])
 
       assert {:ok, _} = run(nil)
-      assert_received {:relations_at_before_query, []}
+      assert_received {:before_query, payload}
+      refute Map.has_key?(payload, :relations)
     end
 
     # `CAST(email AS integer)` plans fine and fails only once a row is

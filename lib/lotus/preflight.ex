@@ -38,6 +38,21 @@ defmodule Lotus.Preflight do
   @spec authorize(Adapter.t(), Statement.t(), String.t() | nil, term()) ::
           :ok | {:error, String.t()}
   def authorize(%Adapter{} = adapter, %Statement{} = statement, search_path \\ nil, scope \\ nil) do
+    with {:ok, _relations} <- analyze(adapter, statement, search_path, scope), do: :ok
+  end
+
+  @doc """
+  Authorizes a statement and returns what preflight learned about it.
+
+  The same check as `authorize/4`, returning the outcome as a value: the list
+  of `{schema, table}` relations the statement touches — empty when it touches
+  none — or `{:unrestricted, reason}` when the adapter cannot name them and the
+  host opted in. `Lotus.Runner` carries this value down the pipeline and into
+  the `:before_execute` and `:after_query` payloads.
+  """
+  @spec analyze(Adapter.t(), Statement.t(), String.t() | nil, term()) ::
+          {:ok, Relations.outcome()} | {:error, String.t()}
+  def analyze(%Adapter{} = adapter, %Statement{} = statement, search_path \\ nil, scope \\ nil) do
     statement =
       if search_path,
         do: %{statement | meta: Map.put(statement.meta, :search_path, search_path)},
@@ -58,8 +73,7 @@ defmodule Lotus.Preflight do
 
   defp handle_unrestricted(%Adapter{name: name}, reason) do
     if Config.allow_unrestricted_resources?(name) do
-      Relations.put({:unrestricted, reason})
-      :ok
+      {:ok, {:unrestricted, reason}}
     else
       {:error,
        "Preflight blocked: source #{inspect(name)} cannot enforce visibility at the " <>
@@ -74,8 +88,7 @@ defmodule Lotus.Preflight do
       Enum.split_with(rels, &Visibility.allowed_relation?(source_name, &1, scope))
 
     if blocked == [] do
-      Relations.put(allowed)
-      :ok
+      {:ok, allowed}
     else
       {:error, "Query touches blocked table(s): #{format_relations(blocked)}"}
     end
