@@ -601,6 +601,35 @@ defmodule Lotus.Config do
   @spec cache_config() :: cache_config() | nil
   def cache_config, do: load!()[:cache]
 
+  @entry_option_keys [:max_bytes, :compress, :lock_timeout]
+
+  @doc """
+  Returns the cache entry options the operator set in `:cache` config.
+
+  These apply to every cached entry unless a caller overrides them in a
+  per-call `:cache` option:
+
+    * `:max_bytes` - skip writing an entry whose encoded size exceeds this
+    * `:compress` - store the entry compressed
+    * `:lock_timeout` - how long a caller waits for whichever process is
+      already computing the same key, before computing it itself
+
+  Only keys that are actually configured are returned, so the cache adapter
+  keeps deciding the default for anything left unset.
+  """
+  @spec cache_entry_options() :: keyword()
+  def cache_entry_options do
+    case cache_config() do
+      config when is_map(config) ->
+        for key <- @entry_option_keys,
+            Map.has_key?(config, key),
+            do: {key, Map.fetch!(config, key)}
+
+      _ ->
+        []
+    end
+  end
+
   @doc """
   Returns cache settings for a specific profile.
 

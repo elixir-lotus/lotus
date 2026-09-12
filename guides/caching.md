@@ -253,9 +253,30 @@ Tag cache entries for selective invalidation:
 Lotus.Cache.invalidate_tags(["user:123"])
 ```
 
-### Entry Size and Compression
+### Entry Size, Compression and Lock Timeout
 
-Cache entries are serialized and, by default, compressed. Entries larger than `max_bytes` are silently not cached — the query still returns its result.
+Three settings apply to every cached entry. They are deployment policy, so they belong in config, and any call can override them for one query.
+
+| Option | Default | What it does |
+|---|---|---|
+| `max_bytes` | `5_000_000` | Skip writing an entry whose serialized size exceeds this. The query still returns its result; it is simply not cached, so one enormous result set cannot evict everything else. |
+| `compress` | `true` | Store the entry compressed. Trades CPU for memory. |
+| `lock_timeout` | `10_000` | On a miss, one caller computes the value while the others wait for it. This bounds that wait, after which a waiter computes the value itself. |
+
+Set them for the whole application:
+
+```elixir
+config :lotus,
+  cache: %{
+    adapter: Lotus.Cache.Cachex,
+    namespace: "lotus",
+    max_bytes: 2_000_000,
+    compress: true,
+    lock_timeout: 5_000
+  }
+```
+
+Override for a single call:
 
 ```elixir
 # Don't cache this result if it serializes to more than 1 MB
@@ -265,7 +286,9 @@ Cache entries are serialized and, by default, compressed. Entries larger than `m
 {:ok, result} = Lotus.run_statement("SELECT * FROM blobs", [], cache: [compress: false])
 ```
 
-**Defaults**: `max_bytes: 5_000_000`, `compress: true`. Both are per-call options, honored by the ETS and Cachex adapters.
+A key you leave unset in both places falls back to the adapter default in the table above. `Lotus.Config.cache_entry_options/0` returns what the operator configured; `Lotus.Cache.build_options/2` is what layers a per-call option over it.
+
+> Before v1.0.0 these three were declared in the cache config but never read from it. `max_bytes` and `compress` worked only as a per-call option and `lock_timeout` could not be set at all.
 
 ### Combined Options
 
@@ -543,7 +566,7 @@ ETS cache memory grows with cached data. Consider:
 
 - **Appropriate TTLs** — don't cache data longer than it is useful
 - **Selective caching** — use `:bypass` for large result sets that are not reused
-- **Size limits** — oversized entries are skipped rather than stored (`max_bytes`, default 5 MB)
+- **Size limits** — oversized entries are skipped rather than stored (`max_bytes`, default 5 MB, set in config or per call)
 - **Scope granularity** — a per-user scope multiplies entries by your user count; prefer the narrowest boundary that is still correct
 - **Regular cleanup** — expired ETS entries are swept by a janitor every 30 seconds
 

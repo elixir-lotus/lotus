@@ -550,6 +550,15 @@
 
 ### Added
 
+- **Cache entry options are read from config.** `:max_bytes`, `:compress`
+  and `:lock_timeout` were declared in `Lotus.Config.cache_config/0` but
+  nothing read them from the application environment: the first two worked
+  only as a per-call `:cache` option and `:lock_timeout` was unreachable
+  from every caller, so it was always 10 seconds. They are deployment
+  policy, so they now come from `config :lotus, cache: %{...}`, and a
+  per-call `:cache` option still overrides them. New:
+  `Lotus.Config.cache_entry_options/0` and `Lotus.Cache.build_options/2`,
+  which replaces the two private copies that had drifted apart.
 - **Renamed config keys now fail loudly.** `:ecto_repo`, `:data_repos` and
   `:default_repo` were dropped silently by the config loader, so an app
   upgrading from 0.16 was told `:storage_repo` was missing rather than that

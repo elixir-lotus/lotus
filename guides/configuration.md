@@ -156,9 +156,16 @@ config :lotus,
       schema: [ttl_ms: 3_600_000]    # Long-term schema info (1 hour)
     },
     default_profile: :results,       # Default profile when none specified
-    default_ttl_ms: 60_000           # Fallback TTL for the :results profile
+    default_ttl_ms: 60_000,          # Fallback TTL for the :results profile
+    max_bytes: 5_000_000,            # Skip entries larger than this
+    compress: true,                  # Store entries compressed
+    lock_timeout: 10_000             # How long a caller waits on a concurrent miss
   }
 ```
+
+`max_bytes`, `compress` and `lock_timeout` apply to every entry and can be
+overridden for one call through the `:cache` execution option. The values
+above are the defaults the adapters use when you leave them unset.
 
 **Type**: `map()` or `nil` — a keyword list is rejected by validation
 **Default**: `nil` (no caching)

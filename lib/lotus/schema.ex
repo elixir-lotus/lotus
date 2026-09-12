@@ -797,23 +797,8 @@ defmodule Lotus.Schema do
     end
   end
 
-  defp build_cache_options(cache_opts, tags) do
-    base = [tags: tags]
-
-    if is_list(cache_opts) do
-      pass =
-        cache_opts
-        |> Enum.filter(fn
-          {_k, _v} -> true
-          _atom -> false
-        end)
-        |> Keyword.take([:max_bytes, :compress])
-
-      Keyword.merge(pass, base)
-    else
-      base
-    end
-  end
+  defp build_cache_options(cache_opts, tags),
+    do: Lotus.Cache.build_options(cache_opts, tags)
 
   defp schema_key(kind, repo_name, scope) do
     key_builder().discovery_key(
