@@ -28,20 +28,30 @@ defmodule Lotus.Runner do
           vars: map()
         ]
 
+  @typedoc """
+  What executing a statement produced: the result, and the relations preflight
+  proved the statement touches.
+
+  This is the unit the result cache stores, so that a caller serving a result
+  from the cache can still hand the relations to `:before_execute`.
+  """
+  @type execution :: %{result: query_result(), relations: term()}
+
   @doc """
   Runs a statement through the full pipeline: `:before_query`, sanitization,
   preflight, `:before_execute`, execution, column policy enforcement and
   `:after_query`.
 
-  A caller that wraps execution in the result cache composes the three phases
-  itself — `before_query/3`, `execute_statement/3`, `after_query/4` — so that
-  the query middleware runs on a cache hit as well.
+  A caller that wraps execution in the result cache composes the phases itself
+  — `before_query/3`, `execute_statement/3` or a cached result plus
+  `before_execute/4`, then `after_query/4` — so that the middleware runs on a
+  cache hit as well.
   """
   @spec run_statement(Adapter.t(), Statement.t(), opts()) ::
           {:ok, query_result()} | {:error, term()}
   def run_statement(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
     with {:ok, %Statement{} = statement} <- before_query(adapter, statement, opts),
-         {:ok, %Result{} = res} <- execute_statement(adapter, statement, opts) do
+         {:ok, %{result: %Result{} = res}} <- execute_statement(adapter, statement, opts) do
       after_query(adapter, statement, res, opts)
     end
   end
@@ -105,9 +115,38 @@ defmodule Lotus.Runner do
       vars: vars(opts)
     }
 
+    # No fallback clause for a `:cont` without a `%Result{}` under `:result`: a
+    # plug whose whole job is to rewrite the result must fail loudly when it
+    # returns a shape that cannot be one, rather than have Lotus quietly serve
+    # the result the plug meant to replace.
     case Middleware.run(:after_query, payload) do
       {:cont, %{result: %Result{} = res}} -> {:ok, res}
-      {:cont, _} -> {:ok, result}
+      {:halt, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Runs the `:before_execute` pipeline for a statement and the relations it
+  touches.
+
+  `execute_statement/3` runs this itself, with the relations preflight just
+  found. A caller that serves a result from the cache runs it with the
+  relations stored alongside that result, so the gate fires on every call: a
+  plug that authorizes a statement against its tables is an access control,
+  and an access control that a warm cache skips is no control at all.
+  """
+  @spec before_execute(Adapter.t(), Statement.t(), term(), opts()) :: :ok | {:error, term()}
+  def before_execute(%Adapter{} = adapter, %Statement{} = statement, relations, opts \\ []) do
+    payload = %{
+      source: adapter.name,
+      statement: statement,
+      relations: relations,
+      context: Keyword.get(opts, :context),
+      vars: vars(opts)
+    }
+
+    case Middleware.run(:before_execute, payload) do
+      {:cont, _payload} -> :ok
       {:halt, reason} -> {:error, reason}
     end
   end
@@ -116,16 +155,21 @@ defmodule Lotus.Runner do
   Executes a statement: sanitization, preflight, `:before_execute`, the query
   itself and column policy enforcement.
 
-  This is the phase the result cache stores. The query middleware around it
-  lives in `before_query/3` and `after_query/4`, and `[:lotus, :query, *]`
-  telemetry covers this phase only — a statement served from the cache emits
-  no query events.
+  Returns the result together with the relations preflight proved the statement
+  touches, which is what the result cache stores — see `t:execution/0`. The
+  query middleware around this phase lives in `before_query/3` and
+  `after_query/4`, and `[:lotus, :query, *]` telemetry covers this phase only,
+  so a statement served from the cache emits no query events.
   """
   @spec execute_statement(Adapter.t(), Statement.t(), opts()) ::
-          {:ok, query_result()} | {:error, term()}
+          {:ok, execution()} | {:error, term()}
   def execute_statement(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
-    context = Keyword.get(opts, :context)
-    telemetry_meta = %{source: adapter.name, statement: statement, context: context}
+    telemetry_meta = %{
+      source: adapter.name,
+      statement: statement,
+      context: Keyword.get(opts, :context)
+    }
+
     start_time = Telemetry.query_start(telemetry_meta)
 
     # Preflight records its relations in the process dictionary, and
@@ -141,22 +185,22 @@ defmodule Lotus.Runner do
 
         with :ok <- Adapter.sanitize_query(adapter, statement, sanitize_opts(opts)),
              {:ok, relations} <- preflight_visibility(adapter, statement, opts),
-             :ok <- run_before_execute(adapter, statement, relations, context, vars(opts)),
+             :ok <- before_execute(adapter, statement, relations, opts),
              {:ok, %Result{} = res} <- exec_read_only(adapter, statement, relations, opts) do
-          {:ok, res}
+          {:ok, %{result: res, relations: relations}}
         end
       after
         Relations.clear()
       end
 
     case result do
-      {:ok, %Result{} = res} ->
+      {:ok, %{result: %Result{} = res}} ->
         Telemetry.query_stop(
           start_time,
           Map.merge(telemetry_meta, %{row_count: res.num_rows, result: res})
         )
 
-        {:ok, res}
+        result
 
       {:error, _} = error ->
         Telemetry.query_exception(start_time, :error, error, [], telemetry_meta)
@@ -351,31 +395,6 @@ defmodule Lotus.Runner do
 
   defp sanitize_opts(opts) do
     Keyword.take(opts, [:read_only])
-  end
-
-  # Fires once sanitization and preflight have passed, with the relations
-  # preflight proved the statement touches. A plug may inspect but not rewrite
-  # here — the statement has already been authorized, so the one that executes
-  # must be the one preflight saw.
-  defp run_before_execute(
-         %Adapter{} = adapter,
-         %Statement{} = statement,
-         relations,
-         context,
-         vars
-       ) do
-    payload = %{
-      source: adapter.name,
-      statement: statement,
-      relations: relations,
-      context: context,
-      vars: vars
-    }
-
-    case Middleware.run(:before_execute, payload) do
-      {:cont, _payload} -> :ok
-      {:halt, reason} -> {:error, reason}
-    end
   end
 
   # Returns what preflight proved the statement touches: a list of

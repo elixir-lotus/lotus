@@ -46,7 +46,9 @@ from cache emits no `[:lotus, :query, *]` events at all; `[:lotus, :cache, :hit]
 is the event to count for those. The `:before_query` and `:after_query`
 middleware run outside that phase, on every call: a plug that halts there yields
 `{:error, reason}` to the caller without emitting query events, because no
-statement ran.
+statement ran. For the same reason `:stop` carries the result as the source
+returned it — an `:after_query` plug that redacts rows has not run yet, so a
+handler that logs `metadata.result` logs the unredacted rows.
 
 ### Cache Operations
 

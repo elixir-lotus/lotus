@@ -190,15 +190,14 @@ Lotus.run_statement("SELECT * FROM orders", [],
 )
 ```
 
-> **The result cache key includes `:scope` but never `:context`.** Query
-> middleware runs outside the cache callback, so a plug that masks or filters
-> results per actor works from `:context` alone — it sees every call, hit or
-> miss. What `:scope` buys is a separate stored entry: the visibility resolver
-> runs inside the cache callback, so a resolver that hides tables or masks
-> columns per actor needs the caller to pass a `:scope` identifying that actor,
-> or one actor's stored result is served to the next.
-> `Lotus.invalidate_scope/1` clears both the discovery and result cache entries
-> for a given scope.
+> **The result cache key includes `:scope` but never `:context`.** Middleware
+> runs outside the cache callback, so a plug that masks or filters results per
+> actor works from `:context` alone — it sees every call, hit or miss. The
+> visibility resolver does not: it runs inside the callback, so a resolver that
+> hides tables or masks columns per actor needs the caller to pass a `:scope`
+> identifying that actor, or one actor's stored result is served to the next.
+> See [Caching](#caching). `Lotus.invalidate_scope/1` clears both the discovery
+> and result cache entries for a given scope.
 
 ```elixir
 defmodule MyApp.AccessControlMiddleware do
@@ -386,30 +385,52 @@ end
 Query middleware and discovery middleware both sit outside their caches. Only
 the raw work an adapter does is stored.
 
-### Query middleware runs outside the result cache
+### Every query event fires on a cache hit
 
-`:before_query` and `:after_query` run outside the result cache callback, so both
-events fire on a cache **hit** as well:
+`:before_query`, `:before_execute` and `:after_query` all run on a call served
+from the cache:
 
-- **Side-effecting plugs see every call.** An audit plug on `:before_query`
-  records hits and misses alike, and a plug that halts for one caller halts
-  whether or not the cache is warm.
+- **Side-effecting plugs see every call.** An audit plug records hits and misses
+  alike, and a plug that halts for one caller halts whether or not the cache is
+  warm.
 - **Context-sensitive plugs are safe.** `:context` is not part of the cache key,
-  and it does not need to be: two callers with different `:context` values each
-  get their own middleware decision on the same stored rows.
+  and for middleware it does not need to be: two callers with different
+  `:context` values each get their own middleware decision on the same stored
+  rows.
+- **`:before_execute` gets its relations either way.** The relations preflight
+  named are stored with the result, so the event carries them on a hit as well
+  as on a miss — a plug that authorizes a statement against its tables is an
+  access control, and one a warm cache skips would be no control at all.
 - **The stored entry keeps the raw result.** `:after_query` runs on the way out,
   so what a plug makes of the result is returned to that caller and never
-  written back to the cache.
-- **`:before_execute` runs inside the callback.** It carries the relations
-  preflight named, and preflight is what the cache stores, so a cache hit
-  skips both. A plug that must run on every call belongs on `:before_query`.
+  written back. A halt there withholds the result from that caller; the rows
+  themselves stay in the cache for a caller whose own plugs let them through.
 
-A `:before_query` plug that rewrites the statement keys its own cache entry —
-the rewritten statement is what builds the key, so two plugs that rewrite
-differently do not share an entry.
+A `:before_query` plug that rewrites the statement keys its own cache entry.
+`:before_query` runs before pagination, so the plug is handed the query the
+caller wrote rather than a `LIMIT` wrapper around it, and everything that keys
+the entry — the body, the bound values, the window — describes the statement the
+plug returned. A plug that filters through a bound parameter rather than through
+the statement text is keyed just the same.
 
 Pass `cache: :bypass` on a call that must never be served from the cache, or
 `cache: :refresh` to re-run and re-seed it.
+
+### What a cache hit does skip
+
+Everything between sanitization and the returned rows is what the entry stores,
+so a hit skips it: the adapter's statement sanitization, preflight table
+authorization, and column visibility — `mask`, `omit`, and the hidden-column
+error. Those controls read `:scope`, and `:scope` is part of the cache key, so
+two scopes never share an entry.
+
+**`:scope` is the only caller identity the result cache separates on.** A
+visibility resolver must therefore decide from `(source, relations, column,
+scope)` alone. A resolver that varies its rules by anything else — a user read
+out of `:context`, process state, or the current request — masks the warming
+caller's result and then serves it unchanged to the next caller. Carry the actor
+in `:scope` when visibility depends on it, and keep per-actor logic that cannot
+be expressed that way in middleware, which runs on every call.
 
 ### Discovery middleware runs outside the schema cache
 
