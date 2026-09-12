@@ -2,7 +2,7 @@ defmodule Lotus.MixProject do
   use Mix.Project
 
   @source_url "https://github.com/elixir-lotus/lotus"
-  @version "1.0.0-rc.1"
+  @version "1.0.0"
 
   def project do
     [
@@ -115,7 +115,7 @@ defmodule Lotus.MixProject do
         "OTP Application": [Lotus.Application, Lotus.Supervisor],
         AI: [
           Lotus.AI,
-          Lotus.AI.SQLGenerator,
+          Lotus.AI.QueryGenerator,
           Lotus.AI.QueryExplainer,
           Lotus.AI.QueryOptimizer,
           Lotus.AI.Conversation,
@@ -124,7 +124,6 @@ defmodule Lotus.MixProject do
           Lotus.AI.Tool,
           ~r/Lotus\.AI\.Actions\..+/
         ],
-        "SQL Processing": [Lotus.SQL.Transformer],
         Utilities: [Lotus.JSON]
       ]
     ]
@@ -142,6 +141,7 @@ defmodule Lotus.MixProject do
       "guides/ai_query_generation.md",
       "guides/configuration.md",
       "guides/middleware.md",
+      "guides/schema-introspection.md",
       "guides/visibility.md",
       "guides/source-adapters.md",
       "guides/custom-resolvers.md",
@@ -154,7 +154,7 @@ defmodule Lotus.MixProject do
 
   defp description do
     """
-    Embeddable business intelligence engine for Elixir — run SQL queries, build dashboards, and manage analytics directly in your Phoenix app with Ecto.
+    Embeddable business intelligence engine for Elixir — run queries against SQL and non-SQL data sources, build dashboards, and manage analytics directly in your Phoenix app.
     """
   end
 end

@@ -853,23 +853,8 @@ defmodule Lotus do
     end
   end
 
-  defp build_cache_options(cache_opts, tags) do
-    base_options = [tags: tags]
-
-    if is_list(cache_opts) do
-      cache_options =
-        cache_opts
-        |> Enum.filter(fn
-          {_key, _value} -> true
-          _atom -> false
-        end)
-        |> Keyword.take([:max_bytes, :compress])
-
-      Keyword.merge(cache_options, base_options)
-    else
-      base_options
-    end
-  end
+  defp build_cache_options(cache_opts, tags),
+    do: Lotus.Cache.build_options(cache_opts, tags)
 
   defp result_key(body, bound_vars_map, repo_name, search_path, scope) do
     Key.result(

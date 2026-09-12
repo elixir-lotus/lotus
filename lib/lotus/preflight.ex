@@ -11,7 +11,8 @@ defmodule Lotus.Preflight do
 
   When an adapter returns `{:unrestricted, reason}` the statement is allowed
   through only if the host application has opted in via
-  `config :lotus, :allow_unrestricted_resources`; otherwise preflight raises.
+  `config :lotus, :allow_unrestricted_resources`; otherwise preflight returns
+  an error.
   """
 
   alias Lotus.Config

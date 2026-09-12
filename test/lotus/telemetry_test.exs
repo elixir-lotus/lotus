@@ -171,11 +171,11 @@ defmodule Lotus.TelemetryTest do
       {:ok, _tables} = Lotus.Schema.list_tables("sqlite")
 
       assert_received {:telemetry, [:lotus, :schema, :introspection, :start], %{system_time: _},
-                       %{operation: :list_tables, repo: "sqlite"}}
+                       %{operation: :list_tables, source: "sqlite"}}
 
       assert_received {:telemetry, [:lotus, :schema, :introspection, :stop],
                        %{duration: duration},
-                       %{operation: :list_tables, repo: "sqlite", result: :ok}}
+                       %{operation: :list_tables, source: "sqlite", result: :ok}}
 
       assert is_integer(duration)
       assert duration >= 0
@@ -203,10 +203,10 @@ defmodule Lotus.TelemetryTest do
       {:ok, _schema} = Lotus.Schema.describe_table("sqlite", "products")
 
       assert_received {:telemetry, [:lotus, :schema, :introspection, :start], _,
-                       %{operation: :describe_table, repo: "sqlite"}}
+                       %{operation: :describe_table, source: "sqlite"}}
 
       assert_received {:telemetry, [:lotus, :schema, :introspection, :stop], %{duration: _},
-                       %{operation: :describe_table, repo: "sqlite", result: :ok}}
+                       %{operation: :describe_table, source: "sqlite", result: :ok}}
 
       :telemetry.detach("#{inspect(ref)}")
     end
@@ -231,7 +231,7 @@ defmodule Lotus.TelemetryTest do
       {:ok, _schemas} = Lotus.Schema.list_schemas("sqlite")
 
       assert_received {:telemetry, [:lotus, :schema, :introspection, :start], _,
-                       %{operation: :list_schemas, repo: "sqlite"}}
+                       %{operation: :list_schemas, source: "sqlite"}}
 
       assert_received {:telemetry, [:lotus, :schema, :introspection, :stop], %{duration: _},
                        %{operation: :list_schemas, result: :ok}}

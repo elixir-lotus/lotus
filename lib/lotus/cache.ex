@@ -14,6 +14,29 @@ defmodule Lotus.Cache do
   @spec enabled?() :: boolean()
   def enabled?, do: match?({:ok, _}, adapter())
 
+  @doc """
+  Builds the per-entry options for a cache write.
+
+  Layers the caller's `:cache` option over the entry options set in
+  application config, then adds the invalidation tags. A caller that passes
+  no `:cache` option, or an atom such as `:bypass`, still gets the
+  configured defaults.
+  """
+  @spec build_options(term(), [String.t()]) :: opts()
+  def build_options(cache_opts, tags) do
+    Config.cache_entry_options()
+    |> Keyword.merge(per_call_options(cache_opts))
+    |> Keyword.put(:tags, tags)
+  end
+
+  defp per_call_options(cache_opts) when is_list(cache_opts) do
+    cache_opts
+    |> Enum.filter(&match?({_key, _value}, &1))
+    |> Keyword.take([:max_bytes, :compress, :lock_timeout])
+  end
+
+  defp per_call_options(_cache_opts), do: []
+
   @spec get(key) :: {:ok, value} | :miss
   def get(key) do
     case adapter() do

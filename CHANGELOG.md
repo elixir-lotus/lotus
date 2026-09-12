@@ -1,21 +1,6 @@
 # Changelog
 
-## [Unreleased]
-
-### Added
-
-- **Bound query variables in middleware payloads.** `:before_query` and
-  `:after_query` plugs receive a `:vars` key with the merged variable map
-  (defaults plus caller-supplied values, keyed by variable name), or `%{}`
-  for a raw `Lotus.run_statement/3`. Plugs can enforce rules on the values a
-  user picked — maximum date ranges, tenant checks — without parsing the
-  statement. See the middleware guide for a date-range limit example (#97).
-- **`Lotus.Config.t()` lists every configuration key**, including
-  `:allow_unrestricted_resources`, `:ai`, `:source_adapters`,
-  `:trusted_source_adapters`, `:source_resolver`, `:visibility_resolver`
-  and `:middleware`.
-
-## [1.0.0-rc.1] - 2026-09-11
+## [1.0.0] - 2026-09-12
 
 > **v1.0 is a large rewrite and not a drop-in upgrade from the v0.16.x
 > line.** The motivating goal was to stop assuming every data source is
@@ -63,9 +48,9 @@
   payloads (JSON maps, DSL ASTs) in `:body` without serializing to
   strings. Constructor: `Lotus.Query.Statement.new(body, params \\ [])`.
   `Lotus.Runner.run_statement/3` takes
-  `(%Adapter{}, %Statement{}, opts)`. `Lotus.Preflight.authorize/3`
-  takes `(%Adapter{}, %Statement{}, search_path)`. The `:sql`/`:params`
-  tuple shape is gone from the pipeline.
+  `(%Adapter{}, %Statement{}, opts)`. `Lotus.Preflight.authorize/4`
+  takes `(%Adapter{}, %Statement{}, search_path, scope)`. The
+  `:sql`/`:params` tuple shape is gone from the pipeline.
 
 - **Pagination count queries moved into `statement.meta[:count_spec]`.**
   `apply_pagination/3` returns a single `%Statement{}` whose `:meta`
@@ -565,6 +550,34 @@
 
 ### Added
 
+- **Cache entry options are read from config.** `:max_bytes`, `:compress`
+  and `:lock_timeout` were declared in `Lotus.Config.cache_config/0` but
+  nothing read them from the application environment: the first two worked
+  only as a per-call `:cache` option and `:lock_timeout` was unreachable
+  from every caller, so it was always 10 seconds. They are deployment
+  policy, so they now come from `config :lotus, cache: %{...}`, and a
+  per-call `:cache` option still overrides them. New:
+  `Lotus.Config.cache_entry_options/0` and `Lotus.Cache.build_options/2`,
+  which replaces the two private copies that had drifted apart.
+- **Renamed config keys now fail loudly.** `:ecto_repo`, `:data_repos` and
+  `:default_repo` were dropped silently by the config loader, so an app
+  upgrading from 0.16 was told `:storage_repo` was missing rather than that
+  the key had moved. Lotus now raises and names every renamed key it finds.
+- **A stale `data_repo` attribute is rejected.** `Lotus.create_query/1` and
+  `update_query/2` used to drop the unpermitted key and save the query with
+  no source, which then resolved to the default source at run time — a
+  multi-source host silently queried the wrong database. The changeset now
+  returns an error on `:data_source` instead.
+- **Bound query variables in middleware payloads.** `:before_query` and
+  `:after_query` plugs receive a `:vars` key with the merged variable map
+  (defaults plus caller-supplied values, keyed by variable name), or `%{}`
+  for a raw `Lotus.run_statement/3`. Plugs can enforce rules on the values a
+  user picked — maximum date ranges, tenant checks — without parsing the
+  statement. See the middleware guide for a date-range limit example (#97).
+- **`Lotus.Config.t()` lists every configuration key**, including
+  `:allow_unrestricted_resources`, `:ai`, `:source_adapters`,
+  `:trusted_source_adapters`, `:source_resolver`, `:visibility_resolver`
+  and `:middleware`.
 - **An empty middleware config clears the compiled pipeline** —
   `Lotus.Middleware.compile/1` used to ignore an empty or missing config,
   so a config reload could add middleware but never take it away. It now
@@ -669,6 +682,17 @@
   against the cache facade (#161).
 
 ### Changed
+
+- **Schema-introspection telemetry emits `:source`, not `:repo`.** The
+  `[:lotus, :schema, :introspection, :*]` events carried the source name
+  under `:repo` while the query events used `:source` for the same value.
+  Handlers matching on `:repo` must be updated.
+- **The guides were rewritten against the v1 code.** Every guide was audited
+  callback by callback and key by key: the configuration, caching and
+  introspection guides still taught pre-v1 config keys and removed
+  functions, the adapter guide's callback table did not match the
+  behaviour, and several examples could not have run. `guides/schema-introspection.md`
+  now ships with the docs; it was never listed in the extras before.
 
 - `:sha256` column masks hash a rendered form of values that are neither text
   nor binary, so digests change for those columns: a `NaiveDateTime` now

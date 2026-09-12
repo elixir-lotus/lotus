@@ -424,6 +424,8 @@ defmodule Lotus.Schema do
   - `:schema` - Look for table in specific schema
   - `:schemas` - Search for table in multiple schemas (first match wins)
   - `:search_path` - Use PostgreSQL search_path to resolve table location
+  - `:scope` - Opaque value passed to the visibility resolver and hashed into
+    the cache key
   - `:cache` - Cache options (profile, ttl_ms, etc.)
 
   ## Examples
@@ -795,23 +797,8 @@ defmodule Lotus.Schema do
     end
   end
 
-  defp build_cache_options(cache_opts, tags) do
-    base = [tags: tags]
-
-    if is_list(cache_opts) do
-      pass =
-        cache_opts
-        |> Enum.filter(fn
-          {_k, _v} -> true
-          _atom -> false
-        end)
-        |> Keyword.take([:max_bytes, :compress])
-
-      Keyword.merge(pass, base)
-    else
-      base
-    end
-  end
+  defp build_cache_options(cache_opts, tags),
+    do: Lotus.Cache.build_options(cache_opts, tags)
 
   defp schema_key(kind, repo_name, scope) do
     key_builder().discovery_key(

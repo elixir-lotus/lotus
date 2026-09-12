@@ -383,8 +383,39 @@ defmodule Lotus.Config do
     Lotus.Source.Adapter in behaviours
   end
 
+  # v1 renamed three config keys. Without this check the old key is simply not
+  # in the allowlist below, so an upgrading app is told that :storage_repo is
+  # missing rather than that :ecto_repo moved — the error points at the wrong
+  # problem on the one path v1 most needs to be clear about.
+  @renamed_keys [
+    {:ecto_repo, :storage_repo},
+    {:data_repos, :data_sources},
+    {:default_repo, :default_source}
+  ]
+
+  defp check_renamed_keys!(env) do
+    case Enum.filter(@renamed_keys, fn {old, _new} -> Keyword.has_key?(env, old) end) do
+      [] ->
+        env
+
+      found ->
+        renames =
+          Enum.map_join(found, "\n", fn {old, new} -> "  #{inspect(old)} -> #{inspect(new)}" end)
+
+        raise ArgumentError, """
+        Invalid :lotus config: found configuration keys that were renamed in Lotus v1.0.
+
+        #{renames}
+
+        Rename them in your `config :lotus` block. There is no compatibility
+        shim; see the "Upgrading to v1.0" guide for the full migration.
+        """
+    end
+  end
+
   defp get_lotus_config do
     Application.get_all_env(:lotus)
+    |> check_renamed_keys!()
     |> Keyword.take([
       :storage_repo,
       :read_only,
@@ -441,7 +472,7 @@ defmodule Lotus.Config do
   `false` on a single source while running a permissive global default
   should be able to trust that the source stays locked down.
 
-  Used by `Lotus.Preflight.authorize/3` to gate non-SQL adapters whose
+  Used by `Lotus.Preflight.authorize/4` to gate non-SQL adapters whose
   engines enforce visibility at a layer Lotus can't introspect.
   """
   @spec allow_unrestricted_resources?(String.t()) :: boolean()
@@ -569,6 +600,35 @@ defmodule Lotus.Config do
   """
   @spec cache_config() :: cache_config() | nil
   def cache_config, do: load!()[:cache]
+
+  @entry_option_keys [:max_bytes, :compress, :lock_timeout]
+
+  @doc """
+  Returns the cache entry options the operator set in `:cache` config.
+
+  These apply to every cached entry unless a caller overrides them in a
+  per-call `:cache` option:
+
+    * `:max_bytes` - skip writing an entry whose encoded size exceeds this
+    * `:compress` - store the entry compressed
+    * `:lock_timeout` - how long a caller waits for whichever process is
+      already computing the same key, before computing it itself
+
+  Only keys that are actually configured are returned, so the cache adapter
+  keeps deciding the default for anything left unset.
+  """
+  @spec cache_entry_options() :: keyword()
+  def cache_entry_options do
+    case cache_config() do
+      config when is_map(config) ->
+        for key <- @entry_option_keys,
+            Map.has_key?(config, key),
+            do: {key, Map.fetch!(config, key)}
+
+      _ ->
+        []
+    end
+  end
 
   @doc """
   Returns cache settings for a specific profile.

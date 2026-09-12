@@ -14,8 +14,8 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Default do
       the database level.
     * `set_statement_timeout/2` is a no-op, so user-configured statement
       timeouts have no effect.
-    * `extract_accessed_resources/4` is not implemented, so
-      `Lotus.Preflight.authorize/3` short-circuits to `:ok` — visibility rules
+    * `extract_accessed_resources/2` is not implemented, so
+      `Lotus.Preflight.authorize/4` short-circuits to `:ok` — visibility rules
       are **not** checked against the tables the query touches.
     * `list_schemas/1`, `list_tables/3`, and `describe_table/3` return
       empty lists — the schema browser will be blank.

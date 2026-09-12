@@ -1,10 +1,15 @@
 defmodule Lotus.Visibility do
   @moduledoc """
-  Schema and table visibility filtering for Lotus.
+  Schema, table and column visibility filtering for Lotus.
 
-  Implements a two-level visibility system where **schema visibility takes precedence**:
-  1. **Schema visibility** is checked first - if a schema is denied, all its tables are blocked
+  Implements a three-level visibility system where the outer level takes
+  precedence:
+
+  1. **Schema visibility** is checked first — if a schema is denied, every
+     table in it is blocked
   2. **Table visibility** is only checked if the schema is allowed
+  3. **Column visibility** applies to the columns of an allowed table, and
+     can hide a column from discovery or mask its values in results
 
   This ensures security by default while providing fine-grained control.
 

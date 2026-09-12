@@ -1,6 +1,79 @@
 # Advanced Variables
 
-This guide covers advanced variable usage patterns in Lotus queries, including automatic type casting, SQL transformation, and advanced patterns for cross-database applications.
+This guide covers advanced variable usage patterns in Lotus queries: the `{{var}}` and `[[...]]` template syntax, variable definitions, automatic type casting, and — for Ecto-backed sources — the SQL transformer.
+
+## How a Query Is Compiled
+
+`Lotus.Storage.Query.compile/2` turns a stored query and a map of supplied
+values into an executable `%Lotus.Query.Statement{}`:
+
+```elixir
+{:ok, statement} = Lotus.Storage.Query.compile(query, %{"status" => "active"})
+
+statement.body    #=> the adapter-native payload (SQL text for Ecto sources)
+statement.params  #=> the bound values
+```
+
+`compile!/2` is the raising variant. `Lotus.run_query/2` calls `compile/2`
+for you, so you rarely call it directly.
+
+The steps, in order:
+
+1. `[[...]]` optional blocks are resolved against the supplied values
+2. The adapter rewrites the raw statement (`transform_statement/2`)
+3. Variable names are extracted in the order they appear
+4. Each value is cast, then folded through the adapter's
+   `substitute_variable/5` (or `substitute_list_variable/5`)
+
+Step 4 is where v1 differs most from earlier versions: **substitution is
+adapter-owned.** A prepared-statement adapter appends a placeholder to the
+body and pushes the value onto `params`; a JSON or DSL adapter inlines the
+value as a properly escaped literal in its own encoder. An adapter with no
+`{{var}}` model at all returns `{:error, :unsupported}`. You write
+`{{name}}` either way.
+
+> Before v1.0 this function was `Lotus.Storage.Query.to_sql_params` and
+> returned an `{sql, params}` tuple. See the
+> [upgrade guide](upgrading-to-v1.md).
+
+## Variable Definitions
+
+Each entry in a query's `:variables` list is a `Lotus.Storage.QueryVariable`:
+
+| Field | Values | Notes |
+|---|---|---|
+| `:name` | string | Required. Matches `{{name}}` in the statement |
+| `:type` | `:text`, `:number`, `:date` | Required. How the value is interpreted |
+| `:widget` | `:input`, `:select` | Defaults to `:input` |
+| `:label` | string | Human-friendly label for the UI |
+| `:default` | string | Used when no value is supplied. For `list: true`, a comma-separated string |
+| `:list` | boolean | Defaults to `false`. `true` accepts multiple values |
+| `:static_options` | list | Allowed values for a `:select` widget |
+| `:options_query` | string | Query returning `value` and `label` columns, for a dynamic `:select` |
+
+Those three types and two widgets are the complete set. A `:select` widget
+must define either `:static_options` or `:options_query`, or the changeset
+fails with `"select must define either static_options or options_query"`.
+
+`:static_options` accepts a list of strings or a list of `{value, label}`
+tuples (or maps), but the formats cannot be mixed within one variable.
+
+```elixir
+{:ok, query} = Lotus.create_query(%{
+  name: "Orders by Status",
+  statement: "SELECT * FROM orders WHERE status = {{status}}",
+  variables: [
+    %{
+      name: "status",
+      type: :text,
+      widget: :select,
+      label: "Order Status",
+      default: "pending",
+      static_options: [{"pending", "Pending"}, {"shipped", "Shipped"}]
+    }
+  ]
+})
+```
 
 ## Optional Variables (`[[...]]` Syntax)
 
@@ -95,27 +168,70 @@ Optional clauses work with list variables too:
 
 ### How It Works
 
-1. Before SQL transformation, Lotus scans for `[[...]]` blocks
+1. Before the adapter transforms the statement, Lotus scans for `[[...]]` blocks
 2. For each block, it checks whether all `{{variable}}` references inside have values
 3. If all variables have values, the `[[` and `]]` brackets are removed and the content is kept
 4. If any variable is missing/nil/empty, the entire block (including brackets) is removed
-5. The remaining SQL is then processed normally (variable substitution, type casting, etc.)
+5. The remainder is then processed normally (variable substitution, type casting, etc.)
+
+`Lotus.Query.OptionalClause` works on text, not on SQL specifically, so the
+same syntax applies to any textual query language. An adapter that builds an
+AST applies it before serializing.
+
+## Enforcing Limits on Supplied Values
+
+The bound variables reach `:before_query` and `:after_query` middleware under
+the `:vars` key — a map keyed by variable name, after defaults and
+caller-supplied values are merged. A plug can enforce rules on what the user
+picked (a maximum date range, a tenant check) without parsing the statement:
+
+```elixir
+%{statement: statement, source: source, context: context, vars: vars} = payload
+```
+
+For a raw statement run through `Lotus.run_statement/3`, `:vars` is `%{}`.
+See the [middleware guide](middleware.md) for a worked plug.
+
+## Saved Queries Record Their Language
+
+A stored query carries a `:query_language` (for example `"sql:postgres"`),
+recorded from the source it was written against. `Lotus.run_query/2`
+compares it with the resolved source's language and returns an error rather
+than sending the statement to an engine that cannot parse it:
+
+```elixir
+{:error, "Query was written for \"sql:postgres\" but data source \"warehouse\" speaks \"sql:clickhouse\""} =
+  Lotus.run_query(query, repo: "warehouse")
+```
+
+A query with no recorded language runs anywhere, which is how every query
+predating the column behaves.
 
 ## Automatic Type Casting
 
 Lotus includes an intelligent automatic type casting system that detects column types from your database schema and converts string values (typically from web inputs) to the correct database-native formats.
 
+> **Ecto-backed sources.** The rest of this guide — type casting, the SQL
+> transformer, and the interval rewrites — describes the built-in Ecto
+> adapter and its Postgres, MySQL and SQLite dialects. A non-SQL adapter
+> owns its own substitution and does its own escaping.
+
 ### How It Works
 
 When you use a variable in your query, Lotus:
 
-1. **Analyzes the SQL** to determine which table column the variable is bound to
+1. **Analyzes the SQL** (`Lotus.Storage.VariableResolver`) to determine which table column the variable is bound to
 2. **Queries the schema cache** to get the column's database type
 3. **Maps the database type** to a Lotus internal type (`:uuid`, `:integer`, `:date`, etc.)
 4. **Casts the value** if needed, or passes it through for text types
-5. **Generates the appropriate SQL placeholder** with type annotations where needed
+5. **Asks the dialect for a placeholder**, with a type annotation where the dialect wants one
 
 This all happens automatically - you don't need to manually specify types in most cases.
+
+Binding resolution is regex-based heuristics, not a full SQL parser: it
+handles explicit (`users.id = {{id}}`), implicit (`id = {{id}}`) and aliased
+(`u.id = {{id}}`) bindings, and falls back to the variable's declared
+`:type` when it cannot resolve one.
 
 ### Supported Types
 
@@ -312,6 +428,11 @@ When type casting fails, Lotus provides clear, user-friendly error messages:
 # Error: Invalid boolean format: 'maybe' is not a valid boolean (expected: true/false, yes/no, 1/0, on/off)
 ```
 
+Those messages come from `Lotus.Storage.TypeCaster`, which runs when the
+column type was detected. When Lotus falls back to the variable's declared
+`:type`, the wording is shorter and carries no format hint — for example
+`Invalid number format: 'abc' is not a valid number`.
+
 ### Performance Considerations
 
 Type casting adds minimal overhead:
@@ -320,9 +441,14 @@ Type casting adds minimal overhead:
 - **Smart casting**: Text and enum types skip casting entirely
 - **Graceful degradation**: If schema cache fails, falls back to manual types with logging
 
-## SQL Transformer Overview
+## SQL Transformer Overview (Ecto Adapters)
 
-Lotus includes an automatic SQL transformer that ensures your queries work correctly across different database systems. When you execute a query, Lotus automatically transforms the SQL to match the target database's syntax requirements, particularly around variable placeholders and database-specific functions.
+The Ecto adapter's dialects rewrite a statement before variables are bound,
+through the `transform_statement/1` dialect callback backed by
+`Lotus.Source.Adapters.Ecto.SQL.Transformer`. This is what lets one query
+text work across Postgres, MySQL and SQLite. It is a dialect concern, not a
+core one — an adapter for a non-SQL engine implements whatever
+preprocessing its own language needs, or none.
 
 The transformer handles three main areas:
 - **Quoted Variable Stripping**: Removes unnecessary quotes around variable placeholders
@@ -608,6 +734,21 @@ WHERE last_activity >= NOW() - INTERVAL '7 {{unit}}'
 # Transforms to:
 # "SELECT COUNT(*) FROM sessions WHERE last_activity >= NOW() - (( '7 ' || {{unit}} )::interval)"
 ```
+
+#### Pattern 5: `INTERVAL '{{var}}'` (Quoted, Whole Interval in the Variable)
+
+```elixir
+# Original query
+statement: """
+SELECT * FROM logs
+WHERE logged_at >= NOW() - INTERVAL '{{window}}'
+"""
+
+# Transforms to:
+# "SELECT * FROM logs WHERE logged_at >= NOW() - CAST({{window}} AS interval)"
+```
+
+The variable then holds a complete interval string such as `"3 months"`.
 
 ### Practical PostgreSQL Interval Examples
 

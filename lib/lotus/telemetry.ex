@@ -109,7 +109,7 @@ defmodule Lotus.Telemetry do
 
     * `:operation` - The introspection operation (e.g., `:list_schemas`, `:list_tables`,
       `:describe_table`, `:get_table_stats`, `:list_relations`)
-    * `:repo` - The repo name
+    * `:source` - The data source name
 
   ### `[:lotus, :schema, :introspection, :stop]`
 
@@ -122,7 +122,7 @@ defmodule Lotus.Telemetry do
   **Metadata:**
 
     * `:operation` - The introspection operation
-    * `:repo` - The repo name
+    * `:source` - The data source name
     * `:result` - `:ok` or `:error`
 
   ## Example
@@ -236,24 +236,24 @@ defmodule Lotus.Telemetry do
   end
 
   @doc false
-  def schema_introspection_start(operation, repo) do
+  def schema_introspection_start(operation, source) do
     start_time = System.monotonic_time()
 
     :telemetry.execute(@schema_start, %{system_time: System.system_time()}, %{
       operation: operation,
-      repo: repo
+      source: source
     })
 
     start_time
   end
 
   @doc false
-  def schema_introspection_stop(start_time, operation, repo, result_status) do
+  def schema_introspection_stop(start_time, operation, source, result_status) do
     duration = System.monotonic_time() - start_time
 
     :telemetry.execute(@schema_stop, %{duration: duration}, %{
       operation: operation,
-      repo: repo,
+      source: source,
       result: result_status
     })
   end

@@ -9,16 +9,19 @@ database connection, or an external REST / DSL engine — is represented as a
 `%Lotus.Source.Adapter{}` struct that the runner, preflight, cache, and
 introspection modules all accept identically.
 
-`Lotus.Source` provides convenience functions (`resolve!/2`, `source_type/1`,
-`supports_feature?/2`, `hierarchy_label/1`, `query_language/1`,
+`Lotus.Source` is a public facade — not a behaviour. It provides convenience
+functions (`resolve!/2`, `list_sources/0`, `get_source!/1`, `default_source/0`,
+`source_type/1`, `supports_feature?/2`, `hierarchy_label/1`, `example_query/3`,
+`query_language/1`, `editor_config/1`, `limit_query/3`,
 `supported_filter_operators/1`, `prepare_for_analysis/2`) that accept adapter
 structs, source-name strings, or repo modules and resolve lazily as needed.
 
 For SQL databases backed by Ecto, per-dialect adapter modules
 (`Lotus.Source.Adapters.Postgres`, `Lotus.Source.Adapters.MySQL`,
 `Lotus.Source.Adapters.SQLite3`) handle dialect-specific behaviour. External
-adapters for other databases or non-SQL data sources are registered via the
-`:source_adapters` config.
+adapters for other databases or non-SQL data sources are named in their
+`data_sources` entry (`%{adapter: MyAdapter, ...}`) or registered via the
+`:source_adapters` config — see [Registration](#registration).
 
 ## How It Works
 
@@ -32,11 +35,12 @@ The adapter struct carries four fields:
 | `source_type` | `atom()` | Database kind — `:postgres`, `:mysql`, `:sqlite`, `:other`, or any atom an external adapter declares |
 
 When a query is executed, Lotus asks the configured **source resolver** to turn
-a repo name (or module) into an `%Adapter{}` struct. The resolver iterates
-through registered adapters (external first, then built-in per-dialect, then
-the generic Ecto fallback), calling `can_handle?/1` on each until one claims
-the entry. That adapter's `wrap/2` builds the struct, and from that point
-every pipeline stage dispatches through `Adapter` helpers.
+a source name (or module) into an `%Adapter{}` struct. An entry that names its
+adapter — `%{adapter: MyAdapter, ...}`, the canonical form — is handed straight
+to that module's `wrap/2`. Any other entry is offered to every registered
+adapter's `can_handle?/1`, and exactly one must claim it. From that point every
+pipeline stage dispatches through `Lotus.Source.Adapter` helpers, which pass
+`adapter.state` as the first argument to the adapter module's callbacks.
 
 ```
 User calls Lotus.run_statement("SELECT 1", [], repo: "main")
@@ -59,33 +63,69 @@ All pipeline callbacks operate on a `%Lotus.Query.Statement{}`:
 
 ```elixir
 %Lotus.Query.Statement{
-  adapter: MyApp.Adapters.Echo,   # module that owns this text
-  text:    "SELECT * FROM t",     # adapter-native payload (term())
-  params:  [],                    # bound parameter values
+  adapter: MyApp.Adapters.Echo,   # module that owns this body's shape
+  body:    "SELECT * FROM t",     # adapter-native payload (term())
+  params:  [],                    # bound values — list or map
   meta:    %{}                    # adapter-specific metadata
 }
 ```
 
-The `:body` field is deliberately typed `term()` — SQL text for Ecto-backed
-adapters, a JSON body for Elasticsearch, a DSL AST for other engines. The
+The field carrying the query is `:body`, not `:text`. It is deliberately typed
+`term()` — SQL text for Ecto-backed adapters, a decoded JSON map for
+Elasticsearch, a DSL AST for other engines. Core never inspects it. The
 pipeline is a series of pure `statement -> statement` transforms; adapters
 return new structs rather than mutating in place.
 
-Relevant keys inside `:meta`:
+`:params` is a **list** for positional binds, in the order the driver expects,
+or a **map** for engines with named binds (`%{"since" => ~D[2026-01-01]}`),
+where ordering is meaningless. Adapters that inline values into `:body` leave
+it as `[]`.
+
+Build one with `Lotus.Query.Statement.new/2` (`:body` is the only enforced
+key):
+
+```elixir
+statement = Lotus.Query.Statement.new("SELECT * FROM users WHERE id = $1", [42])
+```
+
+Core reserves two `:meta` keys; everything else in the map belongs to the
+adapter:
 
 - `:count_spec` — placed by `apply_pagination/3` when the caller requested
   `count: :exact` and the adapter uses Strategy B (separate count query).
   Shape: `%{query: adapter-native, params: list()}`. Lotus core runs it
   through the same adapter. See "Exact counts" below.
+- `:search_path` — reserved for schema-isolation hints. Callers pass
+  `:search_path` as an option (it reaches `apply_pagination/3` and
+  `execute_query/4` in `opts`); adapters must not repurpose the meta key.
+
+### Pipeline order
+
+Where each callback fires, for a stored query executed through
+`Lotus.run_query/2`:
+
+1. `transform_statement/2` — in `Lotus.Storage.Query.compile/2`, before any
+   `{{var}}` is extracted. `statement.params` is `[]` here.
+2. `substitute_variable/5` / `substitute_list_variable/5` — one call per
+   variable, folded over the statement by the same compile step.
+3. `transform_bound_query/3` — after binding, values now visible.
+4. `apply_filters/3`, then `apply_sorts/3` — filter and sort column names are
+   run through `validate_identifier/3` and operators through
+   `supported_filter_operators/1` before dispatch.
+5. `apply_pagination/3` — sees a statement that already carries filters and
+   sorts.
+6. `sanitize_query/3` — inside `Lotus.Runner.run_statement/3`, after the
+   `:before_query` middleware may have rewritten the statement.
+7. `needs_preflight?/2` → `extract_accessed_resources/2` — visibility preflight.
+8. `execute_query/4` — the driver boundary.
 
 ## Exact counts — two adapter strategies
 
 When the caller requests `count: :exact`, the adapter picks one of two
 strategies to surface the pre-pagination total:
 
-**Strategy A — inline count** (new for engines where count comes back with
-the data). `execute_query/4` includes `:total_count` directly in its result
-map:
+**Strategy A — inline count**, for engines where the count comes back with the
+data. `execute_query/4` includes `:total_count` directly in its result map:
 
 ```elixir
 {:ok, %{columns: [...], rows: [...], num_rows: 3, total_count: 1_247}}
@@ -164,7 +204,26 @@ config :lotus,
 ```
 
 All keys are optional. When omitted, the defaults read from static application
-config.
+config (`Lotus.Source.Resolvers.Static` and
+`Lotus.Visibility.Resolvers.Static`).
+
+`:allow_unrestricted_resources` is also a **reserved key inside a source's own
+config map**, where it overrides the global flag for that source in both
+directions — `true` opts a single source in under a strict global default,
+`false` keeps one source locked down under a permissive one:
+
+```elixir
+config :lotus,
+  allow_unrestricted_resources: false,
+  data_sources: %{
+    "main"   => MyApp.Repo,
+    "search" => %{
+      adapter: MyApp.Adapters.Elasticsearch,
+      url: "http://localhost:9200",
+      allow_unrestricted_resources: true
+    }
+  }
+```
 
 ## Building a Custom Adapter
 
@@ -174,20 +233,28 @@ Two paths, depending on whether your data source uses Ecto.
 
 Use this when Ecto already ships a driver for the database (e.g. `Tds` for
 MSSQL) but Lotus does not ship a built-in dialect for it.
+[`lotus_clickhouse`](https://github.com/elixir-lotus/lotus_clickhouse) is a
+shipped example of this path.
 
 1. Write a **Dialect module** implementing `Lotus.Source.Adapters.Ecto.Dialect`.
    The dialect encapsulates all SQL-specific behaviour (dialect-specific
    placeholder syntax, identifier quoting, EXPLAIN variant, introspection
-   queries, built-in deny rules).
+   queries, built-in deny rules). `Lotus.Source.Adapters.Ecto.Dialect` is a
+   **public, documented contract** — external SQL adapters are expected to
+   implement it rather than the universal behaviour directly.
 2. Write an **adapter module** that pulls in the shared Ecto machinery via
    `use Lotus.Source.Adapters.Ecto, dialect: ...`. The macro injects default
    implementations for every `Lotus.Source.Adapter` callback, delegating to
    the dialect where appropriate. All callbacks are `defoverridable`.
-3. **Register** via `:source_adapters`.
+3. **Register** the adapter module in `:source_adapters`. The macro-generated
+   `can_handle?/1` claims any repo whose `__adapter__/0` equals your dialect's
+   `ecto_adapter/0`, so `data_sources` entries stay plain repo modules.
 
 ```elixir
 defmodule MyApp.Dialects.MSSQL do
   @behaviour Lotus.Source.Adapters.Ecto.Dialect
+
+  alias Lotus.Query.Statement
 
   # -- Identity ---------------------------------------------------------------
   @impl true
@@ -225,6 +292,15 @@ defmodule MyApp.Adapters.MSSQL do
 end
 ```
 
+The macro asserts at compile time that `:dialect` is a module implementing
+`Lotus.Source.Adapters.Ecto.Dialect` (skipped when the dialect is still being
+co-compiled, where Elixir's own `@behaviour` warnings catch mismatches).
+
+Two SQL primitives that were universal callbacks before v1 —
+`param_placeholder/3` and `limit_offset_placeholders/2` — live on the dialect
+only. They are prepared-statement details, and nothing outside the Ecto path
+calls them.
+
 #### Dialect callbacks
 
 Callbacks are organized by category. All required callbacks must be
@@ -259,23 +335,35 @@ ignores a caller-supplied `:search_path` for that source.
 | `describe_table/3` | Introspection |
 | `resolve_table_namespace/3` | Introspection |
 
-**Optional** (defaults provided by `Lotus.Source.Adapters.Ecto`):
+**Optional** (defaults supplied by `Lotus.Source.Adapters.Ecto`) — the exact
+list in `@optional_callbacks` on `Lotus.Source.Adapters.Ecto.Dialect`:
 
-| Callback | Category | Default |
+| Callback | Category | Default when not implemented |
 |---|---|---|
-| `supports_feature?/1` | Identity | Returns `false` |
+| `set_statement_timeout/2` | Transaction & session | Not called; Lotus relies on the driver-level `:timeout` passed to `execute_query/4` |
+| `set_search_path/2` | Transaction & session | Not called; a caller-supplied `:search_path` is ignored for that source |
+| `supports_feature?/1` | Identity | `false` for every feature |
 | `hierarchy_label/0` | Identity | `"Tables"` |
 | `example_query/2` | Identity | Generic `SELECT value_column FROM table` |
-| `editor_config/0` | Editor | Empty config (`%{language: "sql", keywords: [], ...}`) |
-| `extract_accessed_resources/2` | Visibility | Dialect-specific SQL analysis via `EXPLAIN` + fallback |
+| `editor_config/0` | Editor | `%{language: "sql", keywords: [], types: [], functions: [], context_boundaries: []}` |
+| `ai_context/0` | AI | Generic-SQL context synthesized from `query_language/0`, with an empty `:error_patterns` list |
+| `extract_accessed_resources/2` | Visibility | `{:unrestricted, "dialect ... does not implement extract_accessed_resources/2"}` — visibility is **not** enforced until you implement it |
+| `needs_preflight?/1` | Visibility | The Ecto adapter's SQL heuristic: `false` for statements starting with `EXPLAIN`, `SHOW` or `PRAGMA`, `true` otherwise |
 | `transform_statement/1` | Statement rewriting | Statement unchanged |
-| `needs_preflight?/1` | Visibility | Dialect-specific (skips `EXPLAIN`, `SHOW`, `PRAGMA`) |
-| `db_type_to_lotus_type/1` | Type mapping | Maps common SQL types to Lotus types |
+| `db_type_to_lotus_type/1` | Type mapping | `:text` |
+
+Statement-carrying dialect callbacks (`apply_filters/2`, `apply_sorts/2`,
+`query_plan/3`, `limit_query/2`, `transform_statement/1`,
+`needs_preflight?/1`, `extract_accessed_resources/2`) take and return
+`%Lotus.Query.Statement{}`, where `statement.body` is always SQL text and
+`statement.params` the bound values in driver order.
 
 ### B. Non-Ecto adapter (REST, document store, DSL)
 
 Use this for data sources that do not use Ecto at all — Elasticsearch, Mongo,
-ClickHouse's native DSL, a REST API.
+a REST API.
+[`lotus_elasticsearch`](https://github.com/elixir-lotus/lotus_elasticsearch)
+is a shipped example of this path.
 
 Implement `Lotus.Source.Adapter` directly. Lotus ships a first-party reference
 implementation in its own test suite at
@@ -283,23 +371,32 @@ implementation in its own test suite at
 an in-memory DSL-map adapter that exercises the full contract. A copy of it
 makes a useful starting point for a new adapter.
 
-Below is an abbreviated stub showing the shape of every required callback —
-see the in-memory adapter for full implementations and the DSL-to-rows
-executor.
+The compiler only demands the nine callbacks that have no default —
+`execute_query/4`, `transaction/3`, `list_tables/3`, `describe_table/3`,
+`builtin_denies/1`, `health_check/1`, `disconnect/1`, `format_error/2` and
+`source_type/1`. Everything else is optional with a documented default (see
+[Required vs Optional Callbacks](#required-vs-optional-callbacks)), but a
+useful adapter implements well beyond the minimum — in particular
+`extract_accessed_resources/2`, without which every statement is blocked by
+preflight unless the operator opts the source out of visibility enforcement.
+
+Below is an abbreviated stub — see the in-memory adapter for full
+implementations and the DSL-to-rows executor.
 
 ```elixir
 defmodule MyApp.Adapters.Echo do
   @behaviour Lotus.Source.Adapter
 
-  alias Lotus.Query.Statement
-
   # -- Registration -----------------------------------------------------------
+  # `wrap/2` receives the whole `data_sources` entry and returns the struct.
+  # `can_handle?/1` is only consulted for entries that do NOT name their
+  # adapter module — see "Registration" below.
   @impl true
   def can_handle?(%{adapter: :echo}), do: true
   def can_handle?(_), do: false
 
   @impl true
-  def wrap(name, %{adapter: :echo} = config) do
+  def wrap(name, config) when is_binary(name) and is_map(config) do
     %Lotus.Source.Adapter{
       name: name,
       module: __MODULE__,
@@ -309,15 +406,16 @@ defmodule MyApp.Adapters.Echo do
   end
 
   # -- Query execution --------------------------------------------------------
-  # The :statement argument is whatever query language the source understands
-  # (SQL, JSON DSL, Cypher, etc.). Return a result map with :columns, :rows,
-  # :num_rows — Lotus wraps it into %Lotus.Result{}.
+  # Core unwraps the statement here: `body` is `statement.body` and `params`
+  # is `statement.params`, whatever your query language makes of them. Return
+  # a result map with :columns, :rows, :num_rows (plus :total_count when you
+  # use the inline count strategy) — Lotus wraps it into %Lotus.Result{}.
   @impl true
-  def execute_query(_state, statement, params, _opts) do
+  def execute_query(_state, body, params, _opts) do
     {:ok,
      %{
        columns: ["statement", "param_count"],
-       rows: [[inspect(statement), length(params)]],
+       rows: [[inspect(body), length(params)]],
        num_rows: 1
      }}
   end
@@ -392,31 +490,57 @@ defmodule MyApp.Adapters.Echo do
 end
 ```
 
-Register it and use it like any other source:
+Register it and use it like any other source. The canonical entry names the
+adapter module outright, so no `:source_adapters` registration is needed. This
+adapter does not implement `extract_accessed_resources/2`, so preflight would
+block every statement — the source opts out of visibility enforcement
+explicitly:
 
 ```elixir
 config :lotus,
-  source_adapters: [MyApp.Adapters.Echo],
-  data_sources: %{"echo" => %{adapter: :echo}}
+  data_sources: %{
+    "echo" => %{
+      adapter: MyApp.Adapters.Echo,
+      allow_unrestricted_resources: true
+    }
+  }
 
 {:ok, result} = Lotus.run_statement("hello", [1, 2, 3], repo: "echo")
 # result.rows #=> [["\"hello\"", 3]]
 ```
 
+A real adapter implements `extract_accessed_resources/2` instead of opting
+out.
+
 ## Required vs Optional Callbacks
 
-The full `Lotus.Source.Adapter` contract has ~30 callbacks. Most non-SQL
-adapters implement every one of them; the optional list is for adapters that
-legitimately cannot support a feature.
+The full `Lotus.Source.Adapter` contract is 41 callbacks, nine of which are
+required. Most non-SQL adapters implement far more than the minimum; the
+optional list is for adapters that legitimately cannot support a feature.
 
-**Optional with documented defaults** — omit when not applicable:
+**Required** — no default; the compiler warns if you omit one:
+
+| Callback | Purpose |
+|---|---|
+| `execute_query(state, body, params, opts)` | The driver boundary. Returns `{:ok, %{columns:, rows:, num_rows:}}`, optionally with `:total_count`. |
+| `transaction(state, fun, opts)` | Run `fun` (arity 1, receives `state`) inside a transaction. |
+| `list_tables(state, schemas, opts)` | `{:ok, [{schema_or_nil, table}]}`. `opts` carries `:include_views`. |
+| `describe_table(state, schema, table)` | `{:ok, [column_def]}` — `%{name, type, nullable, default, primary_key}`. |
+| `builtin_denies(state)` | Always-hidden relations, as `{schema_pattern, table_pattern}` tuples. |
+| `health_check(state)` | `:ok` or `{:error, reason}`. |
+| `disconnect(state)` | Release resources. |
+| `format_error(state, error)` | Driver error → human-readable string. |
+| `source_type(state)` | The source-type atom. Open — any atom your adapter declares. |
+
+**Optional with documented defaults** — omit when not applicable. This table
+mirrors `@optional_callbacks` in `Lotus.Source.Adapter`:
 
 | Callback | Default | When to implement |
 |---|---|---|
-| `sanitize_query/3` | `:ok` | When you need to block specific statement shapes (read-only enforcement, destructive-op blocking). |
-| `transform_statement/2` | statement unchanged | Dialect-specific rewrites applied **before** variable binding. |
+| `sanitize_query/3` | `:ok` | When you need to block specific statement shapes (read-only enforcement, destructive-op blocking). `opts` carries `:read_only`. |
+| `transform_statement/2` | statement unchanged | Language-specific rewrites of the stored template, applied **before** `{{var}}` placeholders are extracted (`params` is still `[]`). |
 | `transform_bound_query/3` | statement unchanged | Rewrites applied **after** variable binding (when values are visible). |
-| `apply_pagination/3` | statement unchanged | Support `window: [limit:, offset:, count:]` in your source's native syntax. |
+| `apply_pagination/3` | statement unchanged | Page a statement in your source's native syntax. `opts` carries `:limit` (required), `:offset`, `:count` and `:search_path`. |
 | `needs_preflight?/2` | `true` | Skip preflight for read-only introspection statements (`EXPLAIN`, `SHOW`, `PRAGMA`, etc.). |
 | `substitute_variable/5` | `{:error, :unsupported}` | Support `{{var}}` in stored queries. **Security boundary — see below.** |
 | `substitute_list_variable/5` | `{:error, :unsupported}` | Support list variables. |
@@ -438,10 +562,71 @@ legitimately cannot support a feature.
 | `quote_identifier/2` | identifier unchanged | Quote an identifier. Languages without quoting omit it. |
 | `apply_filters/3` | statement unchanged | Bake runtime filters into the statement. |
 | `apply_sorts/3` | statement unchanged | Bake runtime sorts into the statement. |
-| `query_plan/3` | `{:ok, nil}` | Execution plan, when the engine exposes one. |
+| `query_plan/3` | `{:ok, nil}` | Execution plan, when the engine exposes one. Takes `(state, %Statement{}, opts)` — the statement carries its own bound values in `:params`, there is no separate params argument. Returning `{:ok, nil}` is legitimate for an engine with no plan. |
 | `supports_feature?/2` | `false` | Declare capabilities. See `t:Lotus.Source.Adapter.feature/0`. |
 | `db_type_to_lotus_type/2` | `:text` | Map engine column types onto Lotus value types. |
 | `editor_config/1` | empty editor shape | Keywords, types and functions for editor completions. |
+| `query_language/1` | `"sql"` | Declare the `family:dialect` identifier for your language. See [Query Language Identifiers](#query-language-identifiers). |
+| `can_handle?/1` | not consulted | Claim a `data_sources` entry that does not name your module. |
+| `wrap/2` | — | Build the `%Adapter{}` from a `data_sources` entry. Required in practice: the resolver calls it for every entry it routes to your adapter. |
+
+Two notes on that table. `can_handle?/1` and `wrap/2` are optional to the
+compiler because an adapter can be constructed by hand (or by a custom
+resolver), but any adapter registered through `:data_sources` needs `wrap/2`.
+And a default that returns "nothing" is not always the safe choice:
+`extract_accessed_resources/2` defaulting to `{:unrestricted, _}` means an
+adapter that omits it enforces no visibility at all.
+
+## Universal Callbacks
+
+Five callbacks exist so non-SQL sources reach parity with the SQL path
+instead of being special-cased in core:
+
+- **`validate_statement(state, statement, opts)`** — can the engine parse and
+  prepare this statement without running it? SQL adapters implement it with
+  `EXPLAIN`; Elasticsearch uses `_validate`; an engine with no such endpoint
+  omits the callback and inherits `:ok` (trust-on-execute). Callers
+  neutralize unbound `{{var}}` placeholders first — adapters see the
+  statement as-is.
+- **`parse_qualified_name(state, name)`** — `{:ok, [component]}`, coarsest
+  first, leaf last, at most two components. `"public.users"` →
+  `["public", "users"]`; a flat index name → `["logs-2025-01"]`.
+- **`validate_identifier(state, kind, value)`** — `kind` is `:schema`,
+  `:table` or `:column`. Core calls this on filter and sort column names
+  before dispatching them to `apply_filters/3` / `apply_sorts/3`; an
+  identifier your adapter rejects raises `ArgumentError`. The default is
+  permissive, so declare your grammar if user-supplied names reach your
+  statement builder.
+- **`supported_filter_operators(state)`** — the `Lotus.Query.Filter`
+  operators your `apply_filters/3` actually handles. Core raises
+  `Lotus.UnsupportedOperatorError` on anything outside the list rather than
+  degrading silently, and `Lotus.Source.supported_filter_operators/1` gates
+  the operator dropdown per source. The default is every operator in
+  `Lotus.Query.Filter.operators/0`, so narrow it if you cannot implement them
+  all.
+- **`needs_preflight?(state, statement)`** — `false` for read-only
+  introspection statements that touch no visible relation. Core no longer
+  sniffs SQL prefixes; this callback owns the skip path. The built-in Ecto
+  adapter keeps the `EXPLAIN` / `SHOW` / `PRAGMA` heuristic internally.
+
+## Declaring Features
+
+`supports_feature?(state, feature)` answers capability questions from core and
+the built-in UI. The feature type is open — answer `false` for anything you do
+not recognise (a catch-all clause) — but these atoms have defined meaning:
+
+| Feature | Meaning |
+|---|---|
+| `:schema_hierarchy` | The source has a real namespace level above tables, so the UI shows a schema picker. False for flat sources (SQLite, Elasticsearch) and for MySQL, whose databases are configured per source. |
+| `:search_path` | The source honours a session-level namespace search path, so a caller-supplied `:search_path` is meaningful. |
+| `:arrays` | The query language has a first-class array type, so a list variable can bind as one value instead of N placeholders. |
+| `:json` | The source can store and query JSON documents; the editor offers JSON-aware affordances. |
+| `:make_interval` | SQL-specific: the engine has `make_interval`, so `INTERVAL '{{n}} days'` can be rewritten into a parameterized call instead of inlining the value. |
+| `:dynamic_options` | A query against this source can return a flat list of values suitable for a variable's dropdown, so the UI offers query-based option population. True for every SQL source; false where the language returns shaped documents rather than rows (Elasticsearch), and the user types the options by hand. |
+
+`source_type/1` is likewise an open atom: `:postgres`, `:mysql`, `:sqlite`,
+`:other`, or whatever your adapter declares (`:clickhouse`,
+`:elasticsearch`). Core never matches on an exhaustive list.
 
 ## The Security Boundaries
 
@@ -450,9 +635,14 @@ injection or authorization gaps.
 
 ### 1. `substitute_variable/5` — adapter owns injection safety
 
-When a stored query contains `{{var_name}}`, Lotus calls your adapter's
-`substitute_variable/5` with the already-cast value. The adapter decides how
-to embed it:
+When a stored query contains `{{var_name}}`, `Lotus.Storage.Query.compile/2`
+folds each variable through your adapter — `substitute_variable(state,
+statement, var_name, value, type)` for a scalar, `substitute_list_variable(
+state, statement, var_name, values, type)` for a list — and each call returns
+`{:ok, %Statement{}}` or `{:error, reason}`. The value arrives already cast by
+core; `type` is the resolved Lotus type atom (`:integer`, `:uuid`, …), which
+you may ignore. Core never touches placeholders or param arrays itself. The
+adapter decides how to embed the value:
 
 - **SQL prepared-statement adapters** (`Lotus.Source.Adapters.Ecto`) append a
   placeholder (`$1`, `?`, …) to `statement.body` and push the value into
@@ -638,7 +828,7 @@ context boundaries for the web UI's editor:
 @impl true
 def editor_config(_state) do
   %{
-    language: "sql",
+    language: "sql:clickhouse",
     keywords: ~w(PREWHERE FINAL SAMPLE SETTINGS FORMAT ENGINE),
     types:    ~w(UInt8 UInt64 Float64 Array LowCardinality Nullable),
     functions: [
@@ -651,16 +841,62 @@ def editor_config(_state) do
 end
 ```
 
-Fields:
+Required fields:
 
-- `language` — parser to use on the JS side (`"sql"` for all SQL dialects, or
-  your own language identifier for custom editors)
-- `keywords` — dialect-specific keywords merged with standard keywords
-- `types` — dialect-specific type names
-- `functions` — name + description + argument template
+- `language` — the query-language identifier (`"sql:postgres"`,
+  `"json:elasticsearch"`, …). Drives CodeMirror language selection.
+- `keywords`, `types` — flat lists feeding the "complete any keyword anywhere"
+  fallback (used when `:context_schema` is absent) and the AI prompt pipeline.
+- `functions` — `%{name, detail, args}` entries for signature help.
 - `context_boundaries` — keywords that mark clause boundaries for
   context-aware completions (e.g. ClickHouse's `PREWHERE` is treated like
-  `WHERE` for column suggestions)
+  `WHERE` for column suggestions). SQL-only; ignored for JSON DSLs.
+
+Optional fields:
+
+- `dialect_spec` — SQL tokenizer options, forwarded verbatim (camelCased) to
+  CodeMirror 6's `SQLDialect.define()`, so an external SQL adapter reaches
+  tokenization parity with the built-in grammars. Only meaningful for SQL
+  languages; an adapter that sits on a built-in CM6 dialect (Postgres, MySQL,
+  SQLite, MSSQL, MariaSQL, Cassandra, PLSQL) omits it and gets that grammar.
+  Keys mirror `@codemirror/lang-sql`'s `SQLDialectSpec` — see
+  `t:Lotus.Source.Adapter.dialect_spec/0`.
+
+  ```elixir
+  dialect_spec: %{
+    identifier_quotes: "`",
+    hash_comments: true,
+    double_quoted_strings: false,
+    case_insensitive_identifiers: true
+  }
+  ```
+
+- `context_schema` — structural schema for a JSON DSL, driving parent-aware
+  completion (only `must` / `should` / `filter` inside Elasticsearch's `bool`,
+  field names inside `match`). Omit it for SQL adapters; omitting it in a JSON
+  DSL adapter degrades the editor to flat keyword suggestions at every key
+  position. `:children` values are either a list of valid child keys or one of
+  the marker atoms `:fields`, `:array_of_query`, `:named_aggregation`,
+  `:range_operators` — see `t:Lotus.Source.Adapter.context_schema/0`.
+
+  ```elixir
+  context_schema: %{
+    root: ["query", "aggs", "sort"],
+    children: %{
+      "query" => ["match", "term", "bool"],
+      "bool" => ["must", "should", "filter"],
+      "must" => :array_of_query,
+      "match" => :fields
+    },
+    value_literals: %{"order" => ["asc", "desc"]}
+  }
+  ```
+
+Unknown top-level keys are dropped at the dispatch layer, and `:keywords`
+(2000), `:types` (2000), `:functions` (500), `:context_schema.root` (200) and
+`:context_schema.children` (500) are truncated past those limits with a
+one-time `Logger.warning/1` per adapter — a large payload otherwise ships to
+every editor session.
 
 For large function lists, extract into a dedicated `EditorConfig` submodule
 (see `lotus_clickhouse` for an example with 300+ functions).
@@ -745,28 +981,51 @@ established meaning and are kept for recognizability:
 
 ## Registration
 
-Custom adapters are registered via `:source_adapters`:
+A `:data_sources` entry takes one of three forms, and the form decides how the
+default resolver finds the adapter.
+
+**1. `%{adapter: Module, ...}` — the canonical form.** The named module is used
+directly: no probing, no ambiguity, and the whole map is handed to its
+`wrap/2` as state. Prefer it. The module must be loaded and export `wrap/2`,
+or resolution raises with the offending entry.
 
 ```elixir
 config :lotus,
-  source_adapters: [MyApp.Adapters.MSSQL, MyApp.Adapters.Elasticsearch]
+  data_sources: %{
+    "search" => %{adapter: MyApp.Adapters.Elasticsearch, url: "http://localhost:9200"}
+  }
 ```
 
-**Resolution order.** When the resolver wraps a `:data_sources` entry:
+**2. An `Ecto.Repo` module.** Matched against the built-in Ecto adapters by the
+repo's Ecto adapter — `Ecto.Adapters.Postgres` → `Lotus.Source.Adapters.Postgres`,
+`Ecto.Adapters.MyXQL` → `MySQL`, `Ecto.Adapters.SQLite3` → `SQLite3` — falling
+back to the generic `Lotus.Source.Adapters.Ecto` with the `Default` dialect.
 
-1. External adapters (from `:source_adapters`), in list order
-2. Built-in per-dialect adapters (`Adapters.Postgres`, `Adapters.MySQL`,
-   `Adapters.SQLite3`)
-3. Generic Ecto fallback (`Adapters.Ecto` with `Default` dialect)
+**3. Any other term** (a map with no adapter module, a tuple, a tagged atom).
+Offered to every module in `:source_adapters` plus the built-in Ecto adapters
+via `can_handle?/1`:
 
-The first adapter whose `can_handle?/1` returns `true` wins. External adapters
-can override built-in handling for a given Ecto adapter if needed.
+```elixir
+config :lotus,
+  source_adapters: [MyApp.Adapters.MSSQL, MyApp.Adapters.Echo]
+```
+
+**Exactly one adapter must claim the entry.** If several return `true` from
+`can_handle?/1`, resolution **raises** rather than picking the first — the
+error names the competing modules and tells the operator to settle it by
+naming the adapter in the entry. If none claims it and the entry is an atom,
+it falls back to the Ecto adapter; if none claims a non-atom entry,
+resolution raises.
+
+Probing is a convenience, not a priority list. An adapter whose
+`can_handle?/1` is broad will collide with another one sooner or later — form
+1 is the way out.
 
 ## Custom Resolvers
 
 Both extension points feeding the adapter pipeline are pluggable behaviours:
 
-- `Lotus.Source.Resolver` — resolves repo opts into `%Adapter{}` structs
+- `Lotus.Source.Resolver` — resolves a source name or module into an `%Adapter{}` struct
 - `Lotus.Visibility.Resolver` — loads schema / table / column visibility rules
 
 Both ship with static defaults (`Lotus.Source.Resolvers.Static`,
@@ -782,7 +1041,16 @@ See the [Custom Resolvers guide](custom-resolvers.md) for contracts, full
 - [`test/support/in_memory_adapter.ex`](../test/support/in_memory_adapter.ex)
   — first-party non-SQL reference adapter (DSL-map payloads, capability gates,
   ai_context) shipped in Lotus's own test suite.
-- [`lotus_elasticsearch`](https://github.com/elixir-lotus/lotus_elasticsearch) —
-  real-world non-Ecto adapter against the Elasticsearch Query DSL.
 - [`lotus_clickhouse`](https://github.com/elixir-lotus/lotus_clickhouse) —
-  external Ecto-backed adapter with a large `editor_config`.
+  worked example of **path A**: an Ecto-backed adapter speaking SQL over HTTP,
+  built from a dialect module plus a one-line
+  `use Lotus.Source.Adapters.Ecto`, with a large `editor_config` and a
+  `dialect_spec`.
+- [`lotus_elasticsearch`](https://github.com/elixir-lotus/lotus_elasticsearch) —
+  worked example of **path B**: a non-SQL adapter over the Elasticsearch JSON
+  Query DSL. Shows inlined (escaped) variable substitution, the inline count
+  strategy, `{:unrestricted, _}` visibility, and a `context_schema` for the
+  editor.
+
+Both packages were written against this guide; if something here disagrees
+with `Lotus.Source.Adapter`, the behaviour module is the authority.

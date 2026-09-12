@@ -11,22 +11,39 @@ with monitoring tools like Phoenix LiveDashboard, AppSignal, Datadog, and others
 | Event                         | Measurements                   | Metadata                                      |
 |-------------------------------|--------------------------------|-----------------------------------------------|
 | `[:lotus, :query, :start]`    | `system_time`                  | `source`, `statement`, `context`                         |
-| `[:lotus, :query, :stop]`     | `duration`, `row_count`        | `source`, `statement`, `context`, `result`               |
+| `[:lotus, :query, :stop]`     | `duration`, `row_count`        | `source`, `statement`, `context`, `row_count`, `result`  |
 | `[:lotus, :query, :exception]`| `duration`                     | `source`, `statement`, `context`, `kind`, `reason`, `stacktrace` |
 
 Duration is measured in native time units. Use `System.convert_time_unit/3` to
-convert to milliseconds or microseconds.
+convert to milliseconds or microseconds. On `:stop`, `row_count` appears in both
+the measurements and the metadata — it is the same value.
 
 The `source` field is the data source name (`"main"`, `"warehouse"`), not a
 repo module. The `statement` field is a `%Lotus.Query.Statement{}`: read
 `statement.body` for the adapter-native payload (SQL text for Ecto-backed
 sources, a JSON object or AST for others) and `statement.params` for the bound
-values.
+values. Pre-v1 `:repo`, `:sql` and `:params` metadata keys are gone.
 
 The `context` field carries whatever value the caller passed as the `:context`
 option to `Lotus.run_statement/3` or `Lotus.run_query/2`. It defaults to `nil` when
 not provided. Typical uses include request IDs, controller names, or
-OpenTelemetry span contexts for trace correlation.
+OpenTelemetry span contexts for trace correlation. The `:scope` option is **not**
+in the metadata — it is caller identity used for cache keys and visibility, not
+instrumentation.
+
+The events bracket the whole `Lotus.Runner` pipeline, so `:start` fires before
+middleware, sanitization and preflight run. Any failure among those — a halted
+`:before_query` plug, a denied table, a driver error — ends the run at
+`:exception`, not `:stop`.
+
+Because Lotus turns those failures into `{:error, reason}` rather than letting
+them raise, the `:exception` metadata is uniform: `kind` is always `:error`,
+`reason` is the `{:error, reason}` tuple the caller receives, and `stacktrace`
+is `[]`. Match on `reason` rather than expecting an exception struct.
+
+Query telemetry is emitted from the runner, which sits **inside** the result
+cache. A query served from cache emits no `[:lotus, :query, *]` events at all;
+`[:lotus, :cache, :hit]` is the event to count for those.
 
 ### Cache Operations
 
@@ -44,7 +61,13 @@ OpenTelemetry span contexts for trace correlation.
 | `[:lotus, :schema, :introspection, :stop]`  | `duration`    | `operation`, `repo`, `result` |
 
 The `operation` field is one of: `:list_schemas`, `:list_tables`,
-`:get_table_schema`, `:get_table_stats`, or `:list_relations`.
+`:describe_table`, `:get_table_stats`, or `:list_relations`.
+
+The `result` field is `:ok` or `:error`.
+
+> **Note:** these two events kept the metadata key `:repo`, unlike the query
+> events which renamed it to `:source`. The value is the same thing in both —
+> the data source *name* (`"main"`), not an Ecto repo module.
 
 ## Setup
 
@@ -97,7 +120,8 @@ defmodule MyApp.LotusInstrumentation do
       "Lotus query failed",
       duration_ms: duration_ms,
       reason: inspect(metadata.reason),
-      source: metadata.source
+      source: metadata.source,
+      statement: inspect(metadata.statement.body)
     )
   end
 
