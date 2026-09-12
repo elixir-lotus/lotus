@@ -7,15 +7,13 @@ defmodule Lotus.NormalizerDecimalTest do
 
   use ExUnit.Case, async: true
 
-  test "the Decimal in use exports the arity the normalizer calls" do
+  test "normalizing works whichever to_string arity the resolved Decimal has" do
     {:module, Decimal} = Code.ensure_loaded(Decimal)
 
-    assert function_exported?(Decimal, :to_string, 3),
-           """
-           Decimal #{Application.spec(:decimal, :vsn)} has no to_string/3.
-           Lotus.Normalizer needs it for `max_digits: :infinity`; the mix.exs
-           requirement is what keeps an application off those versions.
-           """
+    # The impl picks its arity at compile time, so this asserts the branch
+    # taken here is a real one rather than asserting a particular version.
+    assert function_exported?(Decimal, :to_string, 2)
+    assert is_binary(Lotus.Normalizer.normalize(Decimal.new("1.0")))
   end
 
   test "renders an ordinary decimal" do

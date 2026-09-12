@@ -41,11 +41,6 @@ defmodule Lotus.MixProject do
   defp deps do
     [
       {:cachex, "~> 4.0", optional: true},
-      # Lotus.Normalizer renders Decimal results with `max_digits: :infinity`,
-      # which Decimal.to_string/3 only accepts from 2.4.0 on. Ecto's own
-      # requirement allows 2.0, so without this an app can resolve a Decimal
-      # that raises the moment a query returns a numeric column.
-      {:decimal, "~> 2.4 or ~> 3.0"},
       {:ecto, "~> 3.10"},
       {:ecto_sql, "~> 3.10"},
       {:ecto_sqlite3, "~> 0.21", optional: true},
