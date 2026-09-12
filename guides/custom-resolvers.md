@@ -2,14 +2,14 @@
 
 Lotus exposes two supported extension points that let you replace how sources and visibility rules are loaded at runtime:
 
-- `Lotus.Source.Resolver` — turns repo names (or modules) into `%Lotus.Source.Adapter{}` structs.
+- `Lotus.Source.Resolver` — turns source names (or modules) into `%Lotus.Source.Adapter{}` structs.
 - `Lotus.Visibility.Resolver` — loads schema, table, and column visibility rules for a given source.
 
 Both are small, stable behaviours. Lotus ships with default static implementations (`Lotus.Source.Resolvers.Static` and `Lotus.Visibility.Resolvers.Static`) that read from application configuration — which is all most applications need. When you need runtime dynamism, custom resolvers let you source this data from anywhere without forking Lotus.
 
 ## When to Use a Custom Resolver
 
-The default static resolvers load configuration at compile time and cache it in `:persistent_term`. That's ideal for applications whose sources and rules never change after boot. Consider a custom resolver when any of the following apply:
+The default static resolvers read application configuration, which `Lotus.Config` validates once and caches in `:persistent_term`. That's ideal for applications whose sources and rules never change after boot. Consider a custom resolver when any of the following apply:
 
 ### Custom `Source.Resolver`
 
@@ -49,13 +49,13 @@ When omitted, the defaults read from `:data_sources`, `:schema_visibility`, `:ta
 
 ## The `Source.Resolver` Behaviour
 
-A source resolver turns query options (`repo_opt`, `fallback`) into `%Lotus.Source.Adapter{}` structs. It also enumerates available sources for schema discovery and admin tooling.
+A source resolver turns query options (`source_opt`, `fallback`) into `%Lotus.Source.Adapter{}` structs. It also enumerates available sources for schema discovery and admin tooling.
 
 ### Callbacks
 
 ```elixir
 @callback resolve(
-            repo_opt :: nil | String.t() | module(),
+            source_opt :: nil | String.t() | module(),
             fallback :: nil | String.t() | module()
           ) :: {:ok, Lotus.Source.Adapter.t()} | {:error, term()}
 
@@ -70,24 +70,37 @@ A source resolver turns query options (`repo_opt`, `fallback`) into `%Lotus.Sour
 
 | Callback | Returns | Used By |
 |---|---|---|
-| `resolve/2` | `{:ok, %Adapter{}}` or `{:error, term()}` | Query execution (`Lotus.run_statement/3`, `Lotus.run_query/2`) |
+| `resolve/2` | `{:ok, %Adapter{}}` or `{:error, :not_found}` | Query execution (`Lotus.run_statement/3`, `Lotus.run_query/2`) |
 | `list_sources/0` | `[%Adapter{}]` | Schema discovery, admin UIs |
 | `get_source!/1` | `%Adapter{}` (raises on missing) | Ad-hoc lookups |
 | `list_source_names/0` | `[String.t()]` | Error messages, admin UIs |
 | `default_source/0` | `{name, %Adapter{}}` | Fallback when no repo is specified |
 
+> ### Return `{:error, :not_found}` on failure {: .warning}
+>
+> `Lotus.Source.resolve!/2` matches exactly two shapes: `{:ok, %Adapter{}}` and `{:error, :not_found}` — the latter becomes an `ArgumentError` naming the configured sources (from your `list_source_names/0`). Any other error tuple raises a `CaseClauseError` instead of that message.
+
 ### Resolution Priority
 
 The default resolver (`Lotus.Source.Resolvers.Static`) follows this priority inside `resolve/2`:
 
-1. `repo_opt` as string name — lookup in `data_sources`, wrap in adapter
-2. `repo_opt` as module — reverse lookup (find name for module), wrap in adapter
+1. `source_opt` as string name — lookup in `data_sources`, wrap in adapter
+2. `source_opt` as module — reverse lookup (find name for module), wrap in adapter
 3. `fallback` as string name — lookup
 4. `fallback` as module — reverse lookup
 5. Both `nil` — use the configured `default_source`
-6. Not found — `{:error, :not_found}`
+6. Otherwise — `{:error, :not_found}`
 
-Custom implementations are free to adopt a different priority but should accept the same arguments so the public API (`Lotus.run_statement/3`, `Lotus.run_query/2`, etc.) continues to work without changes.
+Note step 6: when either position named something that could not be resolved, the static resolver refuses rather than falling back to the default source. A typo in a saved query's `data_source` would otherwise quietly return rows from a different database. Custom implementations are free to adopt a different priority, but should keep that property and accept the same arguments so the public API (`Lotus.run_statement/3`, `Lotus.run_query/2`, etc.) continues to work without changes.
+
+### Building the `%Adapter{}`
+
+Whatever your resolver's lookup strategy, the struct it returns is built by an adapter module's `wrap/2`:
+
+- `Lotus.Source.Adapters.Ecto.wrap/2` for an `Ecto.Repo` module — it picks the right per-dialect adapter (`Adapters.Postgres`, `MySQL`, `SQLite3`) from the repo's Ecto adapter.
+- Your own adapter's `wrap/2` for a non-Ecto source, e.g. `MyApp.Adapters.Elasticsearch.wrap("search", %{url: "http://localhost:9200"})`.
+
+See the [Source Adapters guide](source-adapters.md) for the adapter contract itself.
 
 ### Example: Agent-backed `Source.Resolver`
 
@@ -131,13 +144,14 @@ defmodule MyApp.AgentSourceResolver do
   # ---------------------------------------------------------------------------
 
   @impl true
-  def resolve(repo_opt, fallback) do
+  def resolve(source_opt, fallback) do
     cond do
-      is_binary(repo_opt) -> lookup_by_name(repo_opt)
-      repo_module?(repo_opt) -> lookup_by_module(repo_opt)
+      is_binary(source_opt) -> lookup_by_name(source_opt)
+      repo_module?(source_opt) -> lookup_by_module(source_opt)
       is_binary(fallback) -> lookup_by_name(fallback)
       repo_module?(fallback) -> lookup_by_module(fallback)
-      true -> default_or_error()
+      is_nil(source_opt) and is_nil(fallback) -> default_or_error()
+      true -> {:error, :not_found}
     end
   end
 

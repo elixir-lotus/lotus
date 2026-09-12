@@ -1,118 +1,146 @@
 # Schema Introspection
 
-Lotus provides powerful schema introspection capabilities for exploring database structure across multiple database types and schemas. This guide covers how to discover tables, inspect table schemas, and gather statistics about your data.
+Lotus can explore the structure of every configured data source: its
+namespaces, its tables and views, the columns of a table, and basic
+statistics. This guide covers the discovery API, the options every
+discovery call accepts, and how visibility, caching and middleware apply
+to the results.
 
-## Overview
+## A note on the word "schema"
 
-The Schema module (`Lotus.Schema`) provides functions to:
+In Lotus v1 **"schema" always means namespace** — a PostgreSQL schema, a
+MySQL database, a BigQuery dataset. The structure of a table (its
+columns, types and constraints) is called **columns**, and the function
+that returns it is `Lotus.describe_table/3`.
 
-- List tables across databases and schemas
-- Inspect table structure and column information
-- Get table statistics like row counts
-- Work with multi-schema PostgreSQL databases
-- Support PostgreSQL, MySQL, and SQLite databases
+Pre-v1 code that called `Lotus.get_table_schema` must call
+`Lotus.describe_table/3` instead. There is no alias — the old name is
+gone.
 
-All Schema functions respect the configured table visibility rules, ensuring you only see tables you're allowed to access.
+## The discovery API
 
-## Listing Tables
+`Lotus.Schema` holds the implementation; `Lotus` delegates to it, and the
+`Lotus.*` names are the ones to use.
 
-### Basic Usage
+| Function | Returns |
+| --- | --- |
+| `Lotus.list_schemas/2` | visible namespace names, `[String.t()]` |
+| `Lotus.list_tables/2` | `{schema, table}` tuples, or plain table names for a schema-less source |
+| `Lotus.list_relations/2` | always `{schema \| nil, table}` tuples |
+| `Lotus.describe_table/3` | column definitions for one table |
+| `Lotus.get_table_stats/3` | a stats map, at minimum `%{row_count: n}` |
 
-List all tables in your database:
+Every one of them applies the configured visibility rules before
+returning. See the [Visibility guide](visibility.md).
+
+The first argument is a configured source: its name (`"postgres"`) or,
+for Ecto-backed sources, the repo module (`MyApp.ReportingRepo`).
 
 ```elixir
-# List tables from the default public schema (PostgreSQL)
 {:ok, tables} = Lotus.list_tables("postgres")
-# Returns [{"public", "users"}, {"public", "posts"}, {"public", "comments"}]
+{:ok, tables} = Lotus.list_tables(MyApp.ReportingRepo)
+```
 
-# List tables from SQLite (no schema concept)
+An unknown source raises rather than returning an error tuple:
+
+```elixir
+Lotus.list_tables("nonexistent")
+# ** (ArgumentError) Data source "nonexistent" not configured.
+#    Available sources: ["postgres", "sqlite"]
+```
+
+## Relations are two-level
+
+Lotus names every resource with exactly two levels: `{schema | nil,
+table}`. Visibility rules, deny lists, `describe_table/3`, the preflight
+relation set — all of them speak that shape, and core never grows a third
+element.
+
+`nil` in the first position means "unqualified": a source with no
+namespace concept at all (SQLite tables, Elasticsearch indices), or a
+name the caller left unqualified.
+
+An engine with a **deeper** hierarchy flattens everything above the leaf
+into the schema part, keeping its own separator:
+
+- BigQuery `project.dataset.table` → `{"project.dataset", "table"}`
+- A catalog/schema/table engine → `{"catalog.schema", "table"}`
+
+The adapter owns that flattening. Core compares the schema part verbatim
+against your visibility rules, so a deny rule must be written in the
+flattened spelling the adapter emits.
+
+## Listing schemas
+
+```elixir
+{:ok, schemas} = Lotus.list_schemas("postgres")
+# ["public", "reporting", "analytics"]
+
+{:ok, schemas} = Lotus.list_schemas("mysql")
+# ["app_production", "analytics_db"]   (in MySQL, schemas are databases)
+
+{:ok, schemas} = Lotus.list_schemas("sqlite")
+# []                                   (SQLite has no namespaces)
+```
+
+System schemas (`pg_catalog`, `information_schema`, ...) are always
+filtered out.
+
+## Listing tables
+
+```elixir
+# Default namespaces for the source
+{:ok, tables} = Lotus.list_tables("postgres")
+# [{"public", "users"}, {"public", "posts"}]
+
+# A schema-less source returns plain strings
 {:ok, tables} = Lotus.list_tables("sqlite")
-# Returns ["products", "orders", "order_items"]
+# ["products", "orders", "order_items"]
 ```
 
-**Return Format:**
-- **PostgreSQL**: Returns tuples of `{schema, table}` like `{"public", "users"}`
-- **SQLite**: Returns simple strings like `"products"` (no schema concept)
-
-### Working with PostgreSQL Schemas
-
-PostgreSQL databases often use multiple schemas to organize tables. Lotus provides several ways to work with schemas:
-
-#### Specific Schema
-
-List tables from a specific schema:
+### Choosing namespaces
 
 ```elixir
-# List only tables in the reporting schema
+# One schema
 {:ok, tables} = Lotus.list_tables("postgres", schema: "reporting")
-# Returns [{"reporting", "customers"}, {"reporting", "revenue"}, {"reporting", "metrics"}]
 
-# List from analytics schema
-{:ok, tables} = Lotus.list_tables("postgres", schema: "analytics")
-# Returns [{"analytics", "events"}, {"analytics", "sessions"}, {"analytics", "pageviews"}]
-```
-
-#### Multiple Schemas
-
-List tables from multiple specific schemas:
-
-```elixir
-# List from both reporting and analytics schemas
+# Several schemas
 {:ok, tables} = Lotus.list_tables("postgres", schemas: ["reporting", "analytics"])
-# Returns [
-#   {"analytics", "events"},
-#   {"analytics", "sessions"},
-#   {"reporting", "customers"},
-#   {"reporting", "revenue"}
-# ]
-```
 
-#### Using search_path
-
-Use PostgreSQL's search_path concept to list tables from multiple schemas in priority order:
-
-```elixir
-# List tables using search_path (similar to PostgreSQL's native behavior)
+# A PostgreSQL-style search_path string
 {:ok, tables} = Lotus.list_tables("postgres", search_path: "reporting, analytics, public")
-# Returns tables from all three schemas
 ```
 
-### Including Views
+`:schema`, `:schemas` and `:search_path` are checked in that order; the
+first one present wins. When none is given, the adapter's default
+namespaces are used. Entries that are blank or `$user` are dropped.
 
-By default, only tables are listed. To include views:
+Requesting a namespace that visibility denies fails the whole call:
 
 ```elixir
-# Include both tables and views
-{:ok, relations} = Lotus.list_tables("postgres", 
+Lotus.list_tables("postgres", schemas: ["public", "pg_catalog"])
+# {:error, "Schema(s) not visible: pg_catalog"}
+```
+
+### Including views
+
+```elixir
+{:ok, relations} = Lotus.list_tables("postgres",
   search_path: "reporting, public",
   include_views: true
 )
-# Returns both tables and views from the specified schemas
 ```
 
-### Using Repository Modules
+Views are excluded by default.
 
-You can also use repository modules directly instead of repository names:
+## Describing a table
 
-```elixir
-# Use the repository module directly
-{:ok, tables} = Lotus.list_tables(MyApp.ReportingRepo, schema: "reporting")
-
-# Works with any configured repository
-{:ok, tables} = Lotus.list_tables(MyApp.AnalyticsRepo)
-```
-
-## Getting Table Schema
-
-Inspect the structure of a specific table to see columns, types, and constraints:
-
-### Basic Table Schema
+`Lotus.describe_table/3` returns the column definitions of one table.
 
 ```elixir
-# Get schema for a table
-{:ok, schema} = Lotus.get_table_schema("postgres", "users")
+{:ok, columns} = Lotus.describe_table("postgres", "users")
 
-# Each column entry contains:
+# Each entry:
 # %{
 #   name: "id",
 #   type: "bigint",
@@ -121,302 +149,295 @@ Inspect the structure of a specific table to see columns, types, and constraints
 #   primary_key: true
 # }
 
-# Inspect the columns
-Enum.each(schema, fn col ->
+Enum.each(columns, fn col ->
   IO.puts("#{col.name}: #{col.type}#{if col.nullable, do: "", else: " NOT NULL"}")
 end)
-# id: bigint NOT NULL
-# name: varchar(255) NOT NULL
-# email: varchar(255) NOT NULL
-# created_at: timestamp
-# updated_at: timestamp
 ```
 
-### Schema-Specific Tables
-
-For PostgreSQL tables in non-public schemas:
+The table is located the same way as in `list_tables/2` — `:schema`,
+`:schemas` or `:search_path`, first match wins:
 
 ```elixir
-# Get schema for a table in the reporting schema
-{:ok, schema} = Lotus.get_table_schema("postgres", "customers", schema: "reporting")
+{:ok, columns} = Lotus.describe_table("postgres", "customers", schema: "reporting")
 
-# Using search_path to find the table
-{:ok, schema} = Lotus.get_table_schema("postgres", "revenue", 
+{:ok, columns} = Lotus.describe_table("postgres", "revenue",
   search_path: "reporting, analytics, public"
 )
-# Searches for 'revenue' table in each schema in order
 ```
 
-### Column Information
-
-The schema information includes detailed column metadata:
+Working with the result is plain list handling:
 
 ```elixir
-{:ok, schema} = Lotus.get_table_schema("postgres", "products")
+{:ok, columns} = Lotus.describe_table("postgres", "products")
 
-# Find specific column information
-price_col = Enum.find(schema, &(&1.name == "price"))
-# %{
-#   name: "price",
-#   type: "numeric(10,2)",
-#   nullable: false,
-#   default: "0.00",
-#   primary_key: false
-# }
-
-# Check for primary keys
-primary_keys = Enum.filter(schema, & &1.primary_key)
-# [%{name: "id", type: "bigint", primary_key: true, ...}]
-
-# Find nullable columns
-nullable_cols = Enum.filter(schema, & &1.nullable)
+price = Enum.find(columns, &(&1.name == "price"))
+primary_keys = Enum.filter(columns, & &1.primary_key)
+nullable = Enum.filter(columns, & &1.nullable)
 ```
 
-### SQLite Schema
-
-SQLite schema information has the same structure but different type representations:
+SQLite reports the same map shape with its own type spellings:
 
 ```elixir
-{:ok, schema} = Lotus.get_table_schema("sqlite", "products")
-
-# SQLite types are simpler
-# %{
-#   name: "id",
-#   type: "INTEGER",
-#   nullable: true,  # SQLite represents PKs differently
-#   default: nil,
-#   primary_key: true
-# }
+{:ok, columns} = Lotus.describe_table("sqlite", "products")
+# %{name: "id", type: "INTEGER", nullable: true, default: nil, primary_key: true}
 ```
 
-## Getting Table Statistics
+### Column visibility in the result
 
-Get basic statistics about a table:
+Column rules (see the [Visibility guide](visibility.md)) are applied to
+the description too:
+
+- a column whose policy sets `show_in_schema?: false` is **removed** from
+  the list entirely;
+- a column with any other non-`nil` policy gains a `:visibility` key
+  holding `%{action: ..., mask: ...}`, so a UI can label it as masked or
+  blocked before anyone runs a query.
 
 ```elixir
-# Get row count for a table
+{:ok, columns} = Lotus.describe_table("postgres", "users")
+
+Enum.find(columns, &(&1.name == "ssn"))
+# %{name: "ssn", type: "text", ..., visibility: %{action: :mask, mask: :sha256}}
+```
+
+## Table statistics
+
+```elixir
 {:ok, stats} = Lotus.get_table_stats("postgres", "users")
-# Returns %{row_count: 1234}
+# %{row_count: 1234}
 
-# For tables in specific schemas
 {:ok, stats} = Lotus.get_table_stats("postgres", "customers", schema: "reporting")
-# Returns %{row_count: 5678}
-
-# Using search_path
-{:ok, stats} = Lotus.get_table_stats("postgres", "events",
-  search_path: "analytics, public"
-)
 ```
 
-## Listing Relations
+Lotus asks the adapter first. A source whose adapter implements the
+optional `c:Lotus.Source.Adapter.table_stats/3` callback answers from
+that callback and may return extra keys alongside `:row_count` (on-disk
+size, segment counts, a last-analyzed timestamp) — callers should
+tolerate extras. An adapter that does not implement it falls back to
+`SELECT COUNT(*)` against the quoted relation, which only makes sense for
+SQL sources.
 
-The `list_relations` function returns tables with full schema information, useful for building UIs:
+Unlike the other discovery calls, `get_table_stats/3` fires no middleware
+events. It accepts `:schema`, `:schemas`, `:search_path`, `:cache` and
+`:scope`.
+
+## Listing relations
+
+`Lotus.list_relations/2` is `list_tables/2` that always keeps the
+namespace, which is what a table picker in a UI usually wants:
 
 ```elixir
-# Get all relations (tables) with schema information
 {:ok, relations} = Lotus.list_relations("postgres", search_path: "reporting, public")
-# Always returns tuples: [{"reporting", "customers"}, {"public", "users"}, ...]
+# [{"reporting", "customers"}, {"public", "users"}, ...]
 
-# For SQLite, includes nil schema
 {:ok, relations} = Lotus.list_relations("sqlite")
-# Returns [{nil, "products"}, {nil, "orders"}, ...]
+# [{nil, "products"}, {nil, "orders"}, ...]
 ```
 
-This is particularly useful when you need consistent schema information across different database types.
+It takes the same `:schema` / `:schemas` / `:search_path` /
+`:include_views` options as `list_tables/2`.
 
-## Multi-Tenant Scenarios
+## `:scope` and `:context`
 
-Schema introspection is particularly useful in multi-tenant applications:
+`list_schemas/2`, `list_tables/2`, `list_relations/2` and
+`describe_table/3` all accept two opaque caller-supplied values. They do
+different jobs:
 
-### Schema-per-Tenant
+- **`:scope`** is handed to the visibility resolver
+  (`c:Lotus.Visibility.Resolver.table_rules_for/2` and friends receive
+  `(source_name, scope)`) and is hashed into the cache key. Different
+  scopes therefore produce independent cached entries.
+- **`:context`** is threaded into the middleware payloads only. It never
+  reaches the resolver and never changes the cache key.
+
+```elixir
+# Per-role rules, cached separately per role
+{:ok, tables} = Lotus.list_tables("postgres", scope: %{role: :admin})
+
+# Per-tenant middleware filtering, shared cache
+{:ok, tables} = Lotus.list_tables("postgres", context: %{tenant: "acme"})
+```
+
+Keep scope low-cardinality (per-role, per-tenant) so the cache still
+hits. A resolver that reads runtime context — the process dictionary,
+say — instead of using its `scope` argument will cache incorrectly; put
+context-dependent logic in middleware, or pass it as scope.
+
+Scoped rules are not only a discovery concern. As of v1 they are enforced
+at execution time as well: `Lotus.Preflight.authorize/4` takes the scope,
+and `Lotus.Runner` passes the `:scope` option through to it. See
+[Visibility](visibility.md#scoped-rules-are-enforced-at-execution-time).
+
+Cached entries for one scope can be dropped on their own:
+
+```elixir
+:ok = Lotus.invalidate_scope(%{role: :admin})
+```
+
+## Middleware events
+
+Every discovery call fires two events (see `Lotus.Middleware`):
+
+1. the kind-specific event, with a kind-specific payload;
+2. the unified `:after_discover` event, with
+   `%{kind:, source:, result:, scope:, context:}`.
+
+| Call | Kind-specific event | Payload keys |
+| --- | --- | --- |
+| `list_schemas/2` | `:after_list_schemas` | `:schemas`, `:source`, `:scope`, `:context` |
+| `list_tables/2` | `:after_list_tables` | `:tables`, `:source`, `:scope`, `:context` |
+| `describe_table/3` | `:after_describe_table` | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
+| `list_relations/2` | `:after_list_relations` | `:relations`, `:source`, `:scope`, `:context` |
+
+Two v1 changes to note: the event formerly called
+`:after_get_table_schema` is now `:after_describe_table`, and the payload
+key formerly called `:repo` is now `:source`.
+
+Both events run **outside** the cache callback, so only the raw,
+visibility-filtered adapter result is cached. Context-sensitive
+middleware is therefore safe to use without poisoning the cache, at the
+cost of running the middleware pipeline on every call.
+
+## Caching
+
+Discovery results are cached by Lotus itself when a cache adapter is
+configured — there is no need to build your own layer. The default
+profile is `:schema` for the listing and description calls and `:results`
+for `get_table_stats/3`.
+
+```elixir
+# Use the configured cache (default)
+{:ok, tables} = Lotus.list_tables("postgres")
+
+# Custom profile or TTL
+{:ok, tables} = Lotus.list_tables("postgres", cache: [profile: :schema, ttl_ms: 300_000])
+
+# Skip the cache for this call
+{:ok, tables} = Lotus.list_tables("postgres", cache: :bypass)
+
+# Run the call and overwrite the cached entry
+{:ok, tables} = Lotus.list_tables("postgres", cache: :refresh)
+```
+
+Entries are tagged `"source:<name>"` and `"schema:<kind>"` (plus
+`"scope:<digest>"` when a scope is given), so they can be invalidated by
+tag. See the [Caching guide](caching.md).
+
+## Error handling
+
+```elixir
+# Table not found in the searched namespaces
+{:error, msg} = Lotus.describe_table("postgres", "nonexistent")
+# "Table 'nonexistent' not found in schemas: public"
+
+{:error, msg} = Lotus.describe_table("postgres", "users", schema: "reporting")
+# "Table 'users' not found in schemas: reporting"
+
+# Table blocked by visibility rules
+{:error, msg} = Lotus.describe_table("postgres", "api_keys")
+# "Table 'public.api_keys' is not visible by Lotus policy"
+
+# Namespace blocked by visibility rules
+{:error, msg} = Lotus.list_tables("postgres", schemas: ["public", "restricted"])
+# "Schema(s) not visible: restricted"
+```
+
+A source name that is not configured raises `ArgumentError` — it is a
+configuration mistake, not a runtime condition.
+
+## Multi-tenant patterns
+
+### Schema-per-tenant
 
 ```elixir
 defmodule MyApp.TenantInspector do
   def list_tenant_tables(tenant_id) do
-    schema_name = "tenant_#{tenant_id}"
-    Lotus.list_tables("postgres", schema: schema_name)
+    Lotus.list_tables("postgres", schema: "tenant_#{tenant_id}")
   end
 
-  def get_tenant_table_info(tenant_id, table_name) do
-    schema_name = "tenant_#{tenant_id}"
-    
-    with {:ok, schema} <- Lotus.get_table_schema("postgres", table_name, 
-                            schema: schema_name),
-         {:ok, stats} <- Lotus.get_table_stats("postgres", table_name,
-                           schema: schema_name) do
-      {:ok, %{
-        columns: schema,
-        row_count: stats.row_count
-      }}
+  def tenant_table_info(tenant_id, table_name) do
+    schema = "tenant_#{tenant_id}"
+
+    with {:ok, columns} <- Lotus.describe_table("postgres", table_name, schema: schema),
+         {:ok, stats} <- Lotus.get_table_stats("postgres", table_name, schema: schema) do
+      {:ok, %{columns: columns, row_count: stats.row_count}}
     end
   end
 end
-
-# Usage
-{:ok, tables} = MyApp.TenantInspector.list_tenant_tables(123)
-{:ok, info} = MyApp.TenantInspector.get_tenant_table_info(123, "users")
 ```
 
-### Shared Tables with Tenant-Specific Schemas
+### Tenant-scoped visibility
+
+When the rules themselves differ per tenant, pass `:scope` so the
+resolver sees the tenant and the cache keeps the results apart:
 
 ```elixir
-# Core tables in public, tenant data in separate schemas
-defmodule MyApp.SchemaExplorer do
-  def explore_database do
-    # Get shared tables
-    {:ok, shared} = Lotus.list_tables("postgres", schema: "public")
-    
-    # Get tenant-specific tables
-    {:ok, tenant_123} = Lotus.list_tables("postgres", schema: "tenant_123")
-    {:ok, tenant_456} = Lotus.list_tables("postgres", schema: "tenant_456")
-    
-    %{
-      shared_tables: shared,
-      tenants: %{
-        tenant_123: tenant_123,
-        tenant_456: tenant_456
-      }
-    }
-  end
-end
+{:ok, tables} = Lotus.list_tables("postgres", scope: %{tenant_id: 42})
+{:ok, result} = Lotus.run_query(query, scope: %{tenant_id: 42})
 ```
 
-## Building Admin Tools
+Pass the same scope to execution. Without it, a table hidden from a
+tenant in the explorer would still return its rows from a query.
 
-Schema introspection is perfect for building administrative interfaces:
+## Building admin tools
 
 ```elixir
 defmodule MyApp.AdminDashboard do
-  def database_overview(repo_name) do
-    # Get all tables
-    {:ok, tables} = Lotus.list_tables(repo_name, 
-      search_path: "reporting, analytics, public",
-      include_views: true
-    )
-    
-    # Get stats for each table
-    table_stats = Enum.map(tables, fn {schema, table} ->
-      {:ok, stats} = Lotus.get_table_stats(repo_name, table, schema: schema)
-      
-      %{
-        schema: schema,
-        table: table,
-        row_count: stats.row_count
-      }
+  def database_overview(source) do
+    {:ok, relations} =
+      Lotus.list_relations(source,
+        search_path: "reporting, analytics, public",
+        include_views: true
+      )
+
+    relations
+    |> Enum.map(fn {schema, table} ->
+      {:ok, stats} = Lotus.get_table_stats(source, table, schema: schema)
+      %{schema: schema, table: table, row_count: stats.row_count}
     end)
-    
-    # Sort by row count
-    Enum.sort_by(table_stats, & &1.row_count, :desc)
+    |> Enum.sort_by(& &1.row_count, :desc)
   end
-  
-  def table_details(repo_name, schema_name, table_name) do
-    with {:ok, columns} <- Lotus.get_table_schema(repo_name, table_name, 
-                             schema: schema_name),
-         {:ok, stats} <- Lotus.get_table_stats(repo_name, table_name,
-                           schema: schema_name) do
+
+  def table_details(source, schema, table) do
+    with {:ok, columns} <- Lotus.describe_table(source, table, schema: schema),
+         {:ok, stats} <- Lotus.get_table_stats(source, table, schema: schema) do
       %{
-        name: table_name,
-        schema: schema_name,
+        name: table,
+        schema: schema,
         columns: columns,
         column_count: length(columns),
         row_count: stats.row_count,
-        primary_keys: Enum.filter(columns, & &1.primary_key) |> Enum.map(& &1.name),
-        nullable_columns: Enum.filter(columns, & &1.nullable) |> Enum.map(& &1.name)
+        primary_keys: columns |> Enum.filter(& &1.primary_key) |> Enum.map(& &1.name)
       }
     end
   end
 end
-
-# Usage in a LiveView or controller
-overview = MyApp.AdminDashboard.database_overview("postgres")
-details = MyApp.AdminDashboard.table_details("postgres", "reporting", "customers")
 ```
 
-## Error Handling
+`list_relations/2` is the right call here: it keeps the namespace for
+every source, so the same code works against PostgreSQL and SQLite.
 
-Schema functions return clear errors for common issues:
+## Introspection and query building
 
-```elixir
-# Table not found
-{:error, msg} = Lotus.get_table_schema("postgres", "nonexistent")
-# "Table 'nonexistent' not found in schemas: public"
-
-# Table not in specified schema
-{:error, msg} = Lotus.get_table_schema("postgres", "users", schema: "reporting")
-# "Table 'users' not found in schemas: reporting"
-
-# Table blocked by visibility rules
-{:error, msg} = Lotus.get_table_schema("postgres", "api_keys")
-# "Table 'public.api_keys' is not visible by Lotus policy"
-
-# Invalid repository name
-{:error, msg} = Lotus.list_tables("nonexistent_repo")
-# "Data repo 'nonexistent_repo' not configured"
-```
-
-## Performance Considerations
-
-Schema introspection queries are generally fast, but keep in mind:
-
-1. **Caching**: Consider caching schema information if you're building UIs that frequently request it
-2. **Large Schemas**: Databases with many schemas or tables may take longer to list
-3. **Views**: Including views (`include_views: true`) may slow down queries in databases with complex views
-
-```elixir
-defmodule MyApp.SchemaCache do
-  use GenServer
-  
-  def get_tables(repo_name, opts \\ []) do
-    key = {repo_name, opts}
-    
-    case :ets.lookup(:schema_cache, key) do
-      [{^key, tables, timestamp}] ->
-        if timestamp > System.system_time(:second) - 300 do  # 5 minute cache
-          {:ok, tables}
-        else
-          refresh_tables(repo_name, opts)
-        end
-      [] ->
-        refresh_tables(repo_name, opts)
-    end
-  end
-  
-  defp refresh_tables(repo_name, opts) do
-    case Lotus.list_tables(repo_name, opts) do
-      {:ok, tables} = result ->
-        :ets.insert(:schema_cache, {{repo_name, opts}, tables, System.system_time(:second)})
-        result
-      error ->
-        error
-    end
-  end
-end
-```
-
-## Integration with Query Building
-
-Use schema introspection to help build queries:
+Use discovery to check a table before writing a query against it:
 
 ```elixir
 defmodule MyApp.QueryBuilder do
-  def build_count_query(repo_name, schema_name, table_name) do
-    # Verify table exists
-    case Lotus.get_table_schema(repo_name, table_name, schema: schema_name) do
-      {:ok, _schema} ->
-        # Table exists, build query
-        sql = if schema_name do
-          "SELECT COUNT(*) as total FROM #{schema_name}.#{table_name}"
-        else
-          "SELECT COUNT(*) as total FROM #{table_name}"
-        end
-        
+  def build_count_query(source, schema, table) do
+    case Lotus.describe_table(source, table, schema: schema) do
+      {:ok, _columns} ->
+        statement =
+          if schema,
+            do: "SELECT COUNT(*) AS total FROM #{schema}.#{table}",
+            else: "SELECT COUNT(*) AS total FROM #{table}"
+
         Lotus.create_query(%{
-          name: "Count #{schema_name}.#{table_name}",
-          query: %{sql: sql},
-          data_source: repo_name,
-          search_path: schema_name
+          name: "Count #{schema}.#{table}",
+          statement: statement,
+          data_source: source,
+          search_path: schema
         })
-        
+
       {:error, reason} ->
         {:error, "Cannot create query: #{reason}"}
     end
@@ -424,77 +445,66 @@ defmodule MyApp.QueryBuilder do
 end
 ```
 
-## Best Practices
+Never interpolate a user-supplied table name into a statement. Resolve it
+through `list_relations/2` first and use the value Lotus returned, so a
+name that visibility denies never reaches the SQL.
 
-### 1. Use Specific Schemas When Possible
+An ad-hoc check runs through `Lotus.run_statement/3` (renamed from
+`run_sql/3` in v1):
 
 ```elixir
-# Good - explicit schema
+def preview(source, schema, table) do
+  with {:ok, _columns} <- Lotus.describe_table(source, table, schema: schema),
+       {:ok, result} <-
+         Lotus.run_statement("SELECT * FROM #{schema}.#{table} LIMIT 10", [], repo: source) do
+    {:ok, result}
+  end
+end
+```
+
+## Best practices
+
+### Name the namespace when you know it
+
+```elixir
+# Precise
 {:ok, tables} = Lotus.list_tables("postgres", schema: "reporting")
 
-# Less specific - searches multiple schemas
+# Broader, and slower on a database with many schemas
 {:ok, tables} = Lotus.list_tables("postgres", search_path: "reporting, analytics, public")
 ```
 
-### 2. Handle Different Database Types
+### Prefer `list_relations/2` for code that must work everywhere
 
-```elixir
-def list_all_tables(repo_name) do
-  case Lotus.list_tables(repo_name) do
-    {:ok, tables} when is_list(tables) ->
-      # Handle both tuple format (PostgreSQL) and string format (SQLite)
-      normalized = Enum.map(tables, fn
-        {schema, table} -> "#{schema}.#{table}"  # PostgreSQL
-        table when is_binary(table) -> table      # SQLite
-      end)
-      {:ok, normalized}
-    error ->
-      error
-  end
-end
-```
+`list_tables/2` collapses to plain strings when every relation is
+unqualified, which means the caller has two shapes to handle.
+`list_relations/2` always returns `{schema | nil, table}`.
 
-### 3. Check Table Existence Before Operations
+### Let visibility do the filtering
 
-```elixir
-def safe_query_table(repo_name, table_name, schema_name \\ "public") do
-  with {:ok, _schema} <- Lotus.get_table_schema(repo_name, table_name, schema: schema_name),
-       {:ok, result} <- Lotus.run_statement("SELECT * FROM #{schema_name}.#{table_name} LIMIT 10", 
-                          [], repo: repo_name) do
-    {:ok, result}
-  else
-    {:error, reason} -> {:error, "Cannot query table: #{reason}"}
-  end
-end
-```
-
-### 4. Use Table Visibility for Security
-
-Configure table visibility rules to ensure schema introspection only shows allowed tables:
+Discovery already applies the rules. Configure them once instead of
+filtering the results by hand:
 
 ```elixir
 config :lotus,
   table_visibility: %{
     default: [
-      # Bare strings block tables across ALL schemas
-      deny: [
-        "api_keys",         # Blocks api_keys in any schema
-        "user_passwords",   # Blocks user_passwords in any schema
-        "audit_logs"        # Blocks audit_logs in any schema
-      ]
+      # Bare strings match the table name in any namespace
+      deny: ["api_keys", "user_passwords", "audit_logs"]
     ],
     reporting: [
       allow: [
-        {"reporting", ~r/.*/},  # All reporting schema tables
-        {"public", "users"},    # Specific public.users table
-        "summaries"             # Allow 'summaries' table in any schema
+        {"reporting", ~r/.*/},
+        {"public", "users"},
+        "summaries"
       ]
     ]
   }
 ```
 
-## Next Steps
+## Next steps
 
-- Learn about [Configuration](configuration.md) for table visibility rules
-- Explore [Getting Started](getting-started.md) for query execution with schemas
-- Check the [API Reference](https://hexdocs.pm/lotus) for detailed function documentation
+- [Visibility](visibility.md) — schema, table and column rules, scopes and preflight
+- [Caching](caching.md) — profiles, TTLs and tag invalidation
+- [Middleware](middleware.md) — the discovery events in full
+- [Source adapters](source-adapters.md) — implementing introspection for a new engine

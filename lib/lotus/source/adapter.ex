@@ -609,8 +609,13 @@ defmodule Lotus.Source.Adapter do
   Examples:
 
     * `"sql:postgres"`, `"sql:mysql"`, `"sql:sqlite"` for SQL-prepared adapters
-    * `"elasticsearch:json"` for an Elasticsearch DSL adapter
-    * `"mongo:aggregation"` for a MongoDB aggregation pipeline adapter
+    * `"json:elasticsearch"` for an Elasticsearch DSL adapter
+    * `"json:mongo"` for a MongoDB aggregation pipeline adapter
+
+  The part before the colon is the language family. It selects the editor
+  mode and the fenced-code label the AI layer asks the model to emit, so it
+  must name the syntax of the statement body (`sql`, `json`, ...), not the
+  engine.
   """
   @callback query_language(state :: term()) :: String.t()
 

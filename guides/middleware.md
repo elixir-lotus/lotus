@@ -37,14 +37,14 @@ Each middleware receives a payload map whose contents depend on the pipeline eve
 
 ### Discovery event ordering
 
-Discovery calls (`Lotus.list_schemas/2`, `list_tables/2`, `get_table_schema/3`, `list_relations/2`) fire **two** events per call:
+Discovery calls (`Lotus.list_schemas/2`, `Lotus.list_tables/2`, `Lotus.describe_table/3`, `Lotus.list_relations/2`) fire **two** events per call:
 
-1. The **kind-specific event** (`:after_list_schemas`, `:after_list_tables`, `:after_get_table_schema`, or `:after_list_relations`). The payload uses a key that matches the returned value (e.g. `:tables`, `:columns`). Register this event when you want the full kind-specific payload.
+1. The **kind-specific event** (`:after_list_schemas`, `:after_list_tables`, `:after_describe_table`, or `:after_list_relations`). The payload uses a key that matches the returned value (e.g. `:tables`, `:columns`). Register this event when you want the full kind-specific payload.
 2. The **unified `:after_discover` event**. The payload is always `%{kind:, source:, result:, scope:, context:}`. Register this event when you want a single middleware module that handles every discovery kind by dispatching on `:kind`.
 
 If any middleware in either phase halts, later middleware do not run and the caller receives `{:error, reason}`. The kind-specific event always runs before `:after_discover`; halting in the kind-specific phase short-circuits `:after_discover`.
 
-The `:kind` value in the unified event is one of `:list_schemas`, `:list_tables`, `:get_table_schema`, or `:list_relations`. Pattern-match on it and mutate `:result` in-place:
+The `:kind` value in the unified event is one of `:list_schemas`, `:list_tables`, `:describe_table`, or `:list_relations`. Pattern-match on it and mutate `:result` in-place:
 
 ```elixir
 defmodule MyApp.DiscoveryAuditMiddleware do
@@ -111,14 +111,39 @@ config :lotus,
 
 Middleware runs in the order listed. Multiple middleware can be chained on the same event.
 
-## Context
+The config is compiled once — `init/1` runs at compile time and the result is
+stored in `:persistent_term`. Reloading the config recompiles the pipeline, and
+**an empty (or absent) `:middleware` config clears it**: a reload that no longer
+declares middleware actually turns it off rather than leaving the previous
+pipeline in place.
 
-A `:context` key carries opaque user data (e.g. the current user) through to middleware. Lotus never inspects this value — it's purely for your application's use.
+## Context and Scope
+
+Two separate options reach middleware, and they are not interchangeable.
+
+`:context` is opaque caller data (e.g. the current user, a request id). Lotus
+never inspects it and it never affects execution. It is present on every event
+payload.
+
+`:scope` identifies *who is asking*. Lotus hashes it into cache keys and passes
+it to the visibility resolver, so a resolver can hide tables or mask columns per
+tenant or per role. It is present on the discovery event payloads
+(`:after_list_*`, `:after_discover`), not on `:before_query` / `:after_query`.
 
 ```elixir
-# Pass context when running a query
-Lotus.run_statement("SELECT * FROM orders", [], context: %{user_id: current_user.id})
+# Pass both when running a query
+Lotus.run_statement("SELECT * FROM orders", [],
+  context: %{user_id: current_user.id},
+  scope: %{tenant_id: current_user.tenant_id}
+)
 ```
+
+> **The result cache key includes `:scope` but never `:context`.** A plug that
+> masks or filters results per actor must have the caller pass a `:scope` that
+> identifies that actor. If the actor is only carried in `:context`, two callers
+> share one cache key and one caller's masked result is served to the other.
+> `Lotus.invalidate_scope/1` clears both the discovery and result cache entries
+> for a given scope.
 
 ```elixir
 defmodule MyApp.AccessControlMiddleware do
@@ -138,7 +163,9 @@ end
 
 ### Audit Logging
 
-Log every query execution with the user who ran it:
+Log each query execution with the user who ran it. Note that `:before_query`
+runs inside the result cache, so this records cache misses only — see
+[Caching](#caching) below.
 
 ```elixir
 defmodule MyApp.QueryAuditMiddleware do
@@ -146,13 +173,17 @@ defmodule MyApp.QueryAuditMiddleware do
 
   def init(opts), do: opts
 
-  def call(%{sql: sql, context: context} = payload, _opts) do
+  def call(%{statement: statement, source: source, context: context} = payload, _opts) do
     user_id = Map.get(context || %{}, :user_id, "anonymous")
-    Logger.info("[Lotus] user=#{user_id} sql=#{inspect(sql)}")
+    Logger.info("[Lotus] user=#{user_id} source=#{source} body=#{inspect(statement.body)}")
     {:cont, payload}
   end
 end
 ```
+
+`statement.body` is adapter-opaque: SQL text for an Ecto-backed source, a JSON
+map or DSL term for others. Use `inspect/1` rather than string interpolation so
+the plug works for every source type.
 
 ### Row-Level Security
 
@@ -295,7 +326,27 @@ defmodule MyApp.TableFilterMiddleware do
 end
 ```
 
-## Caching and Context
+## Caching
+
+Query middleware and discovery middleware sit on opposite sides of their caches.
+
+### Query middleware runs inside the result cache
+
+`:before_query` and `:after_query` run inside the result cache callback, so on a
+cache **hit** neither event fires — the cached rows are returned as they were
+stored. This matters in two ways:
+
+- **Side-effecting plugs skip cached runs.** An audit plug on `:before_query`
+  records misses, not hits. Log from the caller if you need every attempt.
+- **Per-actor filtering needs `:scope`, not `:context`.** The result cache key
+  hashes `:scope` and ignores `:context`, so a plug that redacts rows per user
+  must have the caller pass a `:scope` identifying that user — otherwise every
+  caller shares one key and one user's redacted rows are served to the next.
+
+Pass `cache: :bypass` on a call that must never be served from the cache, or
+`cache: :refresh` to re-run and re-seed it.
+
+### Discovery middleware runs outside the schema cache
 
 Discovery middleware (`:after_list_*`, `:after_discover`) runs **outside** the schema cache callback. The adapter result with visibility filtering applied is cached; middleware re-runs on every call against that cached result.
 
@@ -308,11 +359,13 @@ Discovery middleware (`:after_list_*`, `:after_discover`) runs **outside** the s
 When a middleware returns `{:halt, reason}`, the pipeline stops immediately and Lotus returns `{:error, reason}` to the caller. This is useful for enforcing access control, rate limiting, or any validation that should prevent execution:
 
 ```elixir
-def call(%{sql: sql} = payload, _opts) do
-  if String.contains?(String.downcase(sql), "pg_sleep") do
+def call(%{statement: %{body: body}} = payload, _opts) when is_binary(body) do
+  if String.contains?(String.downcase(body), "pg_sleep") do
     {:halt, "pg_sleep is not allowed"}
   else
     {:cont, payload}
   end
 end
+
+def call(payload, _opts), do: {:cont, payload}
 ```

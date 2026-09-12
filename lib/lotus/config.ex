@@ -383,8 +383,39 @@ defmodule Lotus.Config do
     Lotus.Source.Adapter in behaviours
   end
 
+  # v1 renamed three config keys. Without this check the old key is simply not
+  # in the allowlist below, so an upgrading app is told that :storage_repo is
+  # missing rather than that :ecto_repo moved — the error points at the wrong
+  # problem on the one path v1 most needs to be clear about.
+  @renamed_keys [
+    {:ecto_repo, :storage_repo},
+    {:data_repos, :data_sources},
+    {:default_repo, :default_source}
+  ]
+
+  defp check_renamed_keys!(env) do
+    case Enum.filter(@renamed_keys, fn {old, _new} -> Keyword.has_key?(env, old) end) do
+      [] ->
+        env
+
+      found ->
+        renames =
+          Enum.map_join(found, "\n", fn {old, new} -> "  #{inspect(old)} -> #{inspect(new)}" end)
+
+        raise ArgumentError, """
+        Invalid :lotus config: found configuration keys that were renamed in Lotus v1.0.
+
+        #{renames}
+
+        Rename them in your `config :lotus` block. There is no compatibility
+        shim; see the "Upgrading to v1.0" guide for the full migration.
+        """
+    end
+  end
+
   defp get_lotus_config do
     Application.get_all_env(:lotus)
+    |> check_renamed_keys!()
     |> Keyword.take([
       :storage_repo,
       :read_only,
@@ -441,7 +472,7 @@ defmodule Lotus.Config do
   `false` on a single source while running a permissive global default
   should be able to trust that the source stays locked down.
 
-  Used by `Lotus.Preflight.authorize/3` to gate non-SQL adapters whose
+  Used by `Lotus.Preflight.authorize/4` to gate non-SQL adapters whose
   engines enforce visibility at a layer Lotus can't introspect.
   """
   @spec allow_unrestricted_resources?(String.t()) :: boolean()

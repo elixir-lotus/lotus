@@ -10,6 +10,12 @@ Before starting, make sure you have:
 - A running Elixir application with Ecto and Lotus configured
 - Some data in your database to query
 
+> **Coming from Lotus 0.x?** The API in this guide is v1.0 only. Config keys and
+> several function names changed, and there is no compatibility shim — read
+> [Upgrading to v1.0](upgrading-to-v1.md) first. In particular `Lotus.run_sql`
+> is now `Lotus.run_statement/3` and `Lotus.get_table_schema` is now
+> `Lotus.describe_table/3`.
+
 ## Your First Query
 
 ### Creating a Saved Query
@@ -20,20 +26,28 @@ Let's create and save a simple query:
 # Create a new query
 {:ok, query} = Lotus.create_query(%{
   name: "Count Users",
-  query: %{
-    sql: "SELECT COUNT(*) as user_count FROM users"
-  }
+  statement: "SELECT COUNT(*) AS user_count FROM users"
 })
 
 IO.inspect(query)
 # %Lotus.Storage.Query{
 #   id: 1,
 #   name: "Count Users",
-#   statement: "SELECT COUNT(*) as user_count FROM users",
-#   inserted_at: ~N[2024-01-15 10:30:00],
-#   updated_at: ~N[2024-01-15 10:30:00]
+#   description: nil,
+#   statement: "SELECT COUNT(*) AS user_count FROM users",
+#   variables: [],
+#   data_source: nil,
+#   search_path: nil,
+#   query_language: nil,
+#   inserted_at: ~U[2024-01-15 10:30:00.000000Z],
+#   updated_at: ~U[2024-01-15 10:30:00.000000Z]
 # }
 ```
+
+A query needs a `name` and a `statement`. Everything else is optional:
+`description`, `variables`, `data_source`, `search_path` and `query_language`.
+For Ecto-backed sources the statement is SQL text; for a non-Ecto adapter it is
+whatever that adapter accepts.
 
 ### Running the Query
 
@@ -68,11 +82,17 @@ result.rows
 result.num_rows
 # 1
 
-# The Result struct contains:
-# - columns: list of column names
-# - rows: list of result rows
-# - num_rows: total count of returned rows
+# The %Lotus.Result{} struct contains:
+# - columns:     list of column names
+# - rows:        list of result rows
+# - num_rows:    number of rows in the returned page
+# - duration_ms: execution time in milliseconds (nil if not measured)
+# - command:     the command the adapter reported (e.g. "select"), or nil
+# - meta:        adapter and pagination metadata (see Paging Through Results)
 ```
+
+`Lotus.Result.to_encodable/1` returns a JSON-safe map of the same fields, with
+row values normalized (UUIDs, dates, decimals and so on).
 
 ## Ad-hoc Queries
 
@@ -126,13 +146,14 @@ IO.inspect(source_names)
 You can store queries with a specific data source, so they automatically execute against the correct database:
 
 ```elixir
-# Create a query that will run against the analytics database
+# Create a query that will run against the analytics database.
+# Stored queries take no positional params — use {{variables}} instead.
 {:ok, analytics_query} = Lotus.create_query(%{
   name: "Daily Page Views",
-  query: %{
-    sql: "SELECT COUNT(*) FROM page_views WHERE date = $1",
-    params: [Date.utc_today()]
-  },
+  statement: "SELECT COUNT(*) FROM page_views WHERE date = {{on_date}}",
+  variables: [
+    %{name: "on_date", type: :date, label: "Date", default: Date.to_iso8601(Date.utc_today())}
+  ],
   data_source: "analytics"
 })
 
@@ -191,6 +212,36 @@ config :lotus,
 {:ok, result} = Lotus.run_query(query)
 ```
 
+### Recording the Query Language
+
+A saved query can record the language it was written for in `query_language`,
+as a `family:dialect` identifier — `"sql:postgres"`, `"json:elasticsearch"`.
+A bare family (`"sql"`) is also accepted.
+
+```elixir
+{:ok, query} = Lotus.create_query(%{
+  name: "Recent Signups",
+  statement: "SELECT id, email FROM users WHERE created_at > NOW() - INTERVAL '7 days'",
+  data_source: "postgres",
+  query_language: "sql:postgres"
+})
+```
+
+When the query runs, Lotus compares the recorded language with the language of
+the resolved data source. A mismatch stops execution instead of handing the
+statement to an engine that cannot parse it:
+
+```elixir
+{:error, reason} = Lotus.run_query(query, repo: "sqlite")
+IO.puts(reason)
+# Query was written for "sql:postgres" but data source "sqlite" speaks "sql:sqlite"
+```
+
+The comparison is exact, not family-level: `sql:postgres` and `sql:sqlite` share
+a family but are not interchangeable. `query_language` is optional — leave it
+`nil` and the query runs against whatever source it resolves to, with the
+language derived from that source's adapter.
+
 ## Managing Saved Queries
 
 ### Listing All Queries
@@ -222,9 +273,7 @@ IO.puts(query.name)
 # Update an existing query
 {:ok, updated_query} = Lotus.update_query(query, %{
   name: "Total User Count",
-  query: %{
-    sql: "SELECT COUNT(*) as total_users FROM users WHERE deleted_at IS NULL"
-  }
+  statement: "SELECT COUNT(*) AS total_users FROM users WHERE deleted_at IS NULL"
 })
 
 IO.puts(updated_query.name)
@@ -408,10 +457,7 @@ You can save a `search_path` with your queries to make them automatically resolv
 # Create a query that looks in reporting schema first, then public
 {:ok, query} = Lotus.create_query(%{
   name: "Customer Report",
-  query: %{
-    sql: "SELECT COUNT(*) FROM customers WHERE active = true",
-    params: []
-  },
+  statement: "SELECT COUNT(*) FROM customers WHERE active = true",
   search_path: "reporting, public",
   data_source: "postgres"
 })
@@ -466,24 +512,31 @@ Here are common patterns for using `search_path`:
 # Create queries that work across different schema contexts
 {:ok, report_query} = Lotus.create_query(%{
   name: "Monthly Revenue",
-  query: %{
-    sql: """
-    SELECT 
-      DATE_TRUNC('month', created_at) as month,
-      SUM(amount) as revenue
-    FROM orders 
-    WHERE created_at >= $1 
-    GROUP BY 1 
-    ORDER BY 1
-    """
-  },
+  statement: """
+  SELECT
+    DATE_TRUNC('month', created_at) AS month,
+    SUM(amount) AS revenue
+  FROM orders
+  WHERE created_at >= {{since}}
+  GROUP BY 1
+  ORDER BY 1
+  """,
+  variables: [
+    %{name: "since", type: :date, label: "Since", default: "2024-01-01"}
+  ],
   search_path: "reporting, public",
   data_source: "postgres"
 })
 
-# Use the same query structure for different contexts
-{:ok, prod_data} = Lotus.run_query(report_query, [~D[2024-01-01]])
-{:ok, staging_data} = Lotus.run_query(report_query, [~D[2024-01-01]], search_path: "staging, public")
+# Use the same query structure for different contexts.
+# run_query/2 takes options only — values go through `vars:`.
+{:ok, prod_data} = Lotus.run_query(report_query, vars: %{"since" => "2024-01-01"})
+
+{:ok, staging_data} =
+  Lotus.run_query(report_query,
+    vars: %{"since" => "2024-01-01"},
+    search_path: "staging, public"
+  )
 ```
 
 #### Mixed Schema Access
@@ -491,19 +544,17 @@ Here are common patterns for using `search_path`:
 ```elixir
 # Query that needs tables from multiple schemas in search order
 {:ok, complex_query} = Lotus.create_query(%{
-  name: "User Activity Summary", 
-  query: %{
-    sql: """
-    SELECT 
-      u.name,
-      COUNT(e.id) as event_count,
-      MAX(s.last_login) as last_seen
-    FROM users u
-    LEFT JOIN events e ON u.id = e.user_id  -- from analytics schema
-    LEFT JOIN sessions s ON u.id = s.user_id  -- from public schema
-    GROUP BY u.id, u.name
-    """
-  },
+  name: "User Activity Summary",
+  statement: """
+  SELECT
+    u.name,
+    COUNT(e.id) AS event_count,
+    MAX(s.last_login) AS last_seen
+  FROM users u
+  LEFT JOIN events e ON u.id = e.user_id  -- from analytics schema
+  LEFT JOIN sessions s ON u.id = s.user_id  -- from public schema
+  GROUP BY u.id, u.name
+  """,
   search_path: "public, analytics",  # users in public, events in analytics
   data_source: "postgres"
 })
@@ -534,8 +585,8 @@ Lotus validates `search_path` values to prevent injection attacks:
   search_path: "invalid-name, 123schema"  # hyphens and leading numbers not allowed
 })
 
-errors_on(changeset)
-# %{search_path: ["must be a comma-separated list of identifiers"]}
+changeset.errors
+# [search_path: {"must be a comma-separated list of identifiers", []}]
 ```
 
 ### search_path with Other Databases
@@ -613,12 +664,37 @@ attrs = %{
   ]
 }
 
-q = Lotus.Storage.Query.new(attrs) |> Repo.insert!()
+{:ok, q} = Lotus.create_query(attrs)
 
-# Use compile/2 for parameterized queries
+# compile/2 turns a stored query plus its variable values into an
+# executable %Lotus.Query.Statement{}. run_query/2 does this for you;
+# call it directly when you want to inspect what will be sent.
 Lotus.Storage.Query.compile(q, %{"since" => "2024-01-01"})
-# => {:ok, %Lotus.Query.Statement{body: "SELECT * FROM users WHERE org_id = $1 AND created_at >= $2 AND status = $3", params: [1, ~D[2024-01-01], "active"]}}
+# On PostgreSQL, against a table whose org_id is an integer column and
+# whose created_at is a date column:
+# => {:ok,
+#     %Lotus.Query.Statement{
+#       adapter: Lotus.Source.Adapters.Postgres,
+#       body: "SELECT * FROM users WHERE org_id = $1::integer AND created_at >= $2::date AND status = $3",
+#       params: [1, ~D[2024-01-01], "active"],
+#       meta: %{}
+#     }}
 ```
+
+The `::integer` / `::date` suffixes are not fixed per variable type, so the same
+query compiles differently against a different table. Lotus looks up the type of
+the column each variable is compared against and uses that; the declared
+variable type is only the fallback, used when the column type is unknown or
+plain text. See [Variable Type Casting](#variable-type-casting) below.
+
+`compile/2` returns `{:error, reason}` when a required variable has no value, a
+list variable is empty, or a supplied value fails type casting. `compile!/2` is
+the raising variant and returns the `%Statement{}` directly.
+
+> **Renamed in v1.0.** `compile/2` was `to_sql_params/2` in 0.x, and it returned
+> a bare `{sql, params}` tuple. The `body` field is adapter-native — SQL text for
+> Ecto sources, a JSON payload or AST for others — so it is no longer always a
+> string.
 
 ### Dynamic Dropdown Options
 
@@ -642,8 +718,8 @@ The `options_query` should return two columns:
 ### Variable Features
 
 - **Safe substitution**: Variables are converted to database-specific placeholders with automatic type casting (`$1::integer` for PostgreSQL, `CAST(? AS SIGNED)` for MySQL, `?` for SQLite)
-- **Structured variables**: Define variables with type, label, and default values for better UI integration  
-- **Type support**: Supports text, number, integer, date, datetime, time, boolean, and json types with automatic database casting
+- **Structured variables**: Define variables with type, label, and default values for better UI integration
+- **Declared types**: A variable declares one of `:text`, `:number` or `:date`. Richer types (integer, boolean, datetime, uuid, json, arrays and more) are inferred from the column the variable is compared against
 - **Widget controls**: Specify input or select widgets for UI rendering
 - **Static options**: Use `static_options` for predefined dropdown choices
 - **Dynamic options**: Use `options_query` to populate dropdowns from database queries
@@ -654,19 +730,32 @@ The `options_query` should return two columns:
 
 ## Variable Type Casting
 
-Lotus automatically generates type-specific SQL placeholders based on your variable types, ensuring proper data handling across different databases:
+For SQL sources, Lotus generates a type-specific placeholder for every
+substituted variable, so the database engine receives the value in the right
+type.
+
+**How the type is chosen**, in order:
+
+1. The type of the column the variable is compared against, when Lotus can
+   introspect it and it is not plain text. This wins, because the column knows
+   better than the declaration.
+2. The variable's declared `:type` (`:text`, `:number` or `:date`).
+3. No type — the value is passed through untouched.
 
 ### PostgreSQL Type Casting
 - `:integer` → `$1::integer`
-- `:number` → `$1::numeric` 
+- `:number` / `:decimal` → `$1::numeric`
+- `:float` → `$1::real`
+- `:uuid` → `$1::uuid`
 - `:date` → `$1::date`
 - `:datetime` → `$1::timestamp`
 - `:time` → `$1::time`
 - `:boolean` → `$1::boolean`
 - `:json` → `$1::jsonb`
+- `:binary` → `$1::bytea`
 - `:text` (default) → `$1`
 
-### MySQL Type Casting  
+### MySQL Type Casting
 - `:integer` → `CAST(? AS SIGNED)`
 - `:number` → `CAST(? AS DECIMAL)`
 - `:date` → `CAST(? AS DATE)`
@@ -679,7 +768,11 @@ Lotus automatically generates type-specific SQL placeholders based on your varia
 ### SQLite
 SQLite uses untyped `?` placeholders for all variable types, as it handles type conversion automatically.
 
-This type casting ensures that your data is properly handled by the database engine and can prevent runtime type errors.
+### Non-SQL sources
+Placeholders are an adapter decision, not a Lotus one. An adapter for a JSON or
+DSL engine inlines the value as a properly escaped literal in its own payload
+instead of adding a bind placeholder. See the
+[Source Adapters guide](source-adapters.md).
 
 ## Error Handling
 
@@ -730,6 +823,51 @@ You can customize query execution with options:
 ])
 ```
 
+Both `run_query/2` and `run_statement/3` accept the same option list:
+`:timeout`, `:statement_timeout_ms`, `:read_only`, `:search_path`, `:repo`,
+`:vars`, `:cache`, `:window`, `:filters`, `:sorts`, `:context` and `:scope`.
+
+## Paging Through Results
+
+Pass `:window` to return one page of rows instead of the whole result set:
+
+```elixir
+{:ok, page} = Lotus.run_query(query, window: [limit: 50, offset: 100])
+
+page.num_rows
+# 50 — always the number of rows in the returned page
+
+page.meta.window
+# %{limit: 50, offset: 100}
+```
+
+Ask for a total with `count: :exact`:
+
+```elixir
+{:ok, page} = Lotus.run_query(query, window: [limit: 50, offset: 0, count: :exact])
+
+page.meta.total_count
+# 1842 — rows before the window was applied
+page.meta.total_mode
+# :exact
+```
+
+`meta.total_mode` reports what you asked for, not how the source produced it. A
+source that cannot produce a total still reports `:exact` with
+`total_count: nil`, so an honest "unknown" is never confused with zero. With
+`count: :none` (the default) `meta` carries only `:window`.
+
+Windows also work on ad-hoc statements, and each page is cached separately:
+
+```elixir
+{:ok, page} = Lotus.run_statement("SELECT * FROM orders ORDER BY id", [],
+  window: [limit: 25, offset: 0, count: :exact]
+)
+```
+
+Set `config :lotus, default_page_size: 100` to change the limit used when a
+window names no `:limit`.
+
 ## Best Practices
 
 ### 1. Use Descriptive Names
@@ -738,13 +876,13 @@ You can customize query execution with options:
 # Good
 Lotus.create_query(%{
   name: "Monthly Active Users Report",
-  query: %{sql: "..."}
+  statement: "..."
 })
 
 # Avoid
 Lotus.create_query(%{
   name: "Query 1",
-  query: %{sql: "..."}
+  statement: "..."
 })
 ```
 
@@ -814,6 +952,7 @@ Once you have queries and visualizations, you can combine them into dashboards f
   card_type: :query,
   query_id: query.id,
   title: "Monthly Revenue",
+  position: 0,
   layout: %{x: 0, y: 0, w: 6, h: 4}
 })
 
@@ -843,3 +982,7 @@ Now that you understand the basics, explore:
 
 - [Dashboards](dashboards.md) - Combine queries into interactive views
 - [Configuration](configuration.md) - Learn about all available configuration options
+- [Advanced Variables](advanced-variables.md) - Optional clauses, list variables and dynamic options
+- [Visibility](visibility.md) - Control which schemas, tables and columns queries can reach
+- [Source Adapters](source-adapters.md) - Add a SQL dialect or a non-SQL data source
+- [Upgrading to v1.0](upgrading-to-v1.md) - Porting an app from the 0.x API

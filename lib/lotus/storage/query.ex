@@ -74,6 +74,7 @@ defmodule Lotus.Storage.Query do
   def changeset(query, attrs) do
     query
     |> cast(attrs, @permitted)
+    |> reject_renamed_attrs(attrs)
     |> cast_embed(:variables, with: &QueryVariable.changeset/2)
     |> validate_required(@required)
     |> validate_length(:name, min: 1, max: 255)
@@ -83,6 +84,25 @@ defmodule Lotus.Storage.Query do
     |> validate_query_language()
     |> maybe_add_unique_constraint()
   end
+
+  # `data_repo` was renamed to `data_source` in v1. `cast/3` drops an
+  # unpermitted key, and `data_source` is not required, so a stale attribute
+  # map used to save with `data_source: nil` and resolve to the default source
+  # at run time — a multi-source host would silently query the wrong database.
+  # Fail the changeset instead.
+  defp reject_renamed_attrs(changeset, attrs) when is_map(attrs) do
+    if Map.has_key?(attrs, :data_repo) or Map.has_key?(attrs, "data_repo") do
+      add_error(
+        changeset,
+        :data_source,
+        "was given as `data_repo`, which was renamed to `data_source` in Lotus v1.0"
+      )
+    else
+      changeset
+    end
+  end
+
+  defp reject_renamed_attrs(changeset, _attrs), do: changeset
 
   @doc """
   Compiles a stored query into an executable `Lotus.Query.Statement`.

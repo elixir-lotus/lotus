@@ -1,6 +1,6 @@
 # Caching Guide
 
-This guide covers Lotus's comprehensive caching system, which improves query performance by storing and reusing results from expensive database operations.
+This guide covers Lotus's caching system, which improves query performance by storing and reusing results from expensive database operations.
 
 Lotus does not enable caching by default. To turn it on, configure a cache adapter under `config :lotus` — Lotus's supervisor starts automatically with your app and will boot the configured cache backend for you.
 
@@ -8,23 +8,25 @@ Lotus does not enable caching by default. To turn it on, configure a cache adapt
 
 Lotus provides a flexible caching system with the following features:
 
-- **Pluggable adapters** - Support for different cache backends
-- **TTL-based expiration** - Automatic cache invalidation based on time-to-live
-- **Cache profiles** - Different caching strategies for different use cases
-- **Tag-based invalidation** - Selective cache clearing using tags
-- **Multiple cache modes** - Fine-grained control over cache behavior
-- **Namespace support** - Cache isolation and organization
+- **Pluggable adapters** — support for different cache backends
+- **TTL-based expiration** — automatic cache invalidation based on time-to-live
+- **Cache profiles** — different caching strategies for different use cases
+- **Tag-based invalidation** — selective cache clearing using tags
+- **Scope-aware keys** — per-actor or per-tenant result isolation
+- **Pluggable key builders** — replace the key scheme through a behaviour
+- **Multiple cache modes** — fine-grained control over cache behavior
+- **Namespace support** — cache isolation and organization
 
 ## Quick Start
 
 ### Basic Configuration
 
-Lotus ships with built-in cache profiles (`:results`, `:schema`, `:options`) that work without any configuration. To enable caching, just add the cache adapter to your Lotus configuration:
+Lotus ships with built-in cache profiles (`:results`, `:schema`, `:options`) that work without any configuration. To enable caching, add a cache adapter to your Lotus configuration:
 
 ```elixir
 # config/config.exs
 config :lotus,
-  ecto_repo: MyApp.Repo,
+  storage_repo: MyApp.Repo,
   data_sources: %{
     "main" => MyApp.Repo
   },
@@ -33,6 +35,9 @@ config :lotus,
     namespace: "myapp_lotus"
   }
 ```
+
+> **The `:cache` value must be a map.** Configuration validation accepts a map
+> or `nil`; a keyword list raises an `ArgumentError` at boot.
 
 **Note**: Even with minimal configuration, you get sensible caching defaults:
 
@@ -44,7 +49,7 @@ config :lotus,
 
 Lotus is an OTP application: as long as `:lotus` is in your `mix.exs` dependencies, its supervisor starts automatically with your app and boots the cache backend declared under `config :lotus, :cache`. No supervision-tree wiring is required on your end.
 
-The `Lotus.Cache.ETS` GenServer is always started by the supervisor to ensure cache tables are available. If you configure a different cache adapter (e.g., `Lotus.Cache.Cachex`), it is started in addition to the ETS tables.
+The `Lotus.Cache.ETS` GenServer is always started by the supervisor to ensure cache tables are available. If you configure a different cache adapter (e.g. `Lotus.Cache.Cachex`), it is started in addition to the ETS tables.
 
 > **Note:** If you accidentally include `Lotus` as a child in your own supervision tree, the double-start is handled gracefully — `Lotus.Supervisor` returns `{:ok, pid}` for an already-running instance.
 
@@ -56,7 +61,7 @@ Once configured and started, caching works automatically:
 # First call - executes query and caches result
 {:ok, result1} = Lotus.run_statement("SELECT COUNT(*) FROM users")
 
-# Second call - returns cached result (much faster!)
+# Second call - returns cached result
 {:ok, result2} = Lotus.run_statement("SELECT COUNT(*) FROM users")
 ```
 
@@ -64,10 +69,10 @@ Once configured and started, caching works automatically:
 
 ### Cache Adapter
 
-Currently, Lotus supports two cache adapters:
+Lotus ships with two cache adapters:
 
-1. `Lotus.Cache.ETS` - Local-only in-memory caching using ETS, implemented as a GenServer with automatic expiration cleanup
-2. `Lotus.Cache.Cachex` - Distributed caching using [Cachex](https://hexdocs.pm/cachex)
+1. `Lotus.Cache.ETS` — local-only in-memory caching using ETS, implemented as a GenServer with automatic expiration cleanup
+2. `Lotus.Cache.Cachex` — distributed caching using [Cachex](https://hexdocs.pm/cachex)
 
 #### ETS Adapter
 
@@ -77,9 +82,7 @@ The `Lotus.Cache.ETS` adapter provides in-memory caching using Erlang Term Stora
 config :lotus,
   cache: %{
     adapter: Lotus.Cache.ETS,
-    namespace: "myapp_lotus",    # Optional namespace
-    max_bytes: 5_000_000,       # Max entry size: 5MB (default)
-    compress: true              # Compress cache entries (default: true)
+    namespace: "myapp_lotus"
   }
 ```
 
@@ -93,21 +96,20 @@ First, add Cachex to your dependencies in `mix.exs`:
 {:cachex, "~> 4.0"}
 ```
 
-Then, configure Lotus to use Cachex in `config/runtime.exs` (or wherever your runtime config is located):
+Then configure Lotus to use Cachex in `config/runtime.exs` (or wherever your runtime config lives):
 
 ```elixir
 config :lotus,
   cache: %{
     adapter: Lotus.Cache.Cachex,
-    namespace: "myapp_lotus",    # Optional namespace
+    namespace: "myapp_lotus",
     cachex_opts: [] # Optional Cachex options (see Cachex docs)
-    # You can set other Lotus cache config options here as well
   }
 ```
 
 **Note: You MUST configure Cachex at runtime. This is because Cachex uses Records, which are not available in compile-time configuration.**
 
-`cachex_opts` [accepts all options supported by Cachex](https://hexdocs.pm/cachex/cache-routers.html#default-routers). If not specified, the default Cachex configuration is used is:
+`cachex_opts` [accepts all options supported by Cachex](https://hexdocs.pm/cachex/cache-routers.html#default-routers). If not specified, the default Cachex configuration used is:
 
 ```elixir
 [router: router(module: Cachex.Router.Ring, options: [monitor: true])]
@@ -115,21 +117,19 @@ config :lotus,
 
 ### Cache Profiles
 
-Profiles allow you to configure different TTL strategies for different types of queries. Lotus comes with three predefined profiles that are always available:
+Profiles let you configure different TTL strategies for different kinds of data. Lotus comes with three predefined profiles that are always available.
 
 #### Predefined Profiles
 
-Lotus ships with these built-in cache profiles:
-
-- **`:results`** - 60 seconds TTL - For query results and fast-changing data
-- **`:schema`** - 1 hour TTL - For database schema information that changes rarely
-- **`:options`** - 5 minutes TTL - For dropdown options and reference data
+- **`:results`** — 60 seconds TTL — for query results and fast-changing data
+- **`:schema`** — 1 hour TTL — for database schema information that changes rarely
+- **`:options`** — 5 minutes TTL — for dropdown options and reference data
 
 These profiles are always available, even without any cache configuration. You can override their settings or add custom profiles:
 
 ```elixir
 config :lotus,
-  cache: [
+  cache: %{
     adapter: Lotus.Cache.ETS,
     profiles: %{
       # Override built-in profiles
@@ -141,8 +141,8 @@ config :lotus,
       reports: [ttl_ms: 1_800_000]    # 30 minutes - business reports
     },
     default_profile: :results,        # Used when no profile specified
-    default_ttl_ms: 60_000           # 1 minute - fallback TTL
-  ]
+    default_ttl_ms: 60_000            # Fallback TTL
+  }
 ```
 
 #### Profile Fallback Behavior
@@ -153,42 +153,44 @@ When you don't configure cache profiles:
 - `:schema` uses 1 hour TTL
 - `:options` uses 5 minutes TTL
 
-When you configure `default_ttl_ms` but don't specify `:results` profile:
+When you configure `default_ttl_ms` but don't define a `:results` profile:
 
 - `:results` uses your `default_ttl_ms` value
 - `:schema` and `:options` keep their built-in defaults
 
+A profile name that is not configured and is not one of the three built-ins falls back to `default_ttl_ms`, and then to 60 seconds.
+
 ### Namespace Support
 
-Namespaces provide cache isolation and organization:
+The namespace is prefixed to every cache key, which isolates one app's entries from another sharing the same backend:
 
 ```elixir
 config :lotus,
-  cache: [
+  cache: %{
     adapter: Lotus.Cache.ETS,
-    namespace: "myapp_lotus"  # Optional namespace for cache isolation
-  ]
+    namespace: "myapp_lotus"  # Default: "lotus:v1"
+  }
 ```
 
 ## Cache Modes
 
-Lotus provides three cache modes for different scenarios:
+Lotus provides three cache modes for different scenarios.
 
 ### Default Mode (Automatic Caching)
 
 When no cache mode is specified, Lotus automatically caches results:
 
 ```elixir
-# Uses cache if available, otherwise queries database and caches result
+# Uses cache if available, otherwise queries the source and caches the result
 {:ok, result} = Lotus.run_statement("SELECT * FROM products")
 ```
 
 ### Bypass Mode
 
-Skip cache entirely - always query the database:
+Skip the cache entirely — always query the source:
 
 ```elixir
-# Always hits database, never reads from or writes to cache
+# Always hits the database, never reads from or writes to cache
 {:ok, result} = Lotus.run_statement("SELECT * FROM products", [], cache: :bypass)
 ```
 
@@ -200,10 +202,9 @@ Skip cache entirely - always query the database:
 
 ### Refresh Mode
 
-Execute query and update cache with fresh results:
+Execute the query and overwrite the cache entry with the fresh result:
 
 ```elixir
-# Executes query AND updates cache with new result
 {:ok, result} = Lotus.run_statement("SELECT * FROM products", [], cache: :refresh)
 ```
 
@@ -213,6 +214,13 @@ Execute query and update cache with fresh results:
 - Scheduled cache warming
 - Manual cache updates
 
+The mode atoms also work inside the option list, so you can combine a mode with other cache options:
+
+```elixir
+{:ok, result} = Lotus.run_statement("SELECT * FROM products", [],
+  cache: [:refresh, profile: :options])
+```
+
 ## Cache Options
 
 ### Profile Selection
@@ -220,13 +228,12 @@ Execute query and update cache with fresh results:
 Choose a specific cache profile for a query:
 
 ```elixir
-# Use the 'schema' profile (longer TTL)
-{:ok, tables} = Lotus.run_statement("SELECT name FROM sqlite_master", [], cache: [profile: :schema])
+{:ok, result} = Lotus.run_statement("SELECT * FROM countries", [], cache: [profile: :options])
 ```
 
 ### TTL Override
 
-Override the default TTL for specific queries:
+Override the profile TTL for specific queries:
 
 ```elixir
 # Cache for exactly 2 minutes regardless of profile
@@ -246,9 +253,21 @@ Tag cache entries for selective invalidation:
 Lotus.Cache.invalidate_tags(["user:123"])
 ```
 
-### Combined Options
+### Entry Size and Compression
 
-You can combine multiple cache options:
+Cache entries are serialized and, by default, compressed. Entries larger than `max_bytes` are silently not cached — the query still returns its result.
+
+```elixir
+# Don't cache this result if it serializes to more than 1 MB
+{:ok, result} = Lotus.run_statement("SELECT * FROM events", [], cache: [max_bytes: 1_000_000])
+
+# Skip compression for a result that doesn't compress well
+{:ok, result} = Lotus.run_statement("SELECT * FROM blobs", [], cache: [compress: false])
+```
+
+**Defaults**: `max_bytes: 5_000_000`, `compress: true`. Both are per-call options, honored by the ETS and Cachex adapters.
+
+### Combined Options
 
 ```elixir
 {:ok, result} = Lotus.run_statement("SELECT * FROM products", [],
@@ -261,20 +280,52 @@ You can combine multiple cache options:
 
 ## Cache Key Generation
 
-Lotus generates cache keys based on:
+Lotus builds two kinds of cache key.
 
-- **SQL statement** - The actual query text
-- **Parameters** - Query parameters and variable values
-- **Repository** - Which database the query targets
-- **Search path** - PostgreSQL schema search path
-- **Scope** - When non-nil, hashed into discovery cache keys
-- **Lotus version** - Ensures cache invalidation across version upgrades
+**Result keys** (`run_query/2`, `run_statement/3`) hash:
 
-This ensures that different queries, even with slight variations, get separate cache entries.
+- **Statement body** — the adapter-native payload (SQL text for Ecto sources, a JSON/DSL term for others)
+- **Bound values** — variable bindings or positional parameters, including the pagination window
+- **Data source name** — which source the statement targets
+- **Search path** — the schema search path, when set
+- **Lotus version** — so entries do not survive an upgrade
+- **Scope** — when non-nil, its digest is appended to the key
+
+**Discovery keys** (schema introspection) hash the operation kind, the source name, the kind-specific components (such as schema and table name), the Lotus version, and the scope digest when set.
+
+### Scope and cache correctness
+
+The result cache key includes `:scope`. It does **not** include `:context`.
+
+That distinction matters. `:context` is an opaque value for middleware and telemetry — an audit trail. `:scope` is the identity that Lotus treats as part of the cache identity and hands to the visibility resolver.
+
+> ### Warning {: .warning}
+>
+> If middleware rewrites statements per actor, or your column policies mask
+> values per actor, and the actor is carried only in `:context`, then two
+> different actors running the same statement share one cache entry — and
+> the second actor is served the first actor's rows. Pass a `:scope` that
+> identifies the actor (or the security boundary: tenant, role) whenever
+> what a query returns depends on who is asking.
+
+```elixir
+# Wrong when masking or a before_query rewrite depends on the actor:
+Lotus.run_query(query, context: %{actor: current_user})
+
+# Right — the actor is part of the cache identity and reaches the resolver:
+Lotus.run_query(query,
+  context: %{request_id: request_id},
+  scope: %{tenant_id: current_user.tenant_id, role: current_user.role}
+)
+```
+
+Use the narrowest scope that captures the security boundary. A scope of `%{user_id: id}` gives every user their own cache entry, which is correct but has a low hit rate; `%{tenant_id: id, role: role}` is usually the right granularity when masking is decided by tenant and role.
+
+The same rule applies to discovery: `Lotus.list_tables/2`, `describe_table/3` and friends pass `:scope` to the visibility resolver *and* hash it into the discovery key, so a resolver that hides tables per tenant does not leak one tenant's table list into another's.
 
 ### Custom Key Builder
 
-The default key generation can be replaced by implementing the `Lotus.Cache.KeyBuilder` behaviour. This is useful when you need to incorporate additional context into cache keys or use a different hashing strategy.
+The key scheme can be replaced by implementing the `Lotus.Cache.KeyBuilder` behaviour. This is useful when you need extra components in the key or a different hashing strategy.
 
 ```elixir
 defmodule MyApp.CustomKeyBuilder do
@@ -282,7 +333,7 @@ defmodule MyApp.CustomKeyBuilder do
 
   @impl true
   def discovery_key(params, scope) do
-    # Add environment to discovery keys
+    # Add the deployment environment to discovery keys
     env = Application.get_env(:my_app, :env, :prod)
 
     Lotus.Cache.KeyBuilder.Default.discovery_key(
@@ -293,7 +344,6 @@ defmodule MyApp.CustomKeyBuilder do
 
   @impl true
   def result_key(body, bound, opts, scope) do
-    # Delegate to default for result keys
     Lotus.Cache.KeyBuilder.Default.result_key(body, bound, opts, scope)
   end
 end
@@ -311,38 +361,54 @@ config :lotus,
 
 The behaviour defines two callbacks:
 
-- `discovery_key/2` — builds keys for schema introspection cache entries (list_tables, get_table_schema, etc.)
-- `result_key/4` — builds keys for query result cache entries (accepts `scope` as the 4th argument)
+- `discovery_key/2` — keys for schema introspection entries. Takes a map with `:kind` (e.g. `:list_schemas`, `:list_tables`), `:source_name`, `:components` (a tuple of kind-specific parts) and `:version`, plus the scope (or `nil`)
+- `result_key/4` — keys for query result entries. Takes the statement body (`term()` — a SQL string for Ecto adapters, a JSON or AST payload for others), the bound values (map or list), an options keyword list carrying `:data_source`, `:search_path` and `:lotus_version`, and the scope (or `nil`)
 
-When no `key_builder` is configured, `Lotus.Cache.KeyBuilder.Default` is used, which preserves the built-in key generation logic.
+`Lotus.Cache.KeyBuilder.scope_digest/1` is a public helper: it returns a 16-character hex digest of any term, and `""` for `nil`. Use it if your implementation builds its own scope-specific keys or tags.
+
+```elixir
+Lotus.Cache.KeyBuilder.scope_digest(nil)
+# ""
+
+Lotus.Cache.KeyBuilder.scope_digest(%{tenant_id: 42})
+# a 16-character lowercase hex digest of the term
+```
+
+When no `key_builder` is configured, `Lotus.Cache.KeyBuilder.Default` is used.
+
+> ### Warning {: .warning}
+>
+> A custom key builder that ignores its `scope` argument removes the
+> per-scope isolation described above. If you delegate, delegate the scope
+> too.
 
 ## Schema Function Caching
 
-All Lotus schema introspection functions are automatically cached:
+All Lotus schema introspection functions are cached automatically:
 
-- `Lotus.list_tables/2` - Lists tables and views in database
-- `Lotus.describe_table/3` - Gets column information for tables
-- `Lotus.get_table_stats/3` - Gets row counts and table statistics
-- `Lotus.list_relations/2` - Lists tables with schema information
+- `Lotus.list_schemas/2` — lists schemas (namespaces) in the source
+- `Lotus.list_tables/2` — lists tables and views
+- `Lotus.describe_table/3` — column information for a table
+- `Lotus.get_table_stats/3` — row counts and table statistics
+- `Lotus.list_relations/2` — tables with schema information
 
 ### Default Cache Behavior
 
-Schema functions use different cache profiles by default:
-
 ```elixir
-# Schema metadata - uses :schema profile (1 hour TTL)
+# Schema metadata - uses the :schema profile (1 hour TTL)
+{:ok, schemas} = Lotus.list_schemas("postgres")
 {:ok, tables} = Lotus.list_tables("postgres")
-{:ok, schema} = Lotus.get_table_schema("postgres", "users")
+{:ok, columns} = Lotus.describe_table("postgres", "users")
 {:ok, relations} = Lotus.list_relations("postgres")
 
-# Table statistics - uses :results profile (30 seconds TTL)
+# Table statistics - uses the :results profile (60 second TTL)
 {:ok, stats} = Lotus.get_table_stats("postgres", "users")
 ```
 
 **Why different profiles?**
 
-- **Schema metadata** (tables, columns) changes rarely, so longer caching (1 hour) is safe
-- **Table statistics** (row counts) change frequently, so shorter caching (30 seconds) keeps data fresh
+- **Schema metadata** (tables, columns) changes rarely, so longer caching is safe
+- **Table statistics** (row counts) change constantly, so a short TTL keeps them useful
 
 ### Schema Cache Options
 
@@ -353,43 +419,49 @@ Schema functions support all cache modes and options:
 {:ok, tables} = Lotus.list_tables("postgres", cache: :bypass)
 
 # Refresh cache with latest data
-{:ok, schema} = Lotus.get_table_schema("postgres", "users", cache: :refresh)
+{:ok, columns} = Lotus.describe_table("postgres", "users", cache: :refresh)
 
-# Use custom profile
-{:ok, stats} = Lotus.get_table_stats("postgres", "users",
-  cache: [profile: :options])  # 5 minute TTL
+# Use a different profile
+{:ok, stats} = Lotus.get_table_stats("postgres", "users", cache: [profile: :options])
 
 # Override TTL
-{:ok, relations} = Lotus.list_relations("postgres",
-  cache: [ttl_ms: 600_000])  # 10 minutes
+{:ok, relations} = Lotus.list_relations("postgres", cache: [ttl_ms: 600_000])
 
 # Add tags for invalidation
-{:ok, schema} = Lotus.get_table_schema("postgres", "products",
-  cache: [tags: ["schema:products", "metadata"]])
+{:ok, columns} = Lotus.describe_table("postgres", "products",
+  cache: [tags: ["metadata"]])
 ```
 
 ### Schema Cache Invalidation
 
-Schema information is automatically tagged for selective invalidation:
+Discovery entries are tagged automatically, so you can clear exactly what changed:
 
 ```elixir
 # After schema changes (migrations, table creation, etc.)
-Lotus.Cache.invalidate_tags(["repo:postgres", "schema:list_tables"])
+Lotus.Cache.invalidate_tags(["source:postgres", "schema:list_tables"])
 
 # After specific table changes
 Lotus.Cache.invalidate_tags(["table:public.users"])
 ```
 
-**Automatic tags added:**
+**Automatic tags on discovery entries:**
 
-- `"repo:#{repo_name}"` - Repository-specific data
-- `"schema:#{function_name}"` - Function-specific data
-- `"table:#{schema}.#{table}"` - Table-specific data (when applicable)
-- `"scope:<digest>"` - Scope-specific data (when a non-nil `:scope` option is passed)
+- `"source:#{source_name}"` — every entry for one data source
+- `"schema:#{kind}"` — one discovery operation: `schema:list_schemas`, `schema:list_tables`, `schema:describe_table`, `schema:get_table_stats`, `schema:list_relations`, `schema:resolve_table_namespace`
+- `"table:#{schema}.#{table}"` — table-specific entries (`describe_table`, `get_table_stats`, `resolve_table_namespace`); the schema part is omitted for schema-less sources
+- `"scope:<digest>"` — added when a non-nil `:scope` option is passed
+
+> ### Renamed in v1.0 {: .warning}
+>
+> The source tag prefix was `"repo:"` before v1.0 and is now `"source:"`.
+> Host code that invalidates by tag must be updated. Entries written by a
+> pre-v1 install are never found again after the upgrade; they expire on
+> their own and re-seed on the next read, so this is a cold cache, not a
+> correctness problem.
 
 ### Per-Scope Cache Invalidation
 
-When using the `:scope` option on discovery or query execution functions, each cached entry is automatically tagged with a scope digest. This lets you invalidate all cached entries for a specific scope without flushing the entire cache:
+When you pass `:scope` to a discovery or execution function, the entry is tagged with a scope digest. That lets you clear everything for one scope without flushing the cache:
 
 ```elixir
 # Populate cache for different scopes
@@ -403,15 +475,15 @@ When using the `:scope` option on discovery or query execution functions, each c
 {:ok, _} = Lotus.list_tables("postgres", scope: %{tenant_id: 2})
 ```
 
-This is useful when visibility rules change for a specific scope (e.g. a tenant's permissions are updated) and you need to clear stale cache entries without affecting other scopes. `invalidate_scope/1` clears both discovery and result cache entries tagged with the given scope.
+This is what you want when visibility rules change for one scope — a tenant's permissions are updated, a role gains a table — and stale entries for that scope must go. `Lotus.invalidate_scope/1` (delegating to `Lotus.Cache.invalidate_scope/1`) clears both discovery and result entries carrying the scope tag.
 
-`invalidate_scope/1` accepts any non-nil term and returns `:ok`. Passing `nil` is a no-op (there is no scope tag to invalidate).
+`invalidate_scope/1` accepts any term and returns `:ok`. Passing `nil` is a no-op, because there is no scope tag to invalidate.
 
-When passing `:scope` to query execution (`run_query/2`, `run_statement/3`), the scope is hashed into the result cache key so different scopes produce independent cached results. This is important when the database uses row-level security (RLS) policies, middleware rewrites queries per-scope, or a `SET ROLE` / session variable changes what data the query sees.
+The scope must match the one used when the entry was written: the digest is taken over the term itself, so `%{tenant_id: 1}` and `%{tenant_id: "1"}` are different scopes.
 
 ## Working with run_query
 
-Saved queries (`run_query`) support all the same cache options:
+Saved queries support all the same cache options:
 
 ```elixir
 # Automatic caching based on configuration
@@ -420,19 +492,21 @@ Saved queries (`run_query`) support all the same cache options:
 # Bypass cache
 {:ok, result} = Lotus.run_query(query_id, cache: :bypass)
 
-# Use specific profile
+# Use a specific profile
 {:ok, result} = Lotus.run_query(query_id, cache: [profile: :reports])
 
 # Tag for invalidation
-{:ok, result} = Lotus.run_query(query_id,
-  cache: [tags: ["query:#{query_id}", "dashboard"]])
+{:ok, result} = Lotus.run_query(query_id, cache: [tags: ["dashboard"]])
+
+# Per-tenant results
+{:ok, result} = Lotus.run_query(query_id, scope: %{tenant_id: 42})
 ```
+
+Query variables are part of the bound values, so the same saved query with different `vars` produces independent cache entries. So does each page of a windowed query.
 
 ## Cache Management
 
 ### Manual Cache Invalidation
-
-Invalidate cache entries by tags:
 
 ```elixir
 # Invalidate specific entries
@@ -441,42 +515,44 @@ Lotus.Cache.invalidate_tags(["user:123"])
 # Invalidate multiple tags
 Lotus.Cache.invalidate_tags(["user_data", "reports", "dashboard"])
 
-# Invalidate all cached discovery entries for a specific scope
+# Invalidate every cached entry for a scope
 Lotus.invalidate_scope(%{tenant_id: 42})
 ```
 
+`invalidate_tags/1` is a no-op when no cache adapter is configured, or when the configured adapter does not support tag invalidation.
+
 ### Automatic Tagging
 
-Lotus automatically adds these tags to cached entries:
+Lotus adds these tags to result entries:
 
-- `"query:#{query_id}"` - For run_query calls
-- `"repo:#{repo_name}"` - For the database repository used
-- `"schema:#{function_name}"` - For Schema function calls (list_tables, get_table_schema, etc.)
-- `"table:#{schema}.#{table}"` - For table-specific Schema operations
+- `"query:#{query_id}"` — for `run_query/2` calls on a saved query
+- `"source:#{source_name}"` — the data source the statement ran against
+- `"scope:#{digest}"` — when a non-nil `:scope` is passed
 
-You can add your own tags in addition to these automatic ones.
+Discovery entries carry the tags listed under [Schema Cache Invalidation](#schema-cache-invalidation). Your own `cache: [tags: [...]]` are added on top of the automatic ones.
 
 ## Performance Considerations
 
 ### Cache Effectiveness
 
-Monitor cache effectiveness by observing query performance improvements and application response times. Future versions may include cache statistics and telemetry integration.
+Cache activity is emitted as telemetry — `[:lotus, :cache, :hit]`, `[:lotus, :cache, :miss]` and `[:lotus, :cache, :put]` — so you can measure hit ratio without instrumenting call sites. See the [Telemetry Guide](telemetry.md).
 
 ### Memory Usage
 
 ETS cache memory grows with cached data. Consider:
 
-- **Appropriate TTLs** - Don't cache data longer than needed
-- **Selective caching** - Use `:bypass` for large result sets that aren't reused
-- **Size limits** - Large cache entries are automatically rejected (default: 5MB, configurable)
-- **Regular cleanup** - TTL-based expiration handles this automatically
+- **Appropriate TTLs** — don't cache data longer than it is useful
+- **Selective caching** — use `:bypass` for large result sets that are not reused
+- **Size limits** — oversized entries are skipped rather than stored (`max_bytes`, default 5 MB)
+- **Scope granularity** — a per-user scope multiplies entries by your user count; prefer the narrowest boundary that is still correct
+- **Regular cleanup** — expired ETS entries are swept by a janitor every 30 seconds
 
 ### Cache Warming
 
-Pre-populate cache with commonly used queries:
+Pre-populate the cache with commonly used queries:
 
 ```elixir
-# During application startup or scheduled jobs
+# During application startup or from a scheduled job
 {:ok, _} = Lotus.run_statement("SELECT * FROM lookup_tables", [], cache: :refresh)
 {:ok, _} = Lotus.run_query(dashboard_query_id, cache: :refresh)
 ```
@@ -485,28 +561,27 @@ Pre-populate cache with commonly used queries:
 
 ### Profile Strategy
 
-Lotus provides sensible defaults for the built-in profiles, but you can customize them based on your needs:
-
 ```elixir
 config :lotus,
-  cache: [
+  cache: %{
+    adapter: Lotus.Cache.ETS,
     profiles: %{
       # Built-in profiles (customize as needed)
-      results: [ttl_ms: 30_000],      # Default: 60s - Fast-changing data
-      options: [ttl_ms: 300_000],     # Default: 5m - Reference data
-      schema: [ttl_ms: 3_600_000],    # Default: 1h - Schema information
+      results: [ttl_ms: 30_000],      # Default: 60s - fast-changing data
+      options: [ttl_ms: 300_000],     # Default: 5m - reference data
+      schema: [ttl_ms: 3_600_000],    # Default: 1h - schema information
 
       # Add custom profiles for specific use cases
-      reports: [ttl_ms: 1_800_000]    # 30 minutes - Business reports
+      reports: [ttl_ms: 1_800_000]    # 30 minutes - business reports
     }
-  ]
+  }
 ```
 
 **Default TTL Guidelines:**
 
-- **`:results` (60s)** - Query results, user data, transactional information
-- **`:options` (5m)** - Dropdown options, lookup tables, reference data
-- **`:schema` (1h)** - Database schema, table structure, metadata
+- **`:results` (60s)** — query results, table statistics, transactional information
+- **`:options` (5m)** — dropdown options, lookup tables, reference data
+- **`:schema` (1h)** — database schema, table structure, metadata
 
 ### Tagging Strategy
 
@@ -523,32 +598,26 @@ cache: [tags: ["product:#{product_id}", "inventory"]]
 
 ### When to Use Each Mode
 
-- **Default mode**: Most queries - let cache system optimize automatically
-- **`:bypass` mode**: Real-time data, large one-off queries, testing
-- **`:refresh` mode**: After data updates, scheduled cache warming, manual refresh
+- **Default mode**: most queries — let the cache do its job
+- **`:bypass` mode**: real-time data, large one-off queries, testing
+- **`:refresh` mode**: after data updates, scheduled cache warming, manual refresh
 
 ### Cache Invalidation
 
 ```elixir
 # After updating user data
-User.update(user, %{name: "New Name"})
 Lotus.Cache.invalidate_tags(["user:#{user.id}"])
 
 # After bulk data updates
-Products.bulk_update()
 Lotus.Cache.invalidate_tags(["products", "inventory"])
 
 # After schema changes (migrations, DDL operations)
-Ecto.Migrator.run(MyApp.Repo, :up, all: true)
-Lotus.Cache.invalidate_tags(["repo:postgres", "schema:list_tables"])
+Lotus.Cache.invalidate_tags(["source:postgres", "schema:list_tables"])
 
 # After table-specific changes
-alter table(:users) do
-  add :new_column, :string
-end
 Lotus.Cache.invalidate_tags(["table:public.users"])
 
-# After tenant permissions change — clear only that tenant's cached entries
+# After a tenant's permissions change — clear only that tenant's entries
 Lotus.invalidate_scope(%{tenant_id: tenant.id})
 ```
 
@@ -556,21 +625,28 @@ Lotus.invalidate_scope(%{tenant_id: tenant.id})
 
 ### Cache Not Working
 
-1. **Check configuration**: Ensure a cache adapter is configured under `config :lotus, :cache`
-2. **Check the `:lotus` app is running**: Lotus's supervisor starts automatically with the `:lotus` OTP app, so make sure it isn't excluded from `included_applications` or otherwise prevented from starting
-3. **Verify identical queries**: Cache keys are generated from exact SQL + params
-4. **Check TTL**: Ensure cache hasn't expired between calls
+1. **Check configuration**: a cache adapter must be set under `config :lotus, :cache`, and the value must be a map
+2. **Check the `:lotus` app is running**: Lotus's supervisor starts with the `:lotus` OTP app, so make sure it isn't excluded from `included_applications` or otherwise prevented from starting
+3. **Verify identical calls**: keys come from the exact statement body, bound values, source, search path and scope — a different scope is a different entry by design
+4. **Check TTL**: make sure the entry has not expired between calls
+5. **Check entry size**: a result larger than `max_bytes` (5 MB default) is never stored, so it misses every time
 
-**Common Error**: `** (ArgumentError) argument error` or `:noproc` errors usually mean the `:lotus` application failed to boot. Since the ETS cache GenServer is always started by the supervisor, cache tables should be available as long as `:lotus` is running.
+**Common Error**: `** (ArgumentError) argument error` or `:noproc` errors usually mean the `:lotus` application failed to boot. The ETS cache GenServer is always started by the supervisor, so cache tables should be available as long as `:lotus` is running.
+
+### Stale or Leaking Results
+
+1. **Check `:scope` vs `:context`**: results that differ per actor must carry that actor in `:scope`. See [Scope and cache correctness](#scope-and-cache-correctness)
+2. **Check a custom key builder**: an implementation that drops the `scope` argument removes per-scope isolation
+3. **Check tag prefixes after upgrading**: invalidation code written for v0.x used `"repo:"`, which now matches nothing
 
 ### Memory Issues
 
-1. **Review TTL settings**: Shorter TTLs = less memory usage
-2. **Use selective caching**: Don't cache large result sets unnecessarily
-3. **Monitor cache size**: Check ETS table memory usage
+1. **Review TTL settings**: shorter TTLs mean less memory
+2. **Review scope granularity**: a per-user scope multiplies entry count
+3. **Use selective caching**: don't cache large result sets unnecessarily
 
 ### Performance Issues
 
-1. **Cache hit ratio**: Low hit ratio may indicate poor cache strategy
-2. **TTL tuning**: Balance between data freshness and cache effectiveness
-3. **Query optimization**: Cache works best with optimized queries
+1. **Cache hit ratio**: a low ratio may mean the scope is too narrow or the TTL too short
+2. **TTL tuning**: balance data freshness against cache effectiveness
+3. **Query optimization**: caching works best on top of already-reasonable queries

@@ -424,6 +424,8 @@ defmodule Lotus.Schema do
   - `:schema` - Look for table in specific schema
   - `:schemas` - Search for table in multiple schemas (first match wins)
   - `:search_path` - Use PostgreSQL search_path to resolve table location
+  - `:scope` - Opaque value passed to the visibility resolver and hashed into
+    the cache key
   - `:cache` - Cache options (profile, ttl_ms, etc.)
 
   ## Examples

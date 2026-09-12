@@ -1,41 +1,64 @@
 # Visibility Rules
 
-Lotus provides a comprehensive visibility system that controls which schemas and tables are accessible through the API. This system operates on two levels with clear precedence rules to ensure security while maintaining flexibility.
+Lotus decides what a query and an explorer are allowed to see with one
+rule set, applied at three levels: **schemas** (namespaces), **tables**
+and **columns**. The levels have a clear precedence, so security holds by
+default while leaving room for fine-grained exceptions.
 
 ## Overview
 
-The visibility system uses a **two-level hierarchy**:
+1. **Schema visibility** — highest precedence. A denied schema blocks
+   every table in it, whatever the table rules say.
+2. **Table visibility** — checked only inside allowed schemas.
+3. **Column visibility** — applied to the columns of a result set and to
+   the output of `Lotus.describe_table/3`.
 
-1. **Schema visibility** (higher precedence)
-2. **Table visibility** (lower precedence)
+Rules are enforced in three places:
 
-**Key principle**: If a schema is denied, all tables within it are automatically blocked, regardless of table-level rules.
+- **Discovery** — `Lotus.list_schemas/2`, `list_tables/2`,
+  `list_relations/2`, `describe_table/3` and `get_table_stats/3` filter
+  their results.
+- **Execution preflight** — before a statement runs, Lotus asks the
+  adapter which relations the statement touches and blocks the query if
+  any of them is denied. This catches access through views and
+  subqueries.
+- **Result columns** — column policies omit, mask or reject columns in
+  the returned rows.
 
 ## Database-Specific Schema Behavior
 
-Understanding how "schemas" work across different database systems is crucial for configuring visibility rules correctly:
+"Schema" means namespace throughout Lotus, and namespaces differ per
+engine:
 
 ### PostgreSQL
-- **True namespaced schemas**: Multiple schemas exist within a single database
+- **True namespaced schemas**: several schemas inside one database
 - **Examples**: `public`, `reporting`, `analytics`, `tenant_123`
 - **System schemas**: `pg_catalog`, `information_schema`, `pg_toast`, `pg_temp_*`
 - **Qualified names**: `reporting.customers`, `public.users`
 
 ### MySQL
-- **Schemas = Databases**: In MySQL, "schema" and "database" are synonymous
+- **Schemas = databases**: the two words mean the same thing
 - **Examples**: `lotus_production`, `analytics_db`, `warehouse`
 - **System schemas**: `mysql`, `information_schema`, `performance_schema`, `sys`
-- **Behavior**: When you connect to MySQL, you can access tables across different databases/schemas
 - **Qualified names**: `analytics_db.customers`, `warehouse.sales`
 
 ### SQLite
-- **No schema support**: SQLite is schema-less
-- **Schema visibility**: Not applicable (always empty list)
-- **Tables**: Exist at the database level without namespace prefixes
+- **No namespaces**: `Lotus.list_schemas/2` returns `[]`
+- Relations are `{nil, table}`; schema rules do not apply
+
+### Engines with a deeper hierarchy
+
+Lotus names every resource as exactly two levels, `{schema | nil,
+table}`. An adapter for an engine with more levels flattens everything
+above the leaf into the schema part, keeping its own separator — BigQuery
+`project.dataset.table` becomes `{"project.dataset", "table"}`. Core
+compares that string verbatim, so write your rules in the flattened
+spelling the adapter emits.
 
 ## Configuration
 
-Configure visibility rules in your application config:
+Visibility rules live in your application config, keyed by data source
+name (matching a key of `:data_sources`) or `:default`:
 
 ```elixir
 config :lotus,
@@ -43,10 +66,9 @@ config :lotus,
   schema_visibility: %{
     default: [
       deny: ["restricted_schema", ~r/^temp_/],
-      allow: :all  # or specific schemas
+      allow: :all  # or a list of specific schemas
     ],
     postgres: [
-      # Only allow public and tenant schemas
       allow: ["public", ~r/^tenant_\d+$/],
       deny: ["legacy_schema"]
     ],
@@ -64,31 +86,33 @@ config :lotus,
       allow: []  # empty = allow all (except denied)
     ],
     postgres: [
-      # Data warehouse example
       allow: [
         {"public", ~r/^dim_/},      # Dimension tables
         {"public", ~r/^fact_/},     # Fact tables
         {"analytics", ~r/.*/}       # All analytics tables
       ],
       deny: [
-        {"public", ~r/^staging_/},  # Block staging tables
-        {"public", ~r/_temp$/}      # Block temp tables
+        {"public", ~r/^staging_/},
+        {"public", ~r/_temp$/}
       ]
     ]
   }
 ```
 
+The source keys are matched by name against the entries of
+`:data_sources` (renamed from `:data_repos` in v1). A source with no
+entry of its own falls back to `:default`.
+
 ## Rule Syntax
 
 ### Schema Rules
 
-Schema rules use simpler patterns since they only match schema names:
+Schema rules match a namespace name:
 
-- `"exact_name"` - Matches exact schema name
-- `~r/pattern/` - Regex pattern for dynamic matching
-- `:all` - Special value for allow rules (allows all schemas)
+- `"exact_name"` — exact match
+- `~r/pattern/` — regex match
+- `:all` — allow value that permits every schema
 
-**Examples**:
 ```elixir
 allow: ["public", "reporting", ~r/^tenant_\w+$/]
 deny: ["restricted", ~r/^temp_/]
@@ -96,70 +120,72 @@ deny: ["restricted", ~r/^temp_/]
 
 ### Table Rules
 
-Table rules support multiple formats for maximum flexibility:
+Table rules take several shapes:
 
-- `{"schema", "table"}` - Exact schema.table match
-- `{"schema", ~r/pattern/}` - Regex table pattern in specific schema
-- `{~r/schema_pattern/, "table"}` - Table in schemas matching pattern
-- `"table"` - Table name in any schema (global rule)
+- `{"schema", "table"}` — exact schema + table
+- `{"schema", ~r/pattern/}` — table pattern inside one schema
+- `{~r/schema_pattern/, "table"}` — table in every matching schema
+- `{nil, "table"}` — table in a source with no namespace (SQLite)
+- `"table"` — table name in any schema (global rule)
 
-**Examples**:
 ```elixir
 allow: [
   {"public", "users"},           # Specific table
-  {"reporting", ~r/^daily_/},    # Tables starting with "daily_" in reporting
-  {~r/^tenant_/, "customers"},   # customers table in any tenant schema
-  "products"                     # products table in any schema
+  {"reporting", ~r/^daily_/},    # daily_* in reporting
+  {~r/^tenant_/, "customers"},   # customers in every tenant schema
+  "products"                     # products in any schema
 ]
 ```
 
+A `nil` schema pattern matches only a relation whose schema is `nil` or
+`""`. That keeps SQLite-shaped rules from matching PostgreSQL relations.
+
 ## Precedence and Evaluation
 
-### 1. Schema Gating (First)
+### 1. Schema gating (first)
+
 ```elixir
-if not allowed_schema?(schema) do
+if not allowed_schema?(source, schema) do
   deny  # Schema denied → everything in it blocked
 else
   # Schema allowed → proceed to table rules
 end
 ```
 
-### 2. Deny Always Wins (Second)
-```elixir
-if deny_rule_matches?(schema, table) do
-  deny  # Any deny rule blocks access
-else
-  # Check allow posture
-end
-```
+### 2. Deny always wins (second)
 
-### 3. Schema-Scoped Allow Posture (Third)
-For each schema, compute its "allow posture":
+Any matching deny rule — built-in or your own — blocks access, even if an
+allow rule also matches.
 
-- **Has allow posture**: Allow rules exist that could apply to this schema
-- **No allow posture**: No allow rules target this schema
+### 3. Schema-scoped allow posture (third)
+
+Allow rules are scoped to the schemas they name, not global. For a given
+schema, Lotus first collects the allow rules that could apply to it:
+
+- **Some rules target this schema** → default-deny: the relation must
+  match one of them.
+- **No rule targets this schema** → default-allow: everything not denied
+  is visible.
 
 ```elixir
 # Rules: allow: [{"restricted", "allowed_table"}]
 
-# For "restricted" schema:
-allow_posture? = true   # Has rule targeting "restricted"
-# → Default-deny: only "allowed_table" allowed
-
-# For "public" schema:
-allow_posture? = false  # No rules targeting "public"
-# → Default-allow: all tables allowed (unless denied)
+{"restricted", "any_table"}   # denied  — the schema has an allow posture
+{"restricted", "allowed_table"} # allowed
+{"public", "any_table"}       # allowed — no allow rule targets "public"
 ```
+
+Bare-string rules (`"products"`) carry no schema, so they never create an
+allow posture for a schema; they only widen what matches.
 
 ## Practical Examples
 
-### Multi-Tenant SaaS Application
+### Multi-tenant SaaS application
 
 ```elixir
 config :lotus,
   schema_visibility: %{
     postgres: [
-      # Only allow public and tenant schemas
       allow: ["public", ~r/^tenant_\d+$/],
       deny: ["admin_schema", "system_logs"]
     ]
@@ -168,12 +194,12 @@ config :lotus,
     postgres: [
       allow: [
         {"public", ~r/^shared_/},        # Shared lookup tables
-        {~r/^tenant_/, "users"},         # User table in each tenant
-        {~r/^tenant_/, "orders"},        # Order table in each tenant
-        {~r/^tenant_/, "products"}       # Product table in each tenant
+        {~r/^tenant_/, "users"},
+        {~r/^tenant_/, "orders"},
+        {~r/^tenant_/, "products"}
       ],
       deny: [
-        {~r/^tenant_/, "internal_logs"}, # Hide logs from all tenants
+        {~r/^tenant_/, "internal_logs"},
         "api_keys"                       # Hide API keys globally
       ]
     ]
@@ -181,12 +207,12 @@ config :lotus,
 ```
 
 **Result**:
-- ✅ `tenant_123.users` → Allowed
-- ✅ `public.shared_categories` → Allowed
-- ❌ `tenant_123.internal_logs` → Denied (table rule)
-- ❌ `admin_schema.anything` → Denied (schema rule)
+- `tenant_123.users` → allowed
+- `public.shared_categories` → allowed
+- `tenant_123.internal_logs` → denied (table rule)
+- `admin_schema.anything` → denied (schema rule)
 
-### Data Warehouse
+### Data warehouse
 
 ```elixir
 config :lotus,
@@ -199,20 +225,20 @@ config :lotus,
   table_visibility: %{
     postgres: [
       allow: [
-        {"public", ~r/^dim_/},         # Dimension tables
-        {"public", ~r/^fact_/},        # Fact tables
-        {"warehouse", ~r/.*/},         # All warehouse tables
-        {"analytics", ~r/^report_/}    # Only report tables in analytics
+        {"public", ~r/^dim_/},
+        {"public", ~r/^fact_/},
+        {"warehouse", ~r/.*/},
+        {"analytics", ~r/^report_/}
       ],
       deny: [
-        {"public", ~r/^raw_/},         # Hide raw data tables
-        {"warehouse", ~r/_backup$/}    # Hide backup tables
+        {"public", ~r/^raw_/},
+        {"warehouse", ~r/_backup$/}
       ]
     ]
   }
 ```
 
-### MySQL Multi-Database Setup
+### MySQL multi-database setup
 
 ```elixir
 config :lotus,
@@ -226,113 +252,269 @@ config :lotus,
   table_visibility: %{
     mysql: [
       allow: [
-        {"lotus_production", ~r/^public_/},    # Only public tables from main DB
-        {"analytics_warehouse", ~r/.*/},       # All analytics tables
-        {"reporting_db", ~r/^report_/}         # Only reports from reporting DB
+        {"lotus_production", ~r/^public_/},
+        {"analytics_warehouse", ~r/.*/},
+        {"reporting_db", ~r/^report_/}
       ],
       deny: [
-        "user_passwords",                      # Hide globally
-        {"lotus_production", ~r/^internal_/}   # Hide internal tables
+        "user_passwords",
+        {"lotus_production", ~r/^internal_/}
       ]
     ]
   }
 ```
 
-## Testing Visibility Rules
+## Scoped Rules
 
-You can test your visibility configuration using the programmatic API:
+Static config covers most applications. When the rules themselves depend
+on who is asking — a role, a tenant, a feature flag — implement
+`Lotus.Visibility.Resolver` and point the `:visibility_resolver` config
+key at it:
 
 ```elixir
-# Test schema visibility
+config :lotus, visibility_resolver: MyApp.VisibilityResolver
+```
+
+Every callback takes the source name and an opaque `scope`:
+
+```elixir
+defmodule MyApp.VisibilityResolver do
+  @behaviour Lotus.Visibility.Resolver
+
+  @impl true
+  def schema_rules_for(_source_name, %{role: :admin}), do: [allow: :all]
+  def schema_rules_for(_source_name, _scope), do: [allow: ["public"]]
+
+  @impl true
+  def table_rules_for(_source_name, %{tenant_id: id}),
+    do: [allow: [{"tenant_#{id}", ~r/.*/}, {"public", ~r/^shared_/}]]
+
+  def table_rules_for(source_name, _scope),
+    do: Lotus.Config.rules_for_source_name(source_name)
+
+  @impl true
+  def column_rules_for(source_name, _scope),
+    do: Lotus.Config.column_rules_for_source_name(source_name)
+end
+```
+
+The default resolver, `Lotus.Visibility.Resolvers.Static`, ignores scope
+and returns the config-based rules shown above.
+
+Callers pass the scope with the `:scope` option:
+
+```elixir
+{:ok, tables} = Lotus.list_tables("postgres", scope: %{tenant_id: 42})
+{:ok, columns} = Lotus.describe_table("postgres", "orders", scope: %{tenant_id: 42})
+```
+
+Scope is hashed into the discovery cache key, so each scope caches
+independently. Keep it low-cardinality (per role, per tenant) for a
+useful hit rate, and drop one scope's entries with:
+
+```elixir
+:ok = Lotus.invalidate_scope(%{tenant_id: 42})
+```
+
+A resolver that reads ambient runtime state (the process dictionary, for
+example) instead of its `scope` argument will cache incorrectly: the
+first caller's rules get stored under a key that ignores them. Pass the
+value as scope, or move the logic into middleware.
+
+See the [Custom Resolvers guide](custom-resolvers.md) for contracts and
+testing guidance.
+
+### Scoped rules are enforced at execution time
+
+As of v1, scoped rules are not a discovery-only filter. Execution
+preflight takes a scope too — `Lotus.Preflight.authorize/4` receives it,
+and `Lotus.Runner` passes the `:scope` option straight through:
+
+```elixir
+{:ok, result} = Lotus.run_query(query, scope: %{tenant_id: 42})
+{:ok, result} = Lotus.run_statement("SELECT * FROM orders", [], scope: %{tenant_id: 42})
+```
+
+**Pass the same scope to execution that you passed to discovery.** Omit
+it and only the unscoped rules apply at run time: a table your resolver
+hides from one tenant would disappear from the explorer while a query
+still returned its rows.
+
+## Execution Preflight
+
+Before running a statement, Lotus asks the adapter which relations the
+statement will touch, then checks each of them against the rules. For
+SQL sources this uses the engine's own planner, so a denied table reached
+through a view or a subquery is still caught.
+
+`c:Lotus.Source.Adapter.extract_accessed_resources/2` returns one of
+three things:
+
+| Return | Meaning |
+| --- | --- |
+| `{:ok, MapSet.t({schema \| nil, table})}` | the relations the statement touches |
+| `{:error, reason}` | extraction failed; the query is rejected with the formatted error |
+| `{:unrestricted, reason}` | this engine cannot say statically which resources a query reads |
+
+A blocked query returns:
+
+```elixir
+{:error, "Query touches blocked table(s): [\"public.api_keys\"]"}
+```
+
+Whether preflight runs at all is the adapter's decision, via
+`c:Lotus.Source.Adapter.needs_preflight?/2`. The built-in Ecto adapter
+skips it for `EXPLAIN` / `SHOW` / `PRAGMA` statements. Lotus core no
+longer sniffs SQL prefixes itself.
+
+### `{:unrestricted, reason}` and `:allow_unrestricted_resources`
+
+Some engines cannot tell, before execution, which resources a query
+reads — Elasticsearch gates access at the index level, for instance. Such
+an adapter returns `{:unrestricted, reason}`.
+
+In v0.x this was a silent `:skip`: the statement ran with no visibility
+check and nothing said so. In v1 it is an explicit operator decision.
+**By default, preflight blocks the statement**:
+
+```elixir
+{:error,
+ "Preflight blocked: source \"elastic\" cannot enforce visibility at the adapter layer " <>
+ "(index-level access control). Set `config :lotus, :allow_unrestricted_resources, true` " <>
+ "or opt in per-source via `allow_unrestricted_resources: true` in the source's " <>
+ "data_sources entry."}
+```
+
+Opt in globally:
+
+```elixir
+config :lotus, allow_unrestricted_resources: true
+```
+
+or — better — for the one source that needs it, in its `:data_sources`
+config map:
+
+```elixir
+config :lotus,
+  data_sources: %{
+    "postgres" => MyApp.Repo,
+    "elastic" => %{
+      adapter: MyApp.ElasticAdapter,
+      url: "http://localhost:9200",
+      allow_unrestricted_resources: true
+    }
+  }
+```
+
+The per-source value wins over the global flag in both directions: a
+source set to `false` stays locked down even under a permissive global
+default.
+
+Opting in means trusting that adapter — or the engine's own access
+control — to enforce visibility. Lotus table rules will not apply to the
+statement. Column policies still apply to the result columns, but only
+the column-only rules (see below).
+
+## Testing Visibility Rules
+
+Check your configuration from IEx:
+
+```elixir
+# Through the discovery API
 {:ok, schemas} = Lotus.list_schemas("postgres")
-# Returns only visible schemas
-
-# Test table visibility
 {:ok, tables} = Lotus.list_tables("postgres", schema: "public")
-# Returns only visible tables in public schema
 
-# Direct visibility check
+# Direct checks
 Lotus.Visibility.allowed_schema?("postgres", "restricted")
-# Returns true/false
+# => false
 
 Lotus.Visibility.allowed_relation?("postgres", {"public", "users"})
-# Returns true/false
+# => true
+
+# With a scope
+Lotus.Visibility.allowed_relation?("postgres", {"tenant_42", "orders"}, %{tenant_id: 42})
+
+# Filter helpers
+Lotus.Visibility.filter_schemas(["public", "pg_catalog"], "postgres")
+# => ["public"]
+
+Lotus.Visibility.filter_relations([{"public", "users"}, {"public", "api_keys"}], "postgres")
+# => [{"public", "users"}]
+
+# Validate requested namespaces
+Lotus.Visibility.validate_schemas(["public", "pg_catalog"], "postgres")
+# => {:error, :schema_not_visible, denied: ["pg_catalog"]}
 ```
+
+Each of these takes an optional trailing `scope` argument, defaulting to
+`nil`.
 
 ## Error Handling
 
-When schema visibility blocks access, you'll receive clear error messages:
-
 ```elixir
-# Trying to list tables in denied schema
+# Listing a denied namespace
 {:error, "Schema(s) not visible: pg_catalog, restricted"} =
   Lotus.list_tables("postgres", schemas: ["public", "pg_catalog", "restricted"])
 
-# Validation helper
-{:error, :schema_not_visible, denied: ["pg_catalog"]} =
-  Lotus.Visibility.validate_schemas(["public", "pg_catalog"], "postgres")
+# Describing a denied table
+{:error, "Table 'public.api_keys' is not visible by Lotus policy"} =
+  Lotus.describe_table("postgres", "api_keys")
+
+# Running a statement that touches a denied table
+{:error, "Query touches blocked table(s): [\"public.api_keys\"]"} =
+  Lotus.run_statement("SELECT * FROM api_keys")
 ```
 
 ## Built-in Security
 
-Lotus automatically denies system schemas to prevent accidental exposure:
+Lotus denies its own and the engine's internals regardless of your rules.
 
-### PostgreSQL Built-ins
-- `pg_catalog` - System catalog
-- `information_schema` - SQL standard metadata
-- `pg_toast` - TOAST storage
-- `~r/^pg_temp/` - Temporary schemas
-- `~r/^pg_toast/` - Additional TOAST schemas
+### PostgreSQL schemas
+`pg_catalog`, `information_schema`, `pg_toast`, `~r/^pg_temp/`, `~r/^pg_toast/`
 
-### MySQL Built-ins
-- `mysql` - MySQL system database
-- `information_schema` - SQL standard metadata
-- `performance_schema` - Performance monitoring
-- `sys` - Diagnostic information
+### MySQL schemas
+`mysql`, `information_schema`, `performance_schema`, `sys`
 
-### All Databases
-- Migration tables (e.g., `schema_migrations`)
-- Lotus internal tables (e.g., `lotus_queries`)
+### Tables, every source
+- the repo's migration table (`schema_migrations`, or whatever
+  `:migration_source` is set to, in the repo's
+  `:migration_default_prefix`)
+- SQLite internals (`~r/^sqlite_/`)
+- Lotus's own storage tables: `lotus_queries`,
+  `lotus_query_visualizations`, `lotus_dashboards`,
+  `lotus_dashboard_cards`, `lotus_dashboard_filters`,
+  `lotus_dashboard_card_filter_mappings`
 
-These built-in denies always apply, even if your custom rules would allow them. This ensures security by default.
-
-## Migration from Table-Only Rules
-
-If you're upgrading from table-only visibility rules:
-
-1. **Review existing rules**: Identify any schema-specific patterns
-2. **Extract schema rules**: Move schema-level restrictions to `schema_visibility`
-3. **Test thoroughly**: Schema rules take precedence and can block more than expected
-4. **Use validation**: Test your configuration with `Lotus.Visibility.validate_schemas/2`
+These denies always apply, even where your rules would allow them.
 
 ## Best Practices
 
-1. **Start restrictive**: Use allow lists for sensitive environments
-2. **Layer security**: Use schema rules for broad restrictions, table rules for fine-tuning
-3. **Test configurations**: Use the programmatic API to verify your rules work as expected
-4. **Document your rules**: Complex visibility configurations should be documented for your team
-5. **Consider performance**: Schema-level filtering is more efficient than table-level
-6. **MySQL considerations**: Remember that schemas = databases in MySQL
-7. **Regex careful**: Test regex patterns thoroughly to avoid unintended matches
+1. **Start restrictive**: use allow lists in sensitive environments
+2. **Layer the levels**: schema rules for broad cuts, table rules for
+   fine-tuning, column rules for individual fields
+3. **Test the configuration**: use the direct-check API above
+4. **Pass scope everywhere**: discovery and execution, or the two
+   disagree
+5. **Document complex rule sets** for your team
+6. **Prefer schema-level filtering**: it is cheaper than table-level
+7. **MySQL**: remember that schemas are databases
+8. **Test your regexes**: an over-broad pattern silently exposes tables
 
 ## Common Patterns
 
-### Development vs Production
+### Development vs production
 
 ```elixir
-# Development - more permissive
+# Development — more permissive
 config :lotus,
   schema_visibility: %{
     default: [allow: :all, deny: ["dangerous_schema"]]
   }
 
-# Production - restrictive allowlist
+# Production — restrictive allowlist
 config :lotus,
   schema_visibility: %{
-    default: [
-      allow: ["public", "reporting"],
-      deny: []  # not needed with restrictive allow
-    ]
+    default: [allow: ["public", "reporting"]]
   }
 ```
 
@@ -342,15 +524,15 @@ config :lotus,
 config :lotus,
   schema_visibility: %{
     postgres: [
-      allow: ["public", ~r/^tenant_[a-f0-9]{8}$/],  # UUID-based tenants
-      deny: []
+      allow: ["public", ~r/^tenant_[a-f0-9]{8}$/]  # UUID-based tenants
     ]
   }
 ```
 
-### Supabase Configuration
+### Supabase
 
-When using Supabase as your database, it includes many additional system schemas that you typically don't want your users to query directly through Lotus. It's recommended to configure Lotus with schema deny rules to hide these internal schemas:
+Supabase adds many internal schemas that your users should not query
+through Lotus. Deny them explicitly:
 
 ```elixir
 config :lotus,
@@ -359,34 +541,30 @@ config :lotus,
       deny: [
         "auth",           # Supabase authentication
         "extensions",     # PostgreSQL extensions
-        "graphql",        # GraphQL schema
-        "graphql_public", # Public GraphQL schema
+        "graphql",
+        "graphql_public",
         "pgbouncer",      # Connection pooler
-        "realtime",       # Realtime subscriptions
-        "storage",        # File storage
+        "realtime",
+        "storage",
         "vault",          # Secrets management
-        "pg_catalog",     # PostgreSQL system catalog
-        "information_schema", # SQL standard metadata
-        "pg_toast"        # TOAST storage
+        "pg_catalog",
+        "information_schema",
+        "pg_toast"
       ]
     ]
   }
 ```
 
-This configuration ensures that:
-- Users can only query your application's schemas (like `public`)
-- Supabase's internal schemas remain hidden from the Lotus interface
-- System schemas are properly protected from accidental exposure
-
-**Note**: The last three schemas (`pg_catalog`, `information_schema`, `pg_toast`) are already blocked by Lotus's built-in security, but including them explicitly in your configuration makes the intent clear.
+The last three are already blocked by the built-in denies; listing them
+makes the intent explicit.
 
 ## Column-Level Visibility
 
-Column visibility provides fine-grained control over individual columns within tables. You can hide sensitive data, mask personally identifiable information (PII), or prevent certain columns from being queried entirely.
+Column visibility controls individual columns inside an allowed table:
+hide sensitive fields, mask personally identifiable information, or
+reject a query that selects a forbidden column.
 
 ### Configuration
-
-Add column visibility rules to your configuration:
 
 ```elixir
 config :lotus,
@@ -414,40 +592,36 @@ config :lotus,
 
 ### Actions
 
-Column policies support four actions:
-
-- **`:allow`** - Show column values normally (default behavior)
-- **`:omit`** - Remove column entirely from query results
-- **`:mask`** - Transform/redact column values using a masking strategy
-- **`:error`** - Fail the query if this column is selected
+- **`:allow`** — show the values normally (default)
+- **`:omit`** — drop the column from the result
+- **`:mask`** — transform or redact the values
+- **`:error`** — fail the query when the column is selected
 
 ### Masking Strategies
 
-When using `:mask` action, choose from these strategies:
-
-#### `:null` - Replace with NULL
+#### `:null` — replace with NULL
 ```elixir
 {"users", "middle_name", [action: :mask, mask: :null]}
 ```
 
-#### `:sha256` - Replace with SHA256 hash
+#### `:sha256` — replace with a SHA256 hash
 ```elixir
 {"users", "ssn", [action: :mask, mask: :sha256]}
-# "123-45-6789" becomes "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3"
+# "123-45-6789" becomes "a665a459…"
 ```
 
-#### `{:fixed, value}` - Replace with fixed value
+#### `{:fixed, value}` — replace with a constant
 ```elixir
 {"users", "salary", [action: :mask, mask: {:fixed, "CONFIDENTIAL"}]}
 ```
 
-#### `{:partial, options}` - Partial masking
+#### `{:partial, options}` — keep the ends, mask the middle
 ```elixir
-# Keep last 4 characters, mask the rest
+# Keep the last 4 characters
 {"users", "phone", [action: :mask, mask: {:partial, keep_last: 4}]}
 # "555-123-4567" becomes "*******4567"
 
-# Keep first 2 and last 4, custom replacement
+# Keep the first 2 and last 4, custom replacement character
 {"users", "email", [action: :mask, mask: {:partial, keep_first: 2, keep_last: 4, replacement: "#"}]}
 # "john@example.com" becomes "jo#######.com"
 ```
@@ -468,68 +642,114 @@ Partial masking never lets a value through untouched:
 Values that are neither text nor binary — a `jsonb` column, for example —
 are rendered the way the UI and exports render them, then masked as text.
 
-### Schema Introspection Control
+### Builder functions
 
-Control whether columns appear in schema introspection:
+`Lotus.Visibility.Policy` builds the same policies in code:
+
+```elixir
+alias Lotus.Visibility.Policy
+
+column_visibility: %{
+  default: [
+    {"ssn", Policy.column_mask(:sha256)},
+    {"debug_info", Policy.column_omit(show_in_schema?: false)},
+    {"password", Policy.column_error()}
+  ]
+}
+```
+
+### Schema introspection control
+
+`show_in_schema?` decides whether the column appears in the output of
+`Lotus.describe_table/3`:
 
 ```elixir
 column_visibility: %{
   default: [
-    # Column is masked but visible in schema
+    # Masked, but still listed in the description
     {"password_hash", [action: :mask, mask: :sha256, show_in_schema?: true]},
 
-    # Column is omitted and hidden from schema
+    # Omitted and hidden from the description
     {"internal_notes", [action: :omit, show_in_schema?: false]}
   ]
 }
 ```
 
-### Pattern Matching
+A column that stays visible in the description carries its policy with
+it, so a UI can label it before anyone runs a query:
 
-Use regex patterns for flexible column matching:
+```elixir
+{:ok, columns} = Lotus.describe_table("postgres", "users")
+
+Enum.find(columns, &(&1.name == "ssn"))
+# %{name: "ssn", type: "text", ..., visibility: %{action: :mask, mask: :sha256}}
+```
+
+### Pattern matching
 
 ```elixir
 column_visibility: %{
   postgres: [
-    # Hide all columns ending in _secret
+    # Every column ending in _secret
     {~r/_secret$/, :error},
 
-    # Mask all PII columns across specific tables
+    # PII columns of the users table, in any schema
     {"users", ~r/(ssn|phone|email)/, [action: :mask, mask: :sha256]},
 
-    # Hash all audit columns in analytics schema
+    # Audit columns in the analytics schema
     {"analytics", ~r/.*/, ~r/^audit_/, [action: :mask, mask: :sha256]}
   ]
 }
 ```
 
-### Simple Syntax
+`"*"` works as a wildcard wherever a pattern is accepted.
 
-For common cases, use atom shortcuts:
+### Simple syntax
 
 ```elixir
 column_visibility: %{
   default: [
-    {"password", :error},        # Same as [action: :error]
-    {"temp_data", :omit},        # Same as [action: :omit]
-    {"user_agent", :mask}        # Same as [action: :mask, mask: :null]
+    {"password", :error},        # same as [action: :error]
+    {"temp_data", :omit},        # same as [action: :omit]
+    {"user_agent", :mask}        # same as [action: :mask, mask: :null]
   ]
 }
 ```
 
-### Precedence Rules
+### Precedence rules
 
-Column rules are evaluated in this order (most to least specific):
+Column rules are evaluated from most to least specific:
 
-1. **Schema + Table + Column** - `{"public", "users", "email", policy}`
-2. **Table + Column** - `{"users", "email", policy}`
-3. **Column Only** - `{"email", policy}`
+1. **Schema + table + column** — `{"public", "users", "email", policy}`
+2. **Table + column** — `{"users", "email", policy}`
+3. **Column only** — `{"email", policy}`
 
-The most specific matching rule wins.
+The most specific match wins.
+
+### Column rules and preflight
+
+The first two forms need to know which tables the result came from.
+Lotus takes that list from execution preflight, so a statement that
+**skipped** preflight — an adapter whose `needs_preflight?/2` returned
+`false`, or a source opted into `:allow_unrestricted_resources` — has no
+relation list, and only **column-only** rules can match.
+
+Write the rule that must always hold in the column-only form:
+
+```elixir
+column_visibility: %{
+  default: [
+    {"ssn", [action: :mask, mask: :sha256]}   # applies everywhere
+  ],
+  postgres: [
+    {"public", "users", "email", :omit}       # needs preflight relations
+  ]
+}
+```
 
 ### Examples
 
-#### PII Protection
+#### PII protection
 ```elixir
 column_visibility: %{
   default: [
@@ -541,9 +761,8 @@ column_visibility: %{
 }
 ```
 
-#### Development vs Production
+#### Development vs production
 ```elixir
-# Different rules per environment
 column_visibility: %{
   default: [
     {"password", if(Mix.env() == :prod, do: :error, else: :allow)},
@@ -552,15 +771,21 @@ column_visibility: %{
 }
 ```
 
-#### Multi-tenant Data
+#### Multi-tenant data
 ```elixir
 column_visibility: %{
   postgres: [
     # Hide tenant isolation columns
     {~r/^tenant_\d+/, ~r/.*/, "tenant_id", :omit},
 
-    # Mask cross-tenant data
+    # Mask cross-tenant references
     {"shared_data", "user_reference", [action: :mask, mask: :sha256]}
   ]
 }
 ```
+
+## Next Steps
+
+- [Schema Introspection](schema-introspection.md) — the discovery API these rules filter
+- [Custom Resolvers](custom-resolvers.md) — scoped and dynamic rule sources
+- [Configuration](configuration.md) — every config key in one place
