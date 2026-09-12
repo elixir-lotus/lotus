@@ -74,6 +74,12 @@
   the stale value for every query that followed. `run_statement/3` now clears
   the relations on every exit, raises included.
 
+- **Lotus compiles without an `Exqlite.Error is undefined` warning in projects
+  that do not use `ecto_sqlite3`.** The SQLite dialect rescued
+  `Exqlite.Error` by name, which made a compile-time reference to an optional
+  dependency. The dialect now matches the error struct by an atom that makes no
+  compile-time reference. SQLite behavior does not change.
+
 ## [1.0.0] - 2026-09-12
 
 > **v1.0 is a large rewrite and not a drop-in upgrade from the v0.16.x
