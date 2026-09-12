@@ -36,6 +36,10 @@ Each middleware receives a payload map whose contents depend on the pipeline eve
 
 `:vars` is the map of bound query variables by name, after defaults and caller-supplied values are merged. It is `%{}` for a raw statement run through `Lotus.run_statement/3`.
 
+### The exact-count run
+
+`window: [count: :exact]` runs a second statement, derived from the page statement, to compute `meta.total_count`. That run carries the caller's `:context`, `:vars`, `:scope` and read-only setting. It fires `:before_execute` (it touches the same tables as the page and is authorised the same way) but not `:before_query` (it is derived from the statement that hook already returned, so a rewriting plug would apply twice) and not `:after_query` (it has no result the caller reads). A halt on the count run leaves `meta.total_count` as `nil` and the page result intact.
+
 ### Discovery event ordering
 
 Discovery calls (`Lotus.list_schemas/2`, `Lotus.list_tables/2`, `Lotus.describe_table/3`, `Lotus.list_relations/2`) fire **two** events per call:
