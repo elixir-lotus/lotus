@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Declare the `decimal` requirement.** `Lotus.Normalizer` renders a
+  `Decimal` with `Decimal.to_string/3` and `max_digits: :infinity`, so that a
+  numeric wider than Decimal's default output cap renders in full instead of
+  raising. That arity arrived in decimal 2.4.0, but Lotus declared no
+  requirement of its own and Ecto's allows `~> 2.0`, so an application could
+  resolve decimal 2.0 to 2.3 and get an `UndefinedFunctionError` the moment a
+  query returned a numeric column. Lotus now requires
+  `~> 2.4 or ~> 3.0`.
+
 ## [1.0.0] - 2026-09-12
 
 > **v1.0 is a large rewrite and not a drop-in upgrade from the v0.16.x
