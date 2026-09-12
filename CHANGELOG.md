@@ -729,6 +729,17 @@
 
 ### Fixed
 
+- **A failed statement no longer hands its tables to the next statement in
+  the same process.** Preflight records the relations it authorised in the
+  process dictionary, and `Lotus.Runner` consumed them only on the success
+  path. A statement that passed preflight and then failed during execution
+  left its relations behind, and a later statement that skips preflight
+  (`EXPLAIN`, `SHOW`, `PRAGMA`) resolved its column policies against the
+  failed statement's tables — masking a column no rule covers, or returning
+  one a rule masks. A long-lived process, such as a LiveView session, carried
+  the stale value for every query that followed. `run_statement/3` now clears
+  the relations on every exit, raises included.
+
 - **Normalizing a `Decimal` no longer depends on which Decimal an
   application resolved.** `Lotus.Normalizer` rendered one with
   `Decimal.to_string/3` and `max_digits: :infinity`, so a numeric wider than

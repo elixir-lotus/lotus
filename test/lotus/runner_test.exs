@@ -1220,4 +1220,43 @@ defmodule Lotus.RunnerTest do
   # exercise the *runtime* guard, which is what real (dynamic) callers hit.
   @spec runtime_term(term()) :: term()
   defp runtime_term(value), do: value
+
+  describe "preflight relations between statements" do
+    setup do
+      Mimic.copy(Lotus.Config)
+      on_exit(&Lotus.Preflight.Relations.clear/0)
+      :ok
+    end
+
+    test "clears the relations of a statement that fails during execution" do
+      assert {:error, _} =
+               Runner.run_statement(
+                 @pg_adapter,
+                 Statement.new("SELECT CAST(email AS integer) AS boom FROM test_users")
+               )
+
+      assert Lotus.Preflight.Relations.get() == []
+    end
+
+    test "a failed statement does not lend its tables to the next statement" do
+      Lotus.Config
+      |> stub(:column_rules_for_source_name, fn _source ->
+        [{"test_users", "search_path", [mask: {:fixed, "REDACTED"}]}]
+      end)
+
+      assert {:error, _} =
+               Runner.run_statement(
+                 @pg_adapter,
+                 Statement.new("SELECT CAST(email AS integer) AS boom FROM test_users")
+               )
+
+      # `SHOW` skips preflight, so it never overwrites the relations the failed
+      # statement left behind. Its column must not take the rule for a table it
+      # does not read.
+      assert {:ok, %{columns: ["search_path"], rows: [[path]]}} =
+               Runner.run_statement(@pg_adapter, Statement.new("SHOW search_path"))
+
+      refute path == "REDACTED"
+    end
+  end
 end

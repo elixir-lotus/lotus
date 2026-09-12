@@ -40,14 +40,23 @@ defmodule Lotus.Runner do
     # that is the point of the hook, for row-level security and tenant
     # predicates. Sanitization and preflight then apply to what will actually
     # execute, rather than to the text the caller originally supplied.
+    #
+    # Preflight records its relations in the process dictionary, and only the
+    # success path consumes them. The `after` clause clears them on every other
+    # exit, so a failed statement cannot hand its tables to the next statement
+    # in the same process.
     result =
-      with {:ok, %Statement{} = statement} <-
-             run_before_query(adapter, statement, context, vars),
-           :ok <- Adapter.sanitize_query(adapter, statement, sanitize_opts(opts)),
-           :ok <- preflight_visibility(adapter, statement, opts),
-           {:ok, %Result{} = res} <- exec_read_only(adapter, statement, opts),
-           {:ok, %Result{} = res} <- run_after_query(adapter, statement, res, context, vars) do
-        {:ok, res}
+      try do
+        with {:ok, %Statement{} = statement} <-
+               run_before_query(adapter, statement, context, vars),
+             :ok <- Adapter.sanitize_query(adapter, statement, sanitize_opts(opts)),
+             :ok <- preflight_visibility(adapter, statement, opts),
+             {:ok, %Result{} = res} <- exec_read_only(adapter, statement, opts),
+             {:ok, %Result{} = res} <- run_after_query(adapter, statement, res, context, vars) do
+          {:ok, res}
+        end
+      after
+        Relations.clear()
       end
 
     case result do
