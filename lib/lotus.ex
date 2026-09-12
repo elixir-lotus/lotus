@@ -496,16 +496,37 @@ defmodule Lotus do
     {statement, pagination_meta, cache_bound} =
       maybe_paginate(statement, adapter, search_path, Keyword.get(opts, :window))
 
+    # The query middleware runs outside the cache callback, as discovery does:
+    # a plug that varies on `:context` — access control, audit — must see every
+    # call, not only the one that fills the cache, and `:context` is not part of
+    # the cache key. `:before_query` therefore runs before the key is built,
+    # because it may rewrite the statement, and only the raw execution is
+    # stored: what `:after_query` makes of the result is not written back.
+    with {:ok, %Statement{} = statement} <- Runner.before_query(adapter, statement, runner_opts),
+         {:ok, %Result{} = res} <-
+           exec_cached_statement(adapter, statement, runner_opts, %{
+             opts: opts,
+             search_path: search_path,
+             pagination_meta: pagination_meta,
+             cache_identity: cache_bound || cache_identity,
+             query_id: query_id
+           }) do
+      Runner.after_query(adapter, statement, res, runner_opts)
+    end
+  end
+
+  defp exec_cached_statement(adapter, statement, runner_opts, ctx) do
+    %{opts: opts, pagination_meta: pagination_meta} = ctx
     scope = Keyword.get(opts, :scope)
 
     key =
-      result_key(statement.body, cache_bound || cache_identity, adapter.name, search_path, scope)
+      result_key(statement.body, ctx.cache_identity, adapter.name, ctx.search_path, scope)
 
-    tags = build_cache_tags(query_id, adapter.name, opts)
+    tags = build_cache_tags(ctx.query_id, adapter.name, opts)
     profile = determine_cache_profile(opts)
 
     exec_with_cache(opts[:cache], profile, key, tags, fn ->
-      with {:ok, %Result{} = res} <- Runner.run_statement(adapter, statement, runner_opts) do
+      with {:ok, %Result{} = res} <- Runner.execute_statement(adapter, statement, runner_opts) do
         {:ok, merge_pagination_meta(res, pagination_meta)}
       end
     end)

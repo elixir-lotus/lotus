@@ -63,6 +63,20 @@ defmodule Lotus.Middleware do
   can enforce rules on the values a caller picked (date-range limits, tenant
   checks) without parsing the statement.
 
+  ### Caching
+
+  `:before_query` and `:after_query` run **outside** the result cache callback —
+  only the raw execution is cached. Both events therefore fire on a cache hit,
+  and context-dependent middleware (per-user access control, audit) is safe to
+  use without keying the cache on `:context`. A `:before_query` plug that
+  rewrites the statement keys its own entry, because the rewritten statement is
+  what builds the key. What an `:after_query` plug makes of the result goes to
+  that caller and is not written back to the cache.
+
+  `:before_execute` runs **inside** the callback, alongside the preflight whose
+  relations it carries, so a cache hit skips it. A plug that must run on every
+  call belongs on `:before_query`.
+
   ### Discovery event ordering
 
   Discovery calls (`Lotus.list_schemas/2`, `list_tables/2`, `describe_table/3`,

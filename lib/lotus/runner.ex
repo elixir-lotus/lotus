@@ -28,19 +28,99 @@ defmodule Lotus.Runner do
           vars: map()
         ]
 
+  @doc """
+  Runs a statement through the full pipeline: `:before_query`, sanitization,
+  preflight, `:before_execute`, execution, column policy enforcement and
+  `:after_query`.
+
+  A caller that wraps execution in the result cache composes the three phases
+  itself — `before_query/3`, `execute_statement/3`, `after_query/4` — so that
+  the query middleware runs on a cache hit as well.
+  """
   @spec run_statement(Adapter.t(), Statement.t(), opts()) ::
           {:ok, query_result()} | {:error, term()}
   def run_statement(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
+    with {:ok, %Statement{} = statement} <- before_query(adapter, statement, opts),
+         {:ok, %Result{} = res} <- execute_statement(adapter, statement, opts) do
+      after_query(adapter, statement, res, opts)
+    end
+  end
+
+  @doc """
+  Runs the `:before_query` pipeline and returns the statement to execute.
+
+  `:before_query` runs first because a plug may rewrite the statement — that is
+  the point of the hook, for row-level security and tenant predicates.
+  Sanitization and preflight then apply to what will actually execute, rather
+  than to the text the caller originally supplied.
+
+  A caller that caches the execution runs this phase outside the cache
+  callback, and builds the cache key from the statement returned here: a plug
+  that varies on `:context` must see every call, not only the one that fills
+  the cache, and two plugs that rewrite differently must not share an entry.
+  """
+  @spec before_query(Adapter.t(), Statement.t(), opts()) ::
+          {:ok, Statement.t()} | {:error, term()}
+  def before_query(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
+    payload = %{
+      source: adapter.name,
+      statement: statement,
+      context: Keyword.get(opts, :context),
+      vars: vars(opts)
+    }
+
+    # A plug that rewrites `:statement` in the payload has its version carried
+    # forward; one that returns the payload untouched leaves the original in
+    # place. Anything that is not a statement is ignored rather than trusted.
+    case Middleware.run(:before_query, payload) do
+      {:cont, %{statement: %Statement{} = rewritten}} -> {:ok, rewritten}
+      {:cont, _} -> {:ok, statement}
+      {:halt, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Runs the `:after_query` pipeline on a result and returns what it yields.
+
+  A caller that caches the execution runs this phase on the returned result,
+  whether that result came from the cache or from the source. A plug that
+  changes the result changes what this call returns; the stored entry keeps the
+  raw execution.
+  """
+  @spec after_query(Adapter.t(), Statement.t(), query_result(), opts()) ::
+          {:ok, query_result()} | {:error, term()}
+  def after_query(%Adapter{} = adapter, %Statement{} = statement, %Result{} = result, opts \\ []) do
+    payload = %{
+      source: adapter.name,
+      statement: statement,
+      result: result,
+      context: Keyword.get(opts, :context),
+      vars: vars(opts)
+    }
+
+    case Middleware.run(:after_query, payload) do
+      {:cont, %{result: %Result{} = res}} -> {:ok, res}
+      {:cont, _} -> {:ok, result}
+      {:halt, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Executes a statement: sanitization, preflight, `:before_execute`, the query
+  itself and column policy enforcement.
+
+  This is the phase the result cache stores. The query middleware around it
+  lives in `before_query/3` and `after_query/4`, and `[:lotus, :query, *]`
+  telemetry covers this phase only — a statement served from the cache emits
+  no query events.
+  """
+  @spec execute_statement(Adapter.t(), Statement.t(), opts()) ::
+          {:ok, query_result()} | {:error, term()}
+  def execute_statement(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
     context = Keyword.get(opts, :context)
-    vars = Keyword.get(opts, :vars) || %{}
     telemetry_meta = %{source: adapter.name, statement: statement, context: context}
     start_time = Telemetry.query_start(telemetry_meta)
 
-    # `:before_query` runs first because a plug may rewrite the statement —
-    # that is the point of the hook, for row-level security and tenant
-    # predicates. Sanitization and preflight then apply to what will actually
-    # execute, rather than to the text the caller originally supplied.
-    #
     # Preflight records its relations in the process dictionary, and
     # `preflight_visibility/3` reads them out once and carries them down the
     # pipeline explicitly. Clearing on both sides keeps them from crossing a
@@ -52,13 +132,10 @@ defmodule Lotus.Runner do
       try do
         Relations.clear()
 
-        with {:ok, %Statement{} = statement} <-
-               run_before_query(adapter, statement, context, vars),
-             :ok <- Adapter.sanitize_query(adapter, statement, sanitize_opts(opts)),
+        with :ok <- Adapter.sanitize_query(adapter, statement, sanitize_opts(opts)),
              {:ok, relations} <- preflight_visibility(adapter, statement, opts),
-             :ok <- run_before_execute(adapter, statement, relations, context, vars),
-             {:ok, %Result{} = res} <- exec_read_only(adapter, statement, relations, opts),
-             {:ok, %Result{} = res} <- run_after_query(adapter, statement, res, context, vars) do
+             :ok <- run_before_execute(adapter, statement, relations, context, vars(opts)),
+             {:ok, %Result{} = res} <- exec_read_only(adapter, statement, relations, opts) do
           {:ok, res}
         end
       after
@@ -79,6 +156,8 @@ defmodule Lotus.Runner do
         error
     end
   end
+
+  defp vars(opts), do: Keyword.get(opts, :vars) || %{}
 
   defp exec_read_only(
          %Adapter{} = adapter,
@@ -267,20 +346,6 @@ defmodule Lotus.Runner do
     Keyword.take(opts, [:read_only])
   end
 
-  # Returns the statement to execute. A plug that rewrites `:statement` in the
-  # payload has its version carried forward; one that returns the payload
-  # untouched leaves the original in place. Anything that is not a statement
-  # is ignored rather than trusted.
-  defp run_before_query(%Adapter{} = adapter, %Statement{} = statement, context, vars) do
-    payload = %{source: adapter.name, statement: statement, context: context, vars: vars}
-
-    case Middleware.run(:before_query, payload) do
-      {:cont, %{statement: %Statement{} = rewritten}} -> {:ok, rewritten}
-      {:cont, _} -> {:ok, statement}
-      {:halt, reason} -> {:error, reason}
-    end
-  end
-
   # Fires once sanitization and preflight have passed, with the relations
   # preflight proved the statement touches. A plug may inspect but not rewrite
   # here — the statement has already been authorized, so the one that executes
@@ -302,27 +367,6 @@ defmodule Lotus.Runner do
 
     case Middleware.run(:before_execute, payload) do
       {:cont, _payload} -> :ok
-      {:halt, reason} -> {:error, reason}
-    end
-  end
-
-  defp run_after_query(
-         %Adapter{} = adapter,
-         %Statement{} = statement,
-         %Result{} = result,
-         context,
-         vars
-       ) do
-    payload = %{
-      source: adapter.name,
-      statement: statement,
-      result: result,
-      context: context,
-      vars: vars
-    }
-
-    case Middleware.run(:after_query, payload) do
-      {:cont, %{result: res}} -> {:ok, res}
       {:halt, reason} -> {:error, reason}
     end
   end

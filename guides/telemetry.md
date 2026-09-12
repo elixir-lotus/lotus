@@ -31,19 +31,22 @@ OpenTelemetry span contexts for trace correlation. The `:scope` option is **not*
 in the metadata — it is caller identity used for cache keys and visibility, not
 instrumentation.
 
-The events bracket the whole `Lotus.Runner` pipeline, so `:start` fires before
-middleware, sanitization and preflight run. Any failure among those — a halted
-`:before_query` plug, a denied table, a driver error — ends the run at
-`:exception`, not `:stop`.
+The events bracket statement execution — sanitization, preflight,
+`:before_execute` and the query itself — so `:start` fires before any of those
+run. Any failure among them — a denied table, a halted `:before_execute` plug, a
+driver error — ends the run at `:exception`, not `:stop`.
 
 Because Lotus turns those failures into `{:error, reason}` rather than letting
 them raise, the `:exception` metadata is uniform: `kind` is always `:error`,
 `reason` is the `{:error, reason}` tuple the caller receives, and `stacktrace`
 is `[]`. Match on `reason` rather than expecting an exception struct.
 
-Query telemetry is emitted from the runner, which sits **inside** the result
-cache. A query served from cache emits no `[:lotus, :query, *]` events at all;
-`[:lotus, :cache, :hit]` is the event to count for those.
+Query telemetry brackets the phase the result cache stores, so a query served
+from cache emits no `[:lotus, :query, *]` events at all; `[:lotus, :cache, :hit]`
+is the event to count for those. The `:before_query` and `:after_query`
+middleware run outside that phase, on every call: a plug that halts there yields
+`{:error, reason}` to the caller without emitting query events, because no
+statement ran.
 
 ### Cache Operations
 

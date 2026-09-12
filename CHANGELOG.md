@@ -20,6 +20,24 @@
 
 ### Fixed
 
+- **`:before_query` and `:after_query` are no longer skipped on a result cache
+  hit.** Both events ran inside the cache callback, so a plug saw only the call
+  that filled the cache: a `:before_query` plug that halts for one user let the
+  same statement through for the next one while the entry was warm, and an audit
+  plug on `:after_query` recorded one execution in place of many. `:context` is
+  not part of the cache key, so two callers with different contexts and the same
+  scope shared one entry. The query middleware now runs outside the callback, as
+  discovery middleware already did: `:before_query` runs before the cache key is
+  built — so a statement it rewrites keys its own entry — only the raw execution
+  is stored, and `:after_query` runs on the result whether it came from the cache
+  or from the source, without writing what it returns back to the cache.
+  `:before_execute` stays inside the callback, next to the preflight whose
+  relations it carries. `Lotus.Runner` exposes the three phases as
+  `before_query/3`, `execute_statement/3` and `after_query/4`;
+  `run_statement/3` composes them and behaves as before, except that
+  `[:lotus, :query, *]` telemetry now brackets the execution phase alone, so a
+  middleware halt emits no query events.
+
 - **A failed statement no longer hands its tables to the next statement in
   the same process.** Preflight records the relations it authorised in the
   process dictionary, and `Lotus.Runner` consumed them only on the success

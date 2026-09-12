@@ -204,6 +204,14 @@ When you call `Lotus.run_query(query, opts)` the request flows through roughly t
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
+│ Lotus.Runner.before_query/3                                          │
+│  • Middleware.run(:before_query, _) — may rewrite the statement      │
+│  • Outside the cache, so it runs on a hit too; the statement it      │
+│    returns is the one the cache key is built from                    │
+└─────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
 │ Lotus.Cache.get_or_store/4                                           │
 │  • Key: from the configured Lotus.Cache.KeyBuilder                   │
 │  • Tags: ["query:<id>", "source:<name>", "scope:<digest>", ...]      │
@@ -213,16 +221,22 @@ When you call `Lotus.run_query(query, opts)` the request flows through roughly t
                                │ miss / :bypass / :refresh
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Lotus.Runner.run_statement(%Adapter{}, %Statement{}, opts)           │
+│ Lotus.Runner.execute_statement(%Adapter{}, %Statement{}, opts)       │
 │  1. Telemetry.query_start                                            │
-│  2. Middleware.run(:before_query, _) — may rewrite the statement     │
-│  3. Adapter.sanitize_query (single statement + deny list)            │
-│  4. Adapter.needs_preflight? → Lotus.Preflight.authorize             │
-│  5. Middleware.run(:before_execute, _) — carries the relations       │
-│  6. Adapter.transaction (read-only) → Adapter.execute_query          │
-│  7. Column policy enforcement (omit / mask / error)                  │
-│  8. Middleware.run(:after_query, _)                                  │
-│  9. Telemetry.query_stop / query_exception                           │
+│  2. Adapter.sanitize_query (single statement + deny list)            │
+│  3. Adapter.needs_preflight? → Lotus.Preflight.authorize             │
+│  4. Middleware.run(:before_execute, _) — carries the relations       │
+│  5. Adapter.transaction (read-only) → Adapter.execute_query          │
+│  6. Column policy enforcement (omit / mask / error)                  │
+│  7. Telemetry.query_stop / query_exception                           │
+└─────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Lotus.Runner.after_query/4                                           │
+│  • Middleware.run(:after_query, _) — on the result, hit or miss      │
+│  • Outside the cache, so a plug that changes the result changes      │
+│    what this caller gets, not what is stored                         │
 └─────────────────────────────────────────────────────────────────────┘
                                │
                                ▼
@@ -234,9 +248,9 @@ A few notes on the pipeline:
 - **Variable binding** happens inside `Lotus.Storage.Query.compile/2`, which also consults `Lotus.Storage.SchemaCache` for type-aware casting of user-supplied values. Substitution itself is adapter-owned: prepared-statement adapters push a placeholder into `statement.body` and the value into `statement.params`, while JSON/DSL adapters inline a properly escaped literal. **Those adapters are the injection boundary** — escape through the target language's own encoder, never by string concatenation.
 - **Filters and sorts** are injected through the adapter, not concatenated naively — see `Lotus.Source.Adapters.Ecto.SQL.FilterInjector` and `SortInjector`. An adapter must declare the operators it handles via `supported_filter_operators/1`; anything else raises `Lotus.UnsupportedOperatorError`.
 - **Pagination** has two strategies for `count: :exact`. An engine that returns the total as a side-effect of the main query puts it in `execute_query/4`'s `:total_count` key; everything else places a count spec in `statement.meta[:count_spec]` and Lotus core runs it. The inline count wins when both are present.
-- **Caching** is optional. When no cache adapter is configured, `Lotus.Cache` is a pass-through and the fetcher always runs.
+- **Caching** is optional. When no cache adapter is configured, `Lotus.Cache` is a pass-through and the fetcher always runs. The cache wraps the execution phase only, so `:before_query` and `:after_query` run on a cache hit; `Lotus.Runner.run_statement/3` composes the same three phases with no cache between them.
 - **Preflight** is skipped when `needs_preflight?/2` returns false (the Ecto adapter keeps the `EXPLAIN` / `SHOW` / `PRAGMA` heuristic internally). The relations it discovers are stashed in `Lotus.Preflight.Relations`, from where the runner reads them once and carries them down the pipeline — to `:before_execute` middleware, and to column visibility policy lookup, without re-parsing the statement. An adapter that cannot enumerate resources returns `{:unrestricted, reason}`, which is blocked unless the operator opts in with `:allow_unrestricted_resources`.
-- **Middleware runs first**, before sanitization and preflight, because a `:before_query` plug may rewrite the statement — row-level security and tenant predicates are the point of the hook. Sanitization and preflight then apply to whatever will actually execute. Halting from a `:before_query` plug yields `{:error, reason}` to the caller. A plug that needs the table list instead of the chance to rewrite registers `:before_execute`, which runs once preflight has named the relations.
+- **Middleware runs first**, outside the cache and before sanitization and preflight, because a `:before_query` plug may rewrite the statement — row-level security and tenant predicates are the point of the hook. Sanitization and preflight then apply to whatever will actually execute. Halting from a `:before_query` plug yields `{:error, reason}` to the caller. A plug that needs the table list instead of the chance to rewrite registers `:before_execute`, which runs once preflight has named the relations.
 
 ### Schema Introspection Flow
 
