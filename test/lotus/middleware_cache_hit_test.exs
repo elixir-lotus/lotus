@@ -10,6 +10,7 @@ defmodule Lotus.MiddlewareCacheHitTest do
 
   alias Lotus.Cache.ETS
   alias Lotus.{Config, Middleware}
+  alias Lotus.Preflight.Relations
   alias Lotus.Test.Schemas.User
 
   defmodule DenyUserPlug do
@@ -36,6 +37,26 @@ defmodule Lotus.MiddlewareCacheHitTest do
 
     def call(%{result: result} = payload, _opts) do
       {:cont, %{payload | result: %{result | rows: [["rewritten"]]}}}
+    end
+  end
+
+  defmodule CapturePlug do
+    @moduledoc false
+    def init(opts), do: opts
+
+    def call(payload, event: event) do
+      send(self(), {event, payload})
+      {:cont, payload}
+    end
+  end
+
+  defmodule ReadRelationsPlug do
+    @moduledoc false
+    def init(opts), do: opts
+
+    def call(payload, _opts) do
+      send(self(), {:relations_at_before_query, Relations.get()})
+      {:cont, payload}
     end
   end
 
@@ -134,5 +155,60 @@ defmodule Lotus.MiddlewareCacheHitTest do
 
     assert {:ok, grace} = run(%{name: "Grace"})
     assert grace.rows == [["Grace"]]
+  end
+
+  describe "the phases that stay inside the cache callback" do
+    test ":before_execute does not fire on a cache hit" do
+      Middleware.compile(%{before_execute: [{CapturePlug, [event: :before_execute]}]})
+
+      assert {:ok, _} = run(nil)
+      assert_received {:before_execute, payload}
+      assert payload.relations == [{"public", "test_users"}]
+
+      # `:before_execute` carries the relations preflight named, and preflight is
+      # what the cache stores, so a hit skips both. A plug that must run on every
+      # call belongs on `:before_query`.
+      assert {:ok, _} = run(nil)
+      refute_received {:before_execute, _payload}
+    end
+
+    test "a cache hit leaves no preflight relations behind" do
+      assert {:ok, _} = run(nil)
+      assert Relations.get() == []
+
+      assert {:ok, _} = run(nil)
+      assert Relations.get() == []
+    end
+
+    # `CAST(email AS integer)` plans fine and fails only once a row is
+    # evaluated, so preflight passes and records its relations before execution
+    # fails. `SHOW` skips preflight, so nothing overwrites those relations.
+    test "a failed statement does not lend its tables to a later cached statement" do
+      show = "SHOW search_path"
+      failing = "SELECT CAST(email AS integer) AS boom FROM test_users"
+
+      assert {:ok, %{rows: [[unmasked_path]]}} =
+               Lotus.run_statement(show, [], repo: "postgres")
+
+      stub(Config, :column_rules_for_source_name, fn _source ->
+        [{"test_users", "search_path", [mask: {:fixed, "REDACTED"}]}]
+      end)
+
+      assert {:error, _} = Lotus.run_statement(failing, [], repo: "postgres")
+
+      assert {:ok, %{columns: ["search_path"], rows: [[path]]}} =
+               Lotus.run_statement(show, [], repo: "postgres", cache: :refresh)
+
+      assert path == unmasked_path
+    end
+
+    test "a :before_query plug never sees relations another statement left behind" do
+      Middleware.compile(%{before_query: [{ReadRelationsPlug, []}]})
+
+      Relations.put([{"public", "test_users"}])
+
+      assert {:ok, _} = run(nil)
+      assert_received {:relations_at_before_query, []}
+    end
   end
 end

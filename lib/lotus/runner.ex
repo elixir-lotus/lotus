@@ -62,6 +62,13 @@ defmodule Lotus.Runner do
   @spec before_query(Adapter.t(), Statement.t(), opts()) ::
           {:ok, Statement.t()} | {:error, term()}
   def before_query(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
+    # The first phase of a run clears the relations, so a plug cannot read a
+    # value another statement left in the process dictionary. `Preflight.
+    # authorize/4` is public, and `execute_statement/3` clears on entry and on
+    # every exit — but on a cache hit it never runs at all, and it is the phases
+    # around it that would then carry a stale value forward.
+    Relations.clear()
+
     payload = %{
       source: adapter.name,
       statement: statement,
