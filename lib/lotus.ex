@@ -392,6 +392,12 @@ defmodule Lotus do
   """
   defdelegate delete_dashboard_filter(filter_or_id, opts \\ []), to: Dashboards
 
+  @doc """
+  Lists the relative date tokens that a `:date` or `:date_range` filter value
+  can use. See `Lotus.Dashboards.DateToken`.
+  """
+  defdelegate list_relative_date_tokens(), to: Dashboards.DateToken, as: :tokens
+
   # ── Filter Mapping Functions ───────────────────────────────────────────────
 
   @doc """

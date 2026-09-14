@@ -220,7 +220,9 @@ rejected by the changeset:
 | `:select` | `:select` |
 
 A filter's `name` must be a valid identifier (`^[A-Za-z_][A-Za-z0-9_]*$`) and
-unique within its dashboard. `label` is required. `default_value` is a string.
+unique within its dashboard. `label` is required. `default_value` is a string:
+a concrete value, or a relative date token for a `:date` or `:date_range`
+filter (see [Relative Date Tokens](#relative-date-tokens)).
 
 ### Creating Filters
 
@@ -325,6 +327,76 @@ Lotus.create_filter_mapping(card, date_filter, "end_date",
 
 With the filter value `"2024-01-01,2024-03-31"`, the card's query receives
 `start_date` = `"2024-01-01"` and `end_date` = `"2024-03-31"`.
+
+### Relative Date Tokens
+
+A filter value can be a relative date token in place of a concrete date. This
+applies to the `default_value` of a filter and to a value in `:filter_values`.
+Lotus resolves the token each time a card runs, so a dashboard with the default
+`"last_30_days"` always shows the last 30 days.
+
+| Token | Range on Monday 2026-09-14 |
+|-------|----------------------------|
+| `"today"` | 2026-09-14 to 2026-09-14 |
+| `"yesterday"` | 2026-09-13 to 2026-09-13 |
+| `"last_7_days"` | 2026-09-08 to 2026-09-14 |
+| `"last_30_days"` | 2026-08-16 to 2026-09-14 |
+| `"last_90_days"` | 2026-06-17 to 2026-09-14 |
+| `"this_week"` | 2026-09-14 to 2026-09-20 |
+| `"this_month"` | 2026-09-01 to 2026-09-30 |
+| `"this_quarter"` | 2026-07-01 to 2026-09-30 |
+| `"this_year"` | 2026-01-01 to 2026-12-31 |
+| `"last_week"` | 2026-09-07 to 2026-09-13 |
+| `"last_month"` | 2026-08-01 to 2026-08-31 |
+| `"last_quarter"` | 2026-04-01 to 2026-06-30 |
+| `"last_year"` | 2025-01-01 to 2025-12-31 |
+
+- The `last_N_days` tokens include today.
+- The week, month, quarter and year tokens cover the full calendar period, also
+  the days after today.
+- Weeks are ISO weeks and start on Monday.
+- Today is the current date in UTC. All cards of one `run_dashboard/2` call use
+  the same day.
+
+The `filter_type` controls how a token resolves:
+
+| `filter_type` | Tokens that resolve | Resolved value |
+|---------------|---------------------|----------------|
+| `:date_range` | all tokens | `"YYYY-MM-DD,YYYY-MM-DD"` |
+| `:date` | `"today"`, `"yesterday"` | `"YYYY-MM-DD"` |
+| `:text`, `:number`, `:select` | none | the value does not change |
+
+A `:date` filter holds one day, so its changeset does not accept a range token
+such as `"last_7_days"` as the `default_value`.
+
+The resolved range of a `:date_range` filter is the value that the
+`date_range_start` and `date_range_end` transforms split:
+
+```elixir
+{:ok, period_filter} = Lotus.create_dashboard_filter(dashboard, %{
+  name: "period",
+  label: "Period",
+  filter_type: :date_range,
+  widget: :date_range_picker,
+  default_value: "last_30_days",
+  position: 0
+})
+
+Lotus.create_filter_mapping(card, period_filter, "start_date",
+  transform: %{"type" => "date_range_start"}
+)
+
+Lotus.create_filter_mapping(card, period_filter, "end_date",
+  transform: %{"type" => "date_range_end"}
+)
+```
+
+On 2026-09-14 the card's query receives `start_date` = `"2026-08-16"` and
+`end_date` = `"2026-09-14"`.
+
+`Lotus.list_relative_date_tokens/0` returns all tokens, for example to fill a
+select in a filter UI. `Lotus.Dashboards.DateToken` resolves tokens outside a
+dashboard run.
 
 ## Running Dashboards
 
