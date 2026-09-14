@@ -345,8 +345,11 @@ defmodule Lotus do
 
   @doc """
   Reorders cards in a dashboard.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate reorder_dashboard_cards(dashboard_or_id, card_ids), to: Dashboards
+  defdelegate reorder_dashboard_cards(dashboard_or_id, card_ids, opts \\ []), to: Dashboards
 
   # ── Dashboard Filter Functions ─────────────────────────────────────────────
 

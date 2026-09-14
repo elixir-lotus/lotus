@@ -10,7 +10,11 @@ defmodule Lotus.Storage do
   `:context`, opaque caller data such as the current user. Each write fires the
   `:before_content_change` and `:after_content_change` middleware. A plug that
   halts makes the function return `{:error, {:halted, reason}}` and nothing is
-  written. See `Lotus.Middleware`.
+  written.
+
+  Deleting a query also deletes its visualizations and sets `query_id` to `nil`
+  on the dashboard cards that showed it. Those changes fire no event; the
+  query's `:delete` is the event to gate and to record. See `Lotus.Middleware`.
   """
 
   import Ecto.Query
@@ -133,9 +137,7 @@ defmodule Lotus.Storage do
   @spec delete_query(Query.t(), keyword()) ::
           {:ok, Query.t()} | {:error, changeset_error() | Middleware.halted()}
   def delete_query(%Query{} = query, opts \\ []) do
-    query
-    |> Ecto.Changeset.change()
-    |> Mutation.run(:delete, :query, opts)
+    Mutation.run(query, :delete, :query, opts)
   end
 
   @doc """

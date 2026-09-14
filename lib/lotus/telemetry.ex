@@ -182,25 +182,54 @@ defmodule Lotus.Telemetry do
 
   ## Content Events
 
-  ### `[:lotus, :content, :change]`
+  A content change is one create, update or delete of a query, visualization,
+  dashboard, dashboard card, dashboard filter or filter mapping, including
+  enabling or disabling public sharing and moving a card in a reorder. The
+  content events bracket each change on every path — a refusal, a failed
+  validation, an update that writes nothing — and always carry the caller's
+  `:context`. A reorder emits one span per card it moves.
 
-  Emitted after a query, visualization, dashboard, dashboard card, dashboard
-  filter or filter mapping is created, updated or deleted. It carries the same
-  metadata as the `:after_content_change` middleware payload. A write that a
-  `:before_content_change` plug refused, or that failed, emits nothing.
+  ### `[:lotus, :content, :change, :start]`
 
-  **Measurements:**
-
-    * `:count` - Always `1`
+  **Measurements:** `:system_time`.
 
   **Metadata:**
 
-    * `:op` - `:create`, `:update` or `:delete`
+    * `:op` - `:create`, `:update`, `:delete`, `:enable_sharing` or
+      `:disable_sharing`
     * `:resource` - `:query`, `:visualization`, `:dashboard`,
       `:dashboard_card`, `:dashboard_filter` or `:filter_mapping`
-    * `:record` - The struct as written
-    * `:changes` - The changes from the changeset; `%{}` on a delete
+    * `:record` - The struct as stored, or `nil` on a create
     * `:context` - The caller-supplied context (or `nil`)
+
+  ### `[:lotus, :content, :change, :stop]`
+
+  Emitted when the change completes. The metadata is the
+  `:after_content_change` middleware payload. It is also emitted for an update
+  that wrote nothing, which fires no `:after_content_change`.
+
+  **Measurements:** `:duration` (native units).
+
+  **Metadata:** the start metadata, with `:record` now the struct as written,
+  plus:
+
+    * `:changes` - Each changed field with its written value; `%{}` on a
+      delete and on an update that wrote nothing
+
+  ### `[:lotus, :content, :change, :exception]`
+
+  Emitted when the change fails: a `:before_content_change` plug refused it, the
+  changeset was invalid, or the write raised, threw or exited. In a reorder,
+  every card change of the call shares the outcome.
+
+  **Measurements:** `:duration`.
+
+  **Metadata:** the start metadata plus:
+
+    * `:kind` - `:error`, or `:throw` or `:exit` when the call did not return
+    * `:reason` - The error the caller receives: `{:halted, reason}` for a
+      refusal, the `Ecto.Changeset` for a failed validation
+    * `:stacktrace` - Present when the call raised, threw or exited
 
   ## Example
 
@@ -258,7 +287,9 @@ defmodule Lotus.Telemetry do
   @schema_start [:lotus, :schema, :introspection, :start]
   @schema_stop [:lotus, :schema, :introspection, :stop]
 
-  @content_change [:lotus, :content, :change]
+  @content_change_start [:lotus, :content, :change, :start]
+  @content_change_stop [:lotus, :content, :change, :stop]
+  @content_change_exception [:lotus, :content, :change, :exception]
 
   @doc false
   def events do
@@ -274,7 +305,9 @@ defmodule Lotus.Telemetry do
       @cache_put,
       @schema_start,
       @schema_stop,
-      @content_change
+      @content_change_start,
+      @content_change_stop,
+      @content_change_exception
     ]
   end
 
@@ -352,8 +385,27 @@ defmodule Lotus.Telemetry do
   end
 
   @doc false
-  def content_change(metadata) do
-    :telemetry.execute(@content_change, %{count: 1}, metadata)
+  def content_change_start(metadata) do
+    start_time = System.monotonic_time()
+    :telemetry.execute(@content_change_start, %{system_time: System.system_time()}, metadata)
+    start_time
+  end
+
+  @doc false
+  def content_change_stop(start_time, metadata) do
+    duration = System.monotonic_time() - start_time
+    :telemetry.execute(@content_change_stop, %{duration: duration}, metadata)
+  end
+
+  @doc false
+  def content_change_exception(start_time, metadata) do
+    duration = System.monotonic_time() - start_time
+
+    :telemetry.execute(
+      @content_change_exception,
+      %{duration: duration},
+      Map.put_new(metadata, :kind, :error)
+    )
   end
 
   @doc false

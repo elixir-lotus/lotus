@@ -22,11 +22,17 @@ defmodule Lotus.Dashboards do
 
   Every function that creates, updates or deletes a dashboard, a card, a filter
   or a filter mapping takes `opts` with a `:context`, opaque caller data such as
-  the current user. So do `enable_public_sharing/2` and
-  `disable_public_sharing/2`, which update the dashboard's `:public_token`.
-  Each write fires the `:before_content_change` and `:after_content_change`
-  middleware. A plug that halts makes the function return
-  `{:error, {:halted, reason}}` and nothing is written. See `Lotus.Middleware`.
+  the current user, and fires the `:before_content_change` and
+  `:after_content_change` middleware. So does `reorder_dashboard_cards/3`,
+  which fires an `:update` for each card it moves, and so do
+  `enable_public_sharing/2` and `disable_public_sharing/2`, which fire
+  `:enable_sharing` and `:disable_sharing`. A plug that halts makes the function
+  return `{:error, {:halted, reason}}` and nothing is written.
+
+  A delete fires an event only for the record it names. Deleting a dashboard
+  also deletes its cards, its filters and their filter mappings, and deleting a
+  card or a filter also deletes its filter mappings, with no event for those.
+  See `Lotus.Middleware`.
   """
 
   import Ecto.Query
@@ -191,9 +197,7 @@ defmodule Lotus.Dashboards do
   @spec delete_dashboard(Dashboard.t(), keyword()) ::
           {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
   def delete_dashboard(%Dashboard{} = dashboard, opts \\ []) do
-    dashboard
-    |> Ecto.Changeset.change()
-    |> Mutation.run(:delete, :dashboard, opts)
+    Mutation.run(dashboard, :delete, :dashboard, opts)
   end
 
   @doc """
@@ -211,8 +215,9 @@ defmodule Lotus.Dashboards do
   @spec enable_public_sharing(Dashboard.t(), keyword()) ::
           {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
   def enable_public_sharing(%Dashboard{} = dashboard, opts \\ []) do
-    token = generate_secure_token()
-    update_dashboard(dashboard, %{public_token: token}, opts)
+    dashboard
+    |> Dashboard.update(%{public_token: generate_secure_token()})
+    |> Mutation.run(:enable_sharing, :dashboard, opts)
   end
 
   @doc """
@@ -227,7 +232,9 @@ defmodule Lotus.Dashboards do
   @spec disable_public_sharing(Dashboard.t(), keyword()) ::
           {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
   def disable_public_sharing(%Dashboard{} = dashboard, opts \\ []) do
-    update_dashboard(dashboard, %{public_token: nil}, opts)
+    dashboard
+    |> Dashboard.update(%{public_token: nil})
+    |> Mutation.run(:disable_sharing, :dashboard, opts)
   end
 
   defp generate_secure_token do
@@ -362,11 +369,8 @@ defmodule Lotus.Dashboards do
           | {:error, Ecto.Changeset.t() | :not_found | Middleware.halted()}
   def delete_dashboard_card(card_or_id, opts \\ [])
 
-  def delete_dashboard_card(%DashboardCard{} = card, opts) do
-    card
-    |> Ecto.Changeset.change()
-    |> Mutation.run(:delete, :dashboard_card, opts)
-  end
+  def delete_dashboard_card(%DashboardCard{} = card, opts),
+    do: Mutation.run(card, :delete, :dashboard_card, opts)
 
   def delete_dashboard_card(id, opts) do
     case Lotus.repo().get(DashboardCard, id) do
@@ -379,7 +383,17 @@ defmodule Lotus.Dashboards do
   Reorders cards in a dashboard.
 
   Accepts a list of card IDs in the desired order. Each card's position
-  will be updated to match its index in the list.
+  will be updated to match its index in the list. IDs of cards that belong
+  to another dashboard are ignored.
+
+  Each card whose position changes is an `:update` of `:dashboard_card`. Every
+  `:before_content_change` runs before any position is written, so a halt on
+  one card leaves every position as it was. The positions are written in one
+  transaction.
+
+  ## Options
+
+    * `:context` - Opaque caller data passed to the content change middleware
 
   ## Examples
 
@@ -387,23 +401,32 @@ defmodule Lotus.Dashboards do
       :ok
 
   """
-  @spec reorder_dashboard_cards(Dashboard.t() | id(), [id()]) :: :ok | {:error, term()}
-  def reorder_dashboard_cards(%Dashboard{id: id}, card_ids),
-    do: reorder_dashboard_cards(id, card_ids)
+  @spec reorder_dashboard_cards(Dashboard.t() | id(), [id()], keyword()) ::
+          :ok | {:error, Ecto.Changeset.t() | Middleware.halted() | term()}
+  def reorder_dashboard_cards(dashboard_or_id, card_ids, opts \\ [])
 
-  def reorder_dashboard_cards(dashboard_id, card_ids) when is_list(card_ids) do
-    case Lotus.repo().transaction(fn ->
-           card_ids
-           |> Enum.with_index()
-           |> Enum.each(fn {card_id, position} ->
-             from(c in DashboardCard,
-               where: c.id == ^card_id and c.dashboard_id == ^dashboard_id
-             )
-             |> Lotus.repo().update_all(set: [position: position])
-           end)
-         end) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
+  def reorder_dashboard_cards(%Dashboard{id: id}, card_ids, opts),
+    do: reorder_dashboard_cards(id, card_ids, opts)
+
+  def reorder_dashboard_cards(dashboard_id, card_ids, opts) when is_list(card_ids) do
+    positions =
+      card_ids
+      |> Enum.with_index()
+      |> Map.new(fn {card_id, position} -> {to_string(card_id), position} end)
+
+    moves =
+      from(c in DashboardCard, where: c.dashboard_id == ^dashboard_id and c.id in ^card_ids)
+      |> Lotus.repo().all()
+      |> Enum.map(&{&1, Map.fetch!(positions, to_string(&1.id))})
+      |> Enum.reject(fn {card, position} -> card.position == position end)
+      |> Enum.sort_by(fn {_card, position} -> position end)
+      |> Enum.map(fn {card, position} ->
+        {Ecto.Changeset.change(card, position: position), :update, :dashboard_card}
+      end)
+
+    case Mutation.run_all(moves, opts) do
+      {:ok, _cards} -> :ok
+      {:error, _reason} = error -> error
     end
   end
 
@@ -501,11 +524,8 @@ defmodule Lotus.Dashboards do
           | {:error, Ecto.Changeset.t() | :not_found | Middleware.halted()}
   def delete_dashboard_filter(filter_or_id, opts \\ [])
 
-  def delete_dashboard_filter(%DashboardFilter{} = filter, opts) do
-    filter
-    |> Ecto.Changeset.change()
-    |> Mutation.run(:delete, :dashboard_filter, opts)
-  end
+  def delete_dashboard_filter(%DashboardFilter{} = filter, opts),
+    do: Mutation.run(filter, :delete, :dashboard_filter, opts)
 
   def delete_dashboard_filter(id, opts) do
     case Lotus.repo().get(DashboardFilter, id) do
@@ -586,11 +606,8 @@ defmodule Lotus.Dashboards do
           | {:error, Ecto.Changeset.t() | :not_found | Middleware.halted()}
   def delete_filter_mapping(mapping_or_id, opts \\ [])
 
-  def delete_filter_mapping(%DashboardCardFilterMapping{} = mapping, opts) do
-    mapping
-    |> Ecto.Changeset.change()
-    |> Mutation.run(:delete, :filter_mapping, opts)
-  end
+  def delete_filter_mapping(%DashboardCardFilterMapping{} = mapping, opts),
+    do: Mutation.run(mapping, :delete, :filter_mapping, opts)
 
   def delete_filter_mapping(id, opts) do
     case Lotus.repo().get(DashboardCardFilterMapping, id) do

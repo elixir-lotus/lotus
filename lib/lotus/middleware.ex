@@ -12,7 +12,7 @@ defmodule Lotus.Middleware do
         def call(payload, opts) do
           {:cont, payload}   # continue to next middleware
           # or
-          {:halt, "reason"}  # stop pipeline, Lotus returns {:error, reason}
+          {:halt, "reason"}  # stop pipeline, the caller gets an error tuple
         end
       end
 
@@ -28,8 +28,8 @@ defmodule Lotus.Middleware do
   | `:after_describe_table` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
   | `:after_list_relations` | After relation discovery and visibility filtering | `:relations`, `:source`, `:scope`, `:context` |
   | `:after_discover` | After any discovery call, following the kind-specific `:after_list_*` event | `:kind`, `:result`, `:source`, `:scope`, `:context` |
-  | `:before_content_change` | Before a query, visualization, dashboard, card, filter or filter mapping is created, updated or deleted | `:op`, `:resource`, `:record`, `:changeset`, `:context` |
-  | `:after_content_change` | After that write succeeds | `:op`, `:resource`, `:record`, `:changes`, `:context` |
+  | `:before_content_change` | Before a query, visualization, dashboard, card, filter or filter mapping is created, updated, deleted, shared or reordered | `:op`, `:resource`, `:record`, `:changeset`, `:context` |
+  | `:after_content_change` | After that change is written | `:op`, `:resource`, `:record`, `:changes`, `:context` |
 
   ### Query event ordering
 
@@ -140,19 +140,22 @@ defmodule Lotus.Middleware do
 
   Every create, update and delete of a query, visualization, dashboard,
   dashboard card, dashboard filter or filter mapping fires
-  `:before_content_change` and then, when the write succeeds,
-  `:after_content_change`. The mutation functions in `Lotus`, `Lotus.Storage`,
+  `:before_content_change` and then, when the change is written,
+  `:after_content_change`. So do reordering dashboard cards and enabling or
+  disabling public sharing. The mutation functions in `Lotus`, `Lotus.Storage`,
   `Lotus.Dashboards` and `Lotus.Viz` take `opts` with a `:context`, as
   `Lotus.run_query/2` does.
 
-    * `:op` is `:create`, `:update` or `:delete`.
+    * `:op` is `:create`, `:update`, `:delete`, `:enable_sharing` or
+      `:disable_sharing`.
     * `:resource` is `:query`, `:visualization`, `:dashboard`,
       `:dashboard_card`, `:dashboard_filter` or `:filter_mapping`.
     * `:record` is the struct as stored on `:before_content_change`, or `nil`
       on a create, and the struct as written on `:after_content_change`.
     * `:changeset` is the `Ecto.Changeset` Lotus is about to write. On a delete
       it has no changes.
-    * `:changes` is the changes of that changeset, `%{}` on a delete.
+    * `:changes` maps each changed field to its written value, embedded fields
+      included. It is `%{}` on a delete.
 
   `:before_content_change` fires whether or not the changeset is valid, so a
   refusal does not first tell the caller what is wrong with the input. A halt
@@ -162,20 +165,57 @@ defmodule Lotus.Middleware do
   functions already return. A plug may not change the changeset: Lotus writes
   the changeset it built.
 
-  Enabling and disabling public sharing are updates of a `:dashboard` whose
-  changes carry `:public_token`: a string when sharing is enabled, `nil` when
-  it is disabled. A plug that refuses sharing matches on that.
+  #### Public sharing
 
-  `:after_content_change` fires after a successful write. The write has
-  happened, so the event cannot stop it: the result of the pipeline is
-  ignored, and a halt only stops the later plugs on that event. The event
-  fires when the repo call returns. If the caller wraps the call in its own
-  transaction, that transaction has not committed yet. The
-  `[:lotus, :content, :change]` telemetry event carries the same metadata for
-  a consumer that prefers telemetry. A refused or failed write fires neither.
+  `Lotus.enable_public_sharing/2` fires `:enable_sharing` and
+  `Lotus.disable_public_sharing/2` fires `:disable_sharing`, both on
+  `:dashboard` with `:public_token` in the changes. On `:enable_sharing`,
+  `:record` holds the token as stored: `nil` for a first enable, the previous
+  token for a rotation. `:public_token` is still a field
+  `Lotus.update_dashboard/3` accepts, and setting it there is an `:update`
+  whose changes carry it, so a plug that refuses sharing checks both.
+
+  #### Reordering cards
+
+  `Lotus.reorder_dashboard_cards/3` fires one `:update` of `:dashboard_card`
+  for each card whose position changes, with `:position` in the changes. Every
+  `:before_content_change` runs before any position is written, so a halt on
+  one card leaves every position as it was. The positions are written in one
+  transaction, and `:after_content_change` fires for each card after it
+  commits.
+
+  #### After the write
+
+  `:after_content_change` fires after the change is written. An update whose
+  changeset has no changes writes nothing and fires no `:after_content_change`.
+  The write has happened, so the event cannot stop it: a plug that halts,
+  raises, throws or exits is logged, the later plugs on the event do not run,
+  and the caller still receives `{:ok, record}`. The event fires when the write
+  returns, or for a reorder when its transaction commits. If the caller wraps
+  the call in its own transaction, that transaction has not committed yet.
+
+  #### Deletes that remove other content
+
+  A delete fires one event, for the record it names. The content removed with
+  it fires none, so the parent's `:delete` is the event to gate and to record.
+
+    * Deleting a dashboard deletes its cards, its filters and their filter
+      mappings.
+    * Deleting a card or a filter deletes its filter mappings.
+    * Deleting a query deletes its visualizations, and sets `query_id` to `nil`
+      on every dashboard card that showed it.
 
   A delete by id that finds no record returns `{:error, :not_found}` and fires
   no event.
+
+  #### Observing content changes
+
+  The `[:lotus, :content, :change, :start | :stop | :exception]` telemetry
+  events bracket every content change, refused or not. `:stop` carries the
+  `:after_content_change` metadata and is emitted for an update that wrote
+  nothing, too. `:exception` carries the reason the caller receives:
+  `{:halted, reason}` for a refusal, the changeset for a failed validation.
+  See `Lotus.Telemetry`.
 
   ## Configuration
 

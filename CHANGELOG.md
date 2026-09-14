@@ -12,12 +12,19 @@
   `:context`, as `Lotus.run_query/2` does; the existing arities keep working.
   `:before_content_change` fires before the write with `:op`, `:resource`,
   `:record`, `:changeset` and `:context`, and a halt makes the function
-  return `{:error, {:halted, reason}}`. `:after_content_change` fires after a
-  successful write with the written `:record` and its `:changes`; it cannot
-  stop the write. Enabling and disabling public sharing are updates of the
-  dashboard's `:public_token`, so a plug can refuse a share link. A
-  `[:lotus, :content, :change]` telemetry event mirrors
-  `:after_content_change`.
+  return `{:error, {:halted, reason}}`. `:after_content_change` fires after
+  the write with the written `:record` and its `:changes`, each changed field
+  with its written value; it cannot stop the write, and a plug that fails
+  there is logged. An update that changes nothing fires no
+  `:after_content_change`. Enabling and disabling public sharing fire
+  `:enable_sharing` and `:disable_sharing`. `Lotus.reorder_dashboard_cards/3`
+  fires an `:update` for each card it moves, runs every before event first and
+  writes the positions in one transaction, so a refusal on one card moves
+  none. A delete fires no event for the content it removes with the record:
+  the cards, filters and filter mappings of a dashboard, the filter mappings
+  of a card or filter, the visualizations of a query and the `query_id` of
+  cards that showed it. `[:lotus, :content, :change, :start | :stop |
+  :exception]` telemetry brackets every content change, a refusal included.
 
 - **`:before_execute` middleware event.** A plug that must authorise a
   statement against the tables it touches had no way to learn them:
