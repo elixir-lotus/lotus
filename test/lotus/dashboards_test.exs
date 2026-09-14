@@ -4,6 +4,7 @@ defmodule Lotus.DashboardsTest do
   import Lotus.Fixtures
 
   alias Lotus.Dashboards
+  alias Lotus.Dashboards.DateToken
 
   alias Lotus.Storage.{
     Dashboard,
@@ -601,7 +602,167 @@ defmodule Lotus.DashboardsTest do
     end
   end
 
+  describe "relative date tokens" do
+    test "resolve a date range token in the default value of a date range filter" do
+      dashboard = dashboard_fixture()
+      card = date_range_card_fixture(dashboard)
+
+      filter =
+        dashboard_filter_fixture(dashboard, %{
+          filter_type: :date_range,
+          widget: :date_range_picker,
+          default_value: "last_7_days"
+        })
+
+      map_start_and_end_dates(card, filter)
+
+      assert {{:ok, result}, days} =
+               run_with_possible_days(fn -> Dashboards.run_dashboard_card(card) end)
+
+      assert result.rows in Enum.map(days, &range_rows_on("last_7_days", &1))
+    end
+
+    test "resolve a token in :filter_values in place of the default value" do
+      dashboard = dashboard_fixture()
+      card = date_range_card_fixture(dashboard)
+
+      filter =
+        dashboard_filter_fixture(dashboard, %{
+          filter_type: :date_range,
+          widget: :date_range_picker,
+          default_value: "2020-01-01,2020-01-31"
+        })
+
+      map_start_and_end_dates(card, filter)
+
+      assert {{:ok, result}, days} =
+               run_with_possible_days(fn ->
+                 Dashboards.run_dashboard_card(card,
+                   filter_values: %{filter.name => "this_month"}
+                 )
+               end)
+
+      assert result.rows in Enum.map(days, &range_rows_on("this_month", &1))
+    end
+
+    test "resolve today in a date filter to one date" do
+      dashboard = dashboard_fixture()
+      card = single_day_card_fixture(dashboard)
+
+      filter =
+        dashboard_filter_fixture(dashboard, %{
+          filter_type: :date,
+          widget: :date_picker,
+          default_value: "today"
+        })
+
+      filter_mapping_fixture(card, filter, "day")
+
+      assert {{:ok, result}, days} =
+               run_with_possible_days(fn -> Dashboards.run_dashboard_card(card) end)
+
+      assert result.rows in Enum.map(days, &[[Date.to_iso8601(&1)]])
+    end
+
+    test "keep a token in a text filter unchanged" do
+      dashboard = dashboard_fixture()
+      card = single_day_card_fixture(dashboard)
+      filter = dashboard_filter_fixture(dashboard, %{default_value: "today"})
+
+      filter_mapping_fixture(card, filter, "day")
+
+      assert {:ok, result} = Dashboards.run_dashboard_card(card)
+      assert result.rows == [["today"]]
+    end
+
+    test "keep a date range token in a date filter unchanged at run time" do
+      dashboard = dashboard_fixture()
+      card = single_day_card_fixture(dashboard)
+      filter = dashboard_filter_fixture(dashboard, %{filter_type: :date, widget: :date_picker})
+
+      filter_mapping_fixture(card, filter, "day")
+
+      assert {:ok, result} =
+               Dashboards.run_dashboard_card(card, filter_values: %{filter.name => "last_7_days"})
+
+      assert result.rows == [["last_7_days"]]
+    end
+
+    test "pass no variable for a date filter with no value" do
+      dashboard = dashboard_fixture()
+      card = single_day_card_fixture(dashboard)
+      filter = dashboard_filter_fixture(dashboard, %{filter_type: :date, widget: :date_picker})
+
+      filter_mapping_fixture(card, filter, "day")
+
+      assert {:error, reason} = Dashboards.run_dashboard_card(card)
+      assert inspect(reason) =~ "day"
+    end
+
+    for parallel? <- [true, false] do
+      test "resolve the same range for every card of a dashboard run with parallel: #{parallel?}" do
+        dashboard = dashboard_fixture()
+        first_card = date_range_card_fixture(dashboard)
+        second_card = date_range_card_fixture(dashboard)
+
+        filter =
+          dashboard_filter_fixture(dashboard, %{
+            filter_type: :date_range,
+            widget: :date_range_picker,
+            default_value: "this_quarter"
+          })
+
+        map_start_and_end_dates(first_card, filter)
+        map_start_and_end_dates(second_card, filter)
+
+        {results, days} =
+          run_with_possible_days(fn ->
+            Dashboards.run_dashboard(dashboard, parallel: unquote(parallel?))
+          end)
+
+        assert {:ok, %{rows: first_card_rows}} = results[first_card.id]
+        assert {:ok, %{rows: ^first_card_rows}} = results[second_card.id]
+        assert first_card_rows in Enum.map(days, &range_rows_on("this_quarter", &1))
+      end
+    end
+  end
+
+  defp date_range_card_fixture(dashboard) do
+    query =
+      query_fixture(%{
+        statement: "SELECT {{start_date}}::text AS start_date, {{end_date}}::text AS end_date"
+      })
+
+    dashboard_card_fixture(dashboard, %{card_type: :query, query_id: query.id})
+  end
+
+  defp single_day_card_fixture(dashboard) do
+    query = query_fixture(%{statement: "SELECT {{day}}::text AS day"})
+    dashboard_card_fixture(dashboard, %{card_type: :query, query_id: query.id})
+  end
+
+  defp map_start_and_end_dates(card, filter) do
+    filter_mapping_fixture(card, filter, "start_date", transform: %{"type" => "date_range_start"})
+    filter_mapping_fixture(card, filter, "end_date", transform: %{"type" => "date_range_end"})
+  end
+
+  # A run can cross UTC midnight, so the expected value can be for either day
+  defp run_with_possible_days(run) do
+    day_before_run = Date.utc_today()
+    outcome = run.()
+    {outcome, Enum.uniq([day_before_run, Date.utc_today()])}
+  end
+
+  defp range_rows_on(token, day) do
+    {:ok, range} = DateToken.range(token, day)
+    [[Date.to_iso8601(range.first), Date.to_iso8601(range.last)]]
+  end
+
   describe "Lotus module delegations" do
+    test "delegates list_relative_date_tokens/0" do
+      assert Lotus.list_relative_date_tokens() == DateToken.tokens()
+    end
+
     test "delegates list_dashboards/0" do
       dashboard_fixture(%{name: "Delegated"})
       assert [%{name: "Delegated"}] = Lotus.list_dashboards()

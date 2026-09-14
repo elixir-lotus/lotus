@@ -23,6 +23,14 @@ defmodule Lotus.Storage.DashboardFilter do
 
   The `config` field stores widget-specific configuration like select options,
   date formats, or validation rules.
+
+  ## Relative Date Tokens
+
+  The `default_value` of a `:date_range` filter can be a relative date token
+  such as `"last_30_days"`, and the `default_value` of a `:date` filter can be
+  `"today"` or `"yesterday"`. The token resolves each time a card runs, see
+  `Lotus.Dashboards.DateToken`. The changeset does not accept a range token as
+  the `default_value` of a `:date` filter.
   """
 
   use Ecto.Schema
@@ -30,6 +38,7 @@ defmodule Lotus.Storage.DashboardFilter do
 
   import Lotus.Helpers, only: [stringify_keys: 1]
 
+  alias Lotus.Dashboards.DateToken
   alias Lotus.Storage.{Dashboard, DashboardCardFilterMapping}
 
   @type t :: %__MODULE__{
@@ -103,6 +112,7 @@ defmodule Lotus.Storage.DashboardFilter do
     |> validate_format(:name, ~r/^[A-Za-z_][A-Za-z0-9_]*$/, message: "must be a valid identifier")
     |> validate_number(:position, greater_than_or_equal_to: 0)
     |> validate_widget_type_compatibility()
+    |> validate_default_value_for_filter_type()
     |> unique_constraint(:name,
       name: "lotus_dashboard_filters_dashboard_id_name_index",
       message: "name must be unique within the dashboard"
@@ -140,6 +150,22 @@ defmodule Lotus.Storage.DashboardFilter do
         :widget,
         "#{widget} is not compatible with filter type #{filter_type}"
       )
+    end
+  end
+
+  defp validate_default_value_for_filter_type(changeset) do
+    filter_type = get_field(changeset, :filter_type)
+    default_value = get_field(changeset, :default_value)
+
+    if filter_type == :date and default_value in DateToken.tokens() and
+         not DateToken.single_day?(default_value) do
+      add_error(
+        changeset,
+        :default_value,
+        "#{default_value} is a date range token and needs filter type date_range"
+      )
+    else
+      changeset
     end
   end
 end

@@ -1,6 +1,8 @@
 defmodule Lotus.Storage.DashboardTest do
   use Lotus.Case, async: true
 
+  alias Lotus.Dashboards.DateToken
+
   alias Lotus.Storage.{
     Dashboard,
     DashboardCard,
@@ -475,6 +477,99 @@ defmodule Lotus.Storage.DashboardTest do
       assert changeset.valid?
       config = Ecto.Changeset.get_field(changeset, :config)
       assert config == %{"options" => ["a", "b", "c"]}
+    end
+
+    test "rejects a date range token as the default value of a date filter" do
+      changeset =
+        DashboardFilter.new(%{
+          dashboard_id: 1,
+          name: "filter",
+          label: "Filter",
+          filter_type: :date,
+          widget: :date_picker,
+          position: 0,
+          default_value: "last_7_days"
+        })
+
+      refute changeset.valid?
+
+      assert %{
+               default_value: [
+                 "last_7_days is a date range token and needs filter type date_range"
+               ]
+             } =
+               errors_on(changeset)
+    end
+
+    test "rejects a date range token when the filter type changes to date" do
+      filter = %DashboardFilter{
+        dashboard_id: 1,
+        name: "filter",
+        label: "Filter",
+        filter_type: :date_range,
+        widget: :date_range_picker,
+        position: 0,
+        default_value: "this_month"
+      }
+
+      changeset = DashboardFilter.update(filter, %{filter_type: :date, widget: :date_picker})
+
+      refute changeset.valid?
+
+      assert %{
+               default_value: [
+                 "this_month is a date range token and needs filter type date_range"
+               ]
+             } = errors_on(changeset)
+    end
+
+    test "accepts a single day token or a concrete date as the default value of a date filter" do
+      for default_value <- ["today", "yesterday", "2026-01-01"] do
+        changeset =
+          DashboardFilter.new(%{
+            dashboard_id: 1,
+            name: "filter",
+            label: "Filter",
+            filter_type: :date,
+            widget: :date_picker,
+            position: 0,
+            default_value: default_value
+          })
+
+        assert changeset.valid?, "Expected default_value #{default_value} to be valid"
+      end
+    end
+
+    test "accepts every date token as the default value of a date range filter" do
+      for token <- DateToken.tokens() do
+        changeset =
+          DashboardFilter.new(%{
+            dashboard_id: 1,
+            name: "filter",
+            label: "Filter",
+            filter_type: :date_range,
+            widget: :date_range_picker,
+            position: 0,
+            default_value: token
+          })
+
+        assert changeset.valid?, "Expected default_value #{token} to be valid"
+      end
+    end
+
+    test "accepts a date range token as the default value of a text filter" do
+      changeset =
+        DashboardFilter.new(%{
+          dashboard_id: 1,
+          name: "filter",
+          label: "Filter",
+          filter_type: :text,
+          widget: :input,
+          position: 0,
+          default_value: "last_7_days"
+        })
+
+      assert changeset.valid?
     end
   end
 

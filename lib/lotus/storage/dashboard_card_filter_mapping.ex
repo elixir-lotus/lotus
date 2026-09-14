@@ -8,18 +8,24 @@ defmodule Lotus.Storage.DashboardCardFilterMapping do
 
   ## Transform
 
-  The optional `transform` field allows value transformation before passing to
-  the query variable. Common use cases:
+  The optional `transform` field changes the filter value before the query
+  variable gets it. Lotus has two transforms, for a date range value in the
+  form `"start,end"`:
 
-  - Date range filters that need to split into `start_date` and `end_date` variables
-  - Type coercion (e.g., string to integer)
-  - Default value override
+  - `"date_range_start"` - keeps the part before the comma
+  - `"date_range_end"` - keeps the part after the comma. A value with no comma
+    does not change
+
+  Any other transform does not change the value.
+
+  The transform gets the value after `Lotus.Dashboards.DateToken` resolves a
+  relative date token, so a `:date_range` filter with the value
+  `"last_7_days"` can map its start and end dates to two variables.
 
   Example transform config:
   ```json
   {
-    "type": "date_range_start",
-    "format": "YYYY-MM-DD"
+    "type": "date_range_start"
   }
   ```
   """

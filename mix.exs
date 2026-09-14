@@ -100,6 +100,11 @@ defmodule Lotus.MixProject do
         "Core API": [Lotus, Lotus.Config, Lotus.Value],
         "Query Storage": [Lotus.Storage, Lotus.Storage.Query, Lotus.Storage.QueryVariable],
         "Query Execution": [Lotus.Runner, Lotus.Result, Lotus.Preflight],
+        Dashboards: [
+          Lotus.Dashboards,
+          Lotus.Dashboards.DateToken,
+          ~r/Lotus\.Storage\.Dashboard.*/
+        ],
         "Data Export": [Lotus.Export, ~r/Lotus\.Export\..+/],
         "Data Sources": [Lotus.Source, Lotus.Source.Adapter, Lotus.Source.Resolver],
         "Adapter Authoring": [

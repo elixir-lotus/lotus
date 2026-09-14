@@ -39,6 +39,7 @@ defmodule Lotus.Dashboards do
 
   import Lotus.Helpers, only: [escape_like: 1]
 
+  alias Lotus.Dashboards.DateToken
   alias Lotus.Middleware
 
   alias Lotus.Storage.{
@@ -632,12 +633,14 @@ defmodule Lotus.Dashboards do
 
   ## Filter Resolution
 
-  Filter values are resolved to query variables through the configured mappings.
-  For each card:
-  1. Get all filter mappings for the card
-  2. For each mapping, get the filter value from `:filter_values`
-  3. Apply any configured transform to the value
+  Filter values are resolved to query variables through the configured mappings:
+  1. For each filter, get the value from `:filter_values`, or else the filter's
+     `default_value`
+  2. Resolve a relative date token in the value, see `Lotus.Dashboards.DateToken`
+  3. For each mapping of a card, apply any configured transform to the value
   4. Pass the value to the query as the mapped variable name
+
+  All cards of one run resolve tokens against the same day.
 
   ## Examples
 
@@ -659,11 +662,10 @@ defmodule Lotus.Dashboards do
   def run_dashboard(dashboard_id, opts) do
     cards = list_dashboard_cards(dashboard_id)
     filters = list_dashboard_filters(dashboard_id)
-    filter_values = Keyword.get(opts, :filter_values, %{})
     parallel? = Keyword.get(opts, :parallel, true)
     timeout = Keyword.get(opts, :timeout, 30_000)
 
-    filter_lookup = Map.new(filters, &{&1.id, &1})
+    values_by_filter_id = resolve_filter_values(filters, Keyword.get(opts, :filter_values, %{}))
     query_cards = Enum.filter(cards, &(&1.card_type == :query))
 
     # Preload all filter mappings for all query cards to avoid N+1 queries
@@ -671,9 +673,9 @@ defmodule Lotus.Dashboards do
     all_mappings = preload_mappings_for_cards(card_ids)
 
     if parallel? do
-      run_cards_parallel(query_cards, filter_values, filter_lookup, all_mappings, opts, timeout)
+      run_cards_parallel(query_cards, values_by_filter_id, all_mappings, opts, timeout)
     else
-      run_cards_sequential(query_cards, filter_values, filter_lookup, all_mappings, opts)
+      run_cards_sequential(query_cards, values_by_filter_id, all_mappings, opts)
     end
   end
 
@@ -699,11 +701,10 @@ defmodule Lotus.Dashboards do
     if card.card_type != :query do
       {:error, :not_a_query_card}
     else
-      filter_values = Keyword.get(opts, :filter_values, %{})
-
       mappings = list_card_filter_mappings(card.id)
-      filter_lookup = Map.new(mappings, fn m -> {m.filter_id, m.filter} end)
-      vars = resolve_card_variables(mappings, filter_values, filter_lookup)
+      filters = mappings |> Enum.map(& &1.filter) |> Enum.reject(&is_nil/1)
+      values_by_filter_id = resolve_filter_values(filters, Keyword.get(opts, :filter_values, %{}))
+      vars = resolve_card_variables(mappings, values_by_filter_id)
 
       query_opts = Keyword.drop(opts, [:filter_values])
       run_opts = Keyword.put(query_opts, :vars, vars)
@@ -730,7 +731,7 @@ defmodule Lotus.Dashboards do
     |> Enum.group_by(& &1.card_id)
   end
 
-  defp run_cards_parallel(cards, filter_values, filter_lookup, all_mappings, opts, timeout) do
+  defp run_cards_parallel(cards, values_by_filter_id, all_mappings, opts, timeout) do
     cards
     |> Enum.map(fn card ->
       # Capture card_id before spawning to handle timeouts
@@ -738,7 +739,7 @@ defmodule Lotus.Dashboards do
 
       task =
         Task.Supervisor.async(Lotus.Supervisor.task_supervisor_name(Lotus), fn ->
-          execute_card(card, filter_values, filter_lookup, all_mappings, opts)
+          execute_card(card, values_by_filter_id, all_mappings, opts)
         end)
 
       {card_id, task}
@@ -754,16 +755,16 @@ defmodule Lotus.Dashboards do
     end)
   end
 
-  defp run_cards_sequential(cards, filter_values, filter_lookup, all_mappings, opts) do
+  defp run_cards_sequential(cards, values_by_filter_id, all_mappings, opts) do
     Enum.reduce(cards, %{}, fn card, acc ->
-      result = execute_card(card, filter_values, filter_lookup, all_mappings, opts)
+      result = execute_card(card, values_by_filter_id, all_mappings, opts)
       Map.put(acc, card.id, result)
     end)
   end
 
-  defp execute_card(card, filter_values, filter_lookup, all_mappings, opts) do
+  defp execute_card(card, values_by_filter_id, all_mappings, opts) do
     mappings = Map.get(all_mappings, card.id, [])
-    vars = resolve_card_variables(mappings, filter_values, filter_lookup)
+    vars = resolve_card_variables(mappings, values_by_filter_id)
 
     query_opts = Keyword.drop(opts, [:filter_values, :parallel, :timeout])
     run_opts = Keyword.put(query_opts, :vars, vars)
@@ -773,23 +774,29 @@ defmodule Lotus.Dashboards do
     e -> {:error, Exception.message(e)}
   end
 
-  defp resolve_card_variables(mappings, filter_values, filter_lookup) do
+  # Takes today once, so every card of one run resolves tokens against the same day
+  defp resolve_filter_values(filters, filter_values) do
+    today = Date.utc_today()
+
+    Enum.reduce(filters, %{}, fn filter, values ->
+      case Map.get(filter_values, filter.name) || filter.default_value do
+        missing when missing in [nil, false] ->
+          values
+
+        value ->
+          Map.put(values, filter.id, DateToken.resolve(value, filter.filter_type, today))
+      end
+    end)
+  end
+
+  defp resolve_card_variables(mappings, values_by_filter_id) do
     Enum.reduce(mappings, %{}, fn mapping, vars ->
-      filter = Map.get(filter_lookup, mapping.filter_id)
+      case Map.fetch(values_by_filter_id, mapping.filter_id) do
+        {:ok, value} ->
+          Map.put(vars, mapping.variable_name, apply_transform(value, mapping.transform))
 
-      if filter do
-        # Get filter value from supplied values or fall back to default
-        raw_value = Map.get(filter_values, filter.name) || filter.default_value
-
-        if raw_value do
-          # Apply transform if configured
-          value = apply_transform(raw_value, mapping.transform)
-          Map.put(vars, mapping.variable_name, value)
-        else
+        :error ->
           vars
-        end
-      else
-        vars
       end
     end)
   end

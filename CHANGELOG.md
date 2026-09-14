@@ -4,6 +4,23 @@
 
 ### Added
 
+- **Relative date tokens in dashboard filters.** A dashboard filter value had
+  to be a concrete date, so a default such as "the last 30 days" went out of
+  date. A `:date_range` filter now accepts `today`, `yesterday`,
+  `last_7_days`, `last_30_days`, `last_90_days`, `this_week`, `this_month`,
+  `this_quarter`, `this_year`, `last_week`, `last_month`, `last_quarter` and
+  `last_year` as its `default_value` or in `:filter_values`, and a `:date`
+  filter accepts `today` and `yesterday`. `Lotus.Dashboards` resolves the
+  token to concrete dates in UTC each time a card runs, before the mapping
+  transform, so `date_range_start` and `date_range_end` split the resolved
+  range. All cards of one `run_dashboard/2` call use the same day. The week,
+  month, quarter and year tokens cover the full calendar period, weeks start
+  on Monday, and the `last_N_days` tokens include today. A value of a `:text`,
+  `:number` or `:select` filter does not change. The `DashboardFilter`
+  changeset now rejects a range token as the `default_value` of a `:date`
+  filter. `Lotus.Dashboards.DateToken` resolves tokens, and
+  `Lotus.list_relative_date_tokens/0` lists them.
+
 - **`Lotus.Visibility.Mask.apply/2` and the `keep_domain` option for partial
   masks.** The runner applied column mask strategies with private functions,
   so a middleware plug that masked result values had to copy them, and the
