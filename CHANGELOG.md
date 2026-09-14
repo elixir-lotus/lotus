@@ -4,6 +4,16 @@
 
 ### Added
 
+- **`Lotus.Visibility.Mask.apply/2` and the `keep_domain` option for partial
+  masks.** The runner applied column mask strategies with private functions,
+  so a middleware plug that masked result values had to copy them, and the
+  copies could drift. `Lotus.Visibility.Mask.apply/2` applies one strategy to
+  one value, and the runner now calls it, so the output of every existing
+  strategy does not change. `{:partial, keep_domain: true}` keeps `@` and the
+  domain after the last `@` of a value and applies `keep_first`, `keep_last`
+  and `replacement` to the local part only. A value with no `@` is masked
+  completely.
+
 - **`:before_content_change` and `:after_content_change` middleware events.**
   Creating, updating or deleting a query, a visualization, a dashboard, a
   card, a filter or a filter mapping wrote straight to the repo, so a host

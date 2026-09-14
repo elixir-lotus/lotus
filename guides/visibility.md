@@ -619,12 +619,21 @@ config :lotus,
 ```elixir
 # Keep the last 4 characters
 {"users", "phone", [action: :mask, mask: {:partial, keep_last: 4}]}
-# "555-123-4567" becomes "*******4567"
+# "555-123-4567" becomes "********4567"
 
 # Keep the first 2 and last 4, custom replacement character
 {"users", "email", [action: :mask, mask: {:partial, keep_first: 2, keep_last: 4, replacement: "#"}]}
-# "john@example.com" becomes "jo#######.com"
+# "john@example.com" becomes "jo##########.com"
+
+# Keep the domain of an email address and mask the local part
+{"users", "email", [action: :mask, mask: {:partial, keep_domain: true, keep_first: 1, keep_last: 0}]}
+# "john@example.com" becomes "j***@example.com"
 ```
+
+With `keep_domain: true`, the `@` and the domain after the last `@` stay, and
+`keep_first`, `keep_last` and `replacement` apply to the local part only. The
+default `keep_last: 4` also applies to the local part, so set `keep_last: 0` to
+hide all of it. A value with no `@` is masked completely.
 
 Partial masking never lets a value through untouched:
 
@@ -641,6 +650,10 @@ Partial masking never lets a value through untouched:
 
 Values that are neither text nor binary — a `jsonb` column, for example —
 are rendered the way the UI and exports render them, then masked as text.
+
+`Lotus.Visibility.Mask.apply/2` applies a strategy to one value, the same way
+column policies do. A middleware plug that masks values can call it — see
+[Redacting Sensitive Data in Results](middleware.md#redacting-sensitive-data-in-results).
 
 ### Builder functions
 

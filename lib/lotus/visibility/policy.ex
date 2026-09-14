@@ -138,12 +138,18 @@ defmodule Lotus.Visibility.Policy do
     - `keep_first: n` - Keep first n characters
     - `keep_last: n` - Keep last n characters
     - `replacement: str` - Character to use for masking (default: "*")
+    - `keep_domain: true` - Keep `@` and the domain after the last `@`, and
+      apply the options above to the local part only. A value with no `@` is
+      masked completely.
 
   Partial masking keeps nothing when `keep_first` plus `keep_last` covers the
   whole value, so a value that leaves nothing to mask is masked completely.
   Binary values that do not hold text (`bytea`, `BLOB`, `VARBINARY`) become one
   replacement character per byte. Any other value is rendered with
   `Lotus.Value.to_display_string/1` and then masked as text.
+
+  `Lotus.Visibility.Mask.apply/2` applies a strategy to one value, the same way
+  the runner does.
 
   ## Examples
 
@@ -214,7 +220,7 @@ defmodule Lotus.Visibility.Policy do
     - :null
     - :sha256
     - {:fixed, value}
-    - {:partial, [keep_first: n, keep_last: n, replacement: str]}
+    - {:partial, [keep_first: n, keep_last: n, replacement: str, keep_domain: true]}
     """
   end
 
