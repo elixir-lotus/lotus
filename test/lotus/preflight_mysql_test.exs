@@ -201,7 +201,6 @@ defmodule Lotus.PreflightMysqlTest do
 
   describe "MySQL preflight with bare string deny rules" do
     setup do
-      Mimic.copy(Lotus.Config)
       config = [allow: [], deny: ["test_users", "test_posts"]]
       Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> config end)
       :ok

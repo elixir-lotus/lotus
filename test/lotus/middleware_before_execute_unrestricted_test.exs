@@ -37,7 +37,6 @@ defmodule Lotus.MiddlewareBeforeExecuteUnrestrictedTest do
   setup :set_mimic_from_context
 
   setup do
-    Mimic.copy(Lotus.Config)
     on_exit(fn -> :persistent_term.erase({Lotus.Middleware, :compiled}) end)
     :ok
   end

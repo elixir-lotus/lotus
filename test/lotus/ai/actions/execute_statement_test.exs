@@ -4,11 +4,6 @@ defmodule Lotus.AI.Actions.ExecuteStatementTest do
   alias Lotus.AI.Actions.ExecuteStatement
   alias Lotus.Result
 
-  setup do
-    Mimic.copy(Lotus)
-    :ok
-  end
-
   describe "run/2" do
     test "executes SQL and returns result with metadata" do
       stub(Lotus, :run_statement, fn _statement, _params, _opts ->

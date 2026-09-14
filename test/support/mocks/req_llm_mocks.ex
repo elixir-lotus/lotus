@@ -9,15 +9,6 @@ defmodule Lotus.ReqLLMMocks do
   import Lotus.AIFixtures
 
   @doc """
-  Setup Mimic copies for ReqLLM modules.
-
-  Call this in test setup blocks before using ReqLLM mocks.
-  """
-  def setup_mocks do
-    Mimic.copy(ReqLLM)
-  end
-
-  @doc """
   Mock successful SQL generation from LLM.
 
   Returns a canned successful response with SQL in markdown format.

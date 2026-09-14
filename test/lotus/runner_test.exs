@@ -1086,11 +1086,6 @@ defmodule Lotus.RunnerTest do
   end
 
   describe "column masking" do
-    setup do
-      Mimic.copy(Lotus.Config)
-      :ok
-    end
-
     test "partial mask hides every byte of a value that is not valid UTF-8" do
       Lotus.Config
       |> stub(:column_rules_for_source_name, fn _source ->
@@ -1223,13 +1218,6 @@ defmodule Lotus.RunnerTest do
   defp runtime_term(value), do: value
 
   describe "preflight relations between statements" do
-    setup do
-      Mimic.copy(Lotus.Config)
-      Mimic.copy(Lotus.Middleware)
-      Mimic.copy(Lotus.Source.Adapter)
-      :ok
-    end
-
     # `CAST(email AS integer)` plans fine and fails only once a row is
     # evaluated, so preflight passes and records its relations first. The
     # issue's `1 / 0` cannot stand in for it: constant folding makes that fail

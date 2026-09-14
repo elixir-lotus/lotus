@@ -5,11 +5,6 @@ defmodule Lotus.CacheTest do
   alias Lotus.Cache
   alias Lotus.Config
 
-  setup do
-    Mimic.copy(Lotus.Config)
-    :ok
-  end
-
   describe "when cache is enabled" do
     setup :verify_on_exit!
 

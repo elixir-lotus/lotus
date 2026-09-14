@@ -96,8 +96,6 @@ defmodule Lotus.Integration.NonSql.InMemoryEndToEndTest do
 
   describe "cache invalidation via source tag" do
     setup do
-      Mimic.copy(Config)
-
       Config
       |> stub(:cache_adapter, fn -> {:ok, Lotus.Cache.ETS} end)
       |> stub(:cache_namespace, fn -> "non_sql_integration_test" end)

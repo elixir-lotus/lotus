@@ -5,8 +5,6 @@ defmodule Lotus.AI.QueryGeneratorTest do
 
   describe "generate_statement/2" do
     setup do
-      setup_mocks()
-
       stub(Lotus.Source, :source_type, fn _ -> :postgres end)
       stub(Lotus.Schema, :list_tables, fn _, _opts -> {:ok, table_list()} end)
 

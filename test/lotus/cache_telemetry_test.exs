@@ -5,11 +5,6 @@ defmodule Lotus.CacheTelemetryTest do
   alias Lotus.Cache
   alias Lotus.Config
 
-  setup do
-    Mimic.copy(Lotus.Config)
-    :ok
-  end
-
   setup :verify_on_exit!
 
   setup do

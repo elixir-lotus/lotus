@@ -28,11 +28,6 @@ defmodule Lotus.PreflightTest do
   describe "scoped visibility at execution time" do
     setup :set_mimic_from_context
 
-    setup do
-      Mimic.copy(Lotus.Config)
-      :ok
-    end
-
     defmodule TenantResolver do
       @moduledoc """
       Denies `test_users` for tenant 2 only. Models the per-tenant rules a
@@ -102,11 +97,6 @@ defmodule Lotus.PreflightTest do
 
   describe "unrestricted adapter behavior" do
     setup :set_mimic_from_context
-
-    setup do
-      Mimic.copy(Lotus.Config)
-      :ok
-    end
 
     test "blocks queries when adapter returns {:unrestricted, _} and opt-in is off" do
       stub(Lotus.Config, :allow_unrestricted_resources?, fn _name -> false end)

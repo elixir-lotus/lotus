@@ -60,8 +60,6 @@ defmodule Lotus.MiddlewareContractTest do
   setup :set_mimic_from_context
 
   setup do
-    Mimic.copy(Config)
-
     clear_cache_tables()
 
     on_exit(fn ->

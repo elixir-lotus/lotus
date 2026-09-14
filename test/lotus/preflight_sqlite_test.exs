@@ -125,8 +125,6 @@ defmodule Lotus.PreflightSqliteTest do
 
   describe "SQLite preflight with bare string deny rules" do
     setup do
-      Mimic.copy(Lotus.Config)
-
       config = [
         allow: [],
         deny: [

@@ -157,8 +157,6 @@ defmodule Lotus.PreflightPostgresTest do
 
   describe "PostgreSQL preflight with bare string deny rules" do
     setup do
-      Mimic.copy(Lotus.Config)
-
       config = [
         allow: [],
         deny: [
@@ -207,8 +205,6 @@ defmodule Lotus.PreflightPostgresTest do
 
   describe "PostgreSQL preflight with bare string allow rules" do
     setup do
-      Mimic.copy(Lotus.Config)
-
       config = [
         allow: [
           "test_users"
@@ -243,8 +239,6 @@ defmodule Lotus.PreflightPostgresTest do
 
   describe "PostgreSQL preflight with mixed rule formats" do
     setup do
-      Mimic.copy(Lotus.Config)
-
       config = [
         allow: [],
         deny: [

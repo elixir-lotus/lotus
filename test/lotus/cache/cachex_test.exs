@@ -11,8 +11,6 @@ defmodule Lotus.Cache.CachexTest do
   @default_ttl_ms 10_000
 
   setup_all do
-    Mimic.copy(Lotus.Config)
-
     Lotus.Config
     |> stub(:cache_config, fn ->
       %{
