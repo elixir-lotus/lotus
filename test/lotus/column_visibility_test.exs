@@ -5,13 +5,6 @@ defmodule Lotus.ColumnVisibilityTest do
   alias Lotus.Schema
   alias Lotus.Visibility
 
-  setup do
-    Mimic.copy(Lotus.Config)
-    Mimic.copy(Lotus.Source.Adapter)
-    Mimic.copy(Lotus.Source)
-    :ok
-  end
-
   describe "column policy resolution" do
     setup do
       # Default: mask to NULL, visible in schema
@@ -85,8 +78,6 @@ defmodule Lotus.ColumnVisibilityTest do
 
   describe "schema introspection annotations and hiding" do
     setup do
-      Mimic.copy(Lotus.Visibility)
-
       # Rules for users.password: masked; users.secret: hidden from introspection
       rules = [
         {"public", "users", "password", [mask: :null, show_in_schema?: true]},

@@ -198,11 +198,6 @@ defmodule Lotus.AI.InMemoryAdapterAITest do
   end
 
   describe "generate_query_with_context/1 feature gating" do
-    setup do
-      Mimic.copy(ReqLLM)
-      :ok
-    end
-
     test "generate_query_with_context receives a prompt built from the adapter's ai_context" do
       Application.put_env(:lotus, :ai,
         enabled: true,

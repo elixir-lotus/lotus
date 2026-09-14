@@ -177,11 +177,6 @@ defmodule Lotus.Source.Resolvers.StaticTest do
   end
 
   describe "canonical %{adapter: Module} entries" do
-    setup do
-      Mimic.copy(Config)
-      :ok
-    end
-
     defmodule CanonicalAdapter do
       @moduledoc false
 
@@ -220,11 +215,6 @@ defmodule Lotus.Source.Resolvers.StaticTest do
   end
 
   describe "ambiguous entries" do
-    setup do
-      Mimic.copy(Config)
-      :ok
-    end
-
     defmodule GreedyAdapterA do
       @moduledoc false
       def can_handle?(%{kind: :shared}), do: true
@@ -278,11 +268,6 @@ defmodule Lotus.Source.Resolvers.StaticTest do
   end
 
   describe "wrap_entry error handling" do
-    setup do
-      Mimic.copy(Config)
-      :ok
-    end
-
     test "raises ArgumentError with a descriptive message for an unhandled map entry" do
       # Regression: before the fix, a map entry without a matching source_adapter
       # silently fell through to EctoAdapter.wrap/2, which has an

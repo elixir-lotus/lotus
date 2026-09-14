@@ -4,11 +4,6 @@ defmodule Lotus.Visibility.Resolvers.StaticTest do
 
   alias Lotus.Visibility.Resolvers.Static
 
-  setup do
-    Mimic.copy(Lotus.Config)
-    :ok
-  end
-
   describe "schema_rules_for/2" do
     test "returns schema rules for configured repo name" do
       schema_rules = [

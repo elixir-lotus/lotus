@@ -32,10 +32,6 @@ defmodule Lotus.AICase do
 
       # Mock Lotus.Schema calls for schema introspection
       setup do
-        Mimic.copy(Lotus.Schema)
-        Mimic.copy(Lotus.Source)
-        Mimic.copy(Lotus.Source.Adapter)
-
         stub(Lotus.Source.Adapter, :validate_statement, fn _adapter, _statement, _opts ->
           {:error, "syntax error"}
         end)

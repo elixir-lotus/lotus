@@ -48,14 +48,11 @@ defmodule Lotus.AITest do
 
   describe "generate_query/1" do
     setup do
-      setup_mocks()
-
       # Mock schema introspection
       stub(Lotus.Source, :source_type, fn _ -> :postgres end)
       stub(Lotus.Schema, :list_tables, fn _, _opts -> {:ok, table_list()} end)
 
       set_ai_config(enabled: true, api_key: "sk-test")
-
       :ok
     end
 
@@ -187,13 +184,10 @@ defmodule Lotus.AITest do
 
   describe "generate_query_with_context/1" do
     setup do
-      setup_mocks()
-
       stub(Lotus.Source, :source_type, fn _ -> :postgres end)
       stub(Lotus.Schema, :list_tables, fn _, _opts -> {:ok, table_list()} end)
 
       set_ai_config(enabled: true, api_key: "sk-test")
-
       :ok
     end
 
@@ -227,9 +221,6 @@ defmodule Lotus.AITest do
   describe "supports?/2 and unsupported_reason/2" do
     setup do
       set_ai_config(enabled: true, api_key: "sk-test")
-
-      Mimic.copy(Lotus.Source)
-      Mimic.copy(Lotus.Source.Adapter)
       :ok
     end
 
@@ -309,9 +300,6 @@ defmodule Lotus.AITest do
   describe "AI feature gating" do
     setup do
       set_ai_config(enabled: true, api_key: "sk-test")
-
-      Mimic.copy(Lotus.Source)
-      Mimic.copy(Lotus.Source.Adapter)
       :ok
     end
 

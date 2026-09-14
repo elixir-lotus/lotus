@@ -3,11 +3,6 @@ defmodule Lotus.AI.Actions.GetColumnValuesTest do
 
   alias Lotus.AI.Actions.GetColumnValues
 
-  setup do
-    Mimic.copy(Lotus)
-    :ok
-  end
-
   describe "run/2" do
     test "returns distinct values for a column" do
       stub(Lotus, :run_statement, fn _query, _params, _opts ->

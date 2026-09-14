@@ -9,8 +9,6 @@ defmodule Lotus.Cache.ScopeInvalidationTest do
   setup :verify_on_exit!
 
   setup do
-    Mimic.copy(Lotus.Config)
-
     Config
     |> stub(:cache_adapter, fn -> {:ok, Lotus.Cache.ETS} end)
     |> stub(:cache_namespace, fn -> "test_scope" end)

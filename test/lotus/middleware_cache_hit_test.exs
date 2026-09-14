@@ -103,8 +103,6 @@ defmodule Lotus.MiddlewareCacheHitTest do
   @statement "SELECT name FROM test_users ORDER BY name"
 
   setup do
-    Mimic.copy(Lotus.Config)
-
     clear_cache_tables()
 
     on_exit(fn ->

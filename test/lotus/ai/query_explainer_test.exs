@@ -5,10 +5,6 @@ defmodule Lotus.AI.QueryExplainerTest do
 
   describe "explain_query/2" do
     setup do
-      setup_mocks()
-
-      Mimic.copy(Lotus.Config)
-
       stub(Lotus.Source, :source_type, fn _ -> :postgres end)
       stub(Lotus.Config, :get_data_source!, fn "postgres" -> Lotus.Test.Repo end)
 

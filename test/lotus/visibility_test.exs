@@ -5,11 +5,6 @@ defmodule Lotus.VisibilityTest do
   alias Lotus.Visibility
   alias Lotus.Visibility.Resolvers.Static
 
-  setup do
-    Mimic.copy(Lotus.Config)
-    :ok
-  end
-
   describe "built-in deny rules" do
     test "denies PostgreSQL system catalogs" do
       refute Visibility.allowed_relation?("postgres", {"pg_catalog", "pg_class"})

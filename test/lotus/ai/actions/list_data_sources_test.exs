@@ -3,11 +3,6 @@ defmodule Lotus.AI.Actions.ListDataSourcesTest do
 
   alias Lotus.AI.Actions.ListDataSources
 
-  setup do
-    Mimic.copy(Lotus)
-    :ok
-  end
-
   describe "run/2" do
     test "returns available data sources with types" do
       stub(Lotus, :list_data_source_names, fn -> ["primary", "analytics"] end)

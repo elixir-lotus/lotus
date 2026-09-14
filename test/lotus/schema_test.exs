@@ -487,9 +487,6 @@ defmodule Lotus.SchemaTest do
 
   describe "adapter error propagation" do
     setup do
-      Mimic.copy(Lotus.Source)
-      Mimic.copy(Lotus.Source.Adapter)
-
       adapter = %Lotus.Source.Adapter{
         name: "postgres",
         module: Lotus.Source.Adapters.Ecto,

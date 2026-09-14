@@ -54,11 +54,6 @@ defmodule Lotus.MiddlewareCacheInteractionTest do
   setup :verify_on_exit!
 
   setup do
-    Mimic.copy(Lotus.Config)
-    Mimic.copy(Lotus.Source)
-    Mimic.copy(Lotus.Source.Adapter)
-    Mimic.copy(Lotus.Visibility)
-
     # Enable the cache with a stable namespace per test
     namespace = "test_mw_cache_#{System.unique_integer([:positive])}"
 

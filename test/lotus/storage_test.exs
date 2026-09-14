@@ -393,11 +393,6 @@ defmodule Lotus.StorageTest do
   end
 
   describe "run/2" do
-    setup do
-      Mimic.copy(Lotus)
-      :ok
-    end
-
     test "delegates to Lotus.run_query/2" do
       query =
         query_fixture(%{

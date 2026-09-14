@@ -8,9 +8,6 @@ defmodule Lotus.Integration.CachingTest do
   alias Repo
 
   setup do
-    Mimic.copy(Lotus.Config)
-    Mimic.copy(Lotus.Cache)
-
     clear_cache_tables()
 
     Config

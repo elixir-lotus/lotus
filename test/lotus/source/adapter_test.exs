@@ -378,13 +378,6 @@ defmodule Lotus.Source.AdapterTest do
       end
     end
 
-    setup do
-      # Mimic-stub Lotus.Config.trusted_source_adapter?/1 so we can toggle
-      # trust without touching application config.
-      Mimic.copy(Lotus.Config)
-      :ok
-    end
-
     setup :set_mimic_from_context
 
     test "sanitizes and passes through a trusted adapter's full context" do
@@ -496,7 +489,6 @@ defmodule Lotus.Source.AdapterTest do
     end
 
     setup do
-      Mimic.copy(Lotus.Config)
       stub(Lotus.Config, :trusted_source_adapter?, fn EvilLanguageAdapter -> true end)
       :ok
     end
@@ -786,11 +778,6 @@ defmodule Lotus.Source.AdapterTest do
            }
          }}
       end
-    end
-
-    setup do
-      Mimic.copy(Lotus.Config)
-      :ok
     end
 
     setup :set_mimic_from_context

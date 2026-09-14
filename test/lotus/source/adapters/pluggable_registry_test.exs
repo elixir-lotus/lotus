@@ -78,11 +78,6 @@ defmodule Lotus.Source.Adapters.PluggableRegistryTest do
 
   setup :verify_on_exit!
 
-  setup do
-    Mimic.copy(Config)
-    :ok
-  end
-
   defp stub_config_with_custom do
     sources = %{"custom" => CustomSource, "postgres" => Lotus.Test.Repo}
 

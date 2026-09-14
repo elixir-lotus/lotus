@@ -6,11 +6,6 @@ defmodule Lotus.AI.QueryOptimizerTest do
 
   describe "suggest_optimizations/2" do
     setup do
-      setup_mocks()
-
-      Mimic.copy(Lotus.Source)
-      Mimic.copy(Lotus.Source.Adapter)
-
       stub(Lotus.Source, :get_source!, fn "postgres" ->
         %Lotus.Source.Adapter{
           name: "postgres",
