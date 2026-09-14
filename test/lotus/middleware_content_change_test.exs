@@ -2,11 +2,12 @@ defmodule Lotus.MiddlewareContentChangeTest do
   @moduledoc """
   Every content mutation takes `:context` and fires `:before_content_change`
   and `:after_content_change` with its operation and resource: queries,
-  visualizations, dashboards, public sharing, cards, filters and filter
-  mappings, through the context modules and through the `Lotus` facade.
+  visualizations, dashboards, public sharing, cards and their order, filters
+  and filter mappings, through the context modules and through the `Lotus`
+  facade.
 
-  A plug on `:before_content_change` can refuse a save, a delete and the
-  enabling of a share link.
+  A plug on `:before_content_change` can refuse a save, a delete, a reorder
+  and the enabling of a share link.
   """
 
   use Lotus.Case
@@ -44,11 +45,41 @@ defmodule Lotus.MiddlewareContentChangeTest do
     @moduledoc false
     def init(opts), do: opts
 
-    def call(%{resource: :dashboard, changeset: %{changes: %{public_token: token}}}, _opts)
-        when is_binary(token),
-        do: {:halt, "sharing is disabled"}
-
+    def call(%{op: :enable_sharing}, _opts), do: {:halt, "sharing is disabled"}
     def call(payload, _opts), do: {:cont, payload}
+  end
+
+  defmodule RefuseCardPlug do
+    @moduledoc false
+    def init(card_id), do: card_id
+
+    def call(%{resource: :dashboard_card, record: %{id: card_id}}, card_id),
+      do: {:halt, "card is locked"}
+
+    def call(payload, _card_id), do: {:cont, payload}
+  end
+
+  defmodule PositionsPlug do
+    @moduledoc false
+    import Ecto.Query
+
+    alias Lotus.Storage.DashboardCard
+    alias Lotus.Test.Repo
+
+    def init(opts), do: opts
+
+    def call(%{record: %DashboardCard{dashboard_id: dashboard_id}} = payload, _opts) do
+      positions =
+        from(c in DashboardCard,
+          where: c.dashboard_id == ^dashboard_id,
+          order_by: c.id,
+          select: {c.id, c.position}
+        )
+        |> Repo.all()
+
+      send(self(), {:positions_after, positions})
+      {:cont, payload}
+    end
   end
 
   @context %{user_id: 42}
@@ -193,20 +224,55 @@ defmodule Lotus.MiddlewareContentChangeTest do
       assert_content_change(:delete, :dashboard)
     end
 
-    test "enabling and disabling public sharing are updates carrying :public_token" do
+    test "a plug refuses a delete" do
+      dashboard = dashboard_fixture()
+      refuse_content_changes()
+
+      assert {:error, {:halted, _reason}} = Lotus.delete_dashboard(dashboard, context: @context)
+      assert %Dashboard{} = Dashboards.get_dashboard(dashboard.id)
+    end
+  end
+
+  describe "public sharing" do
+    test "enabling is :enable_sharing, and the stored record tells a first enable from a rotation" do
       dashboard = dashboard_fixture()
       capture_content_changes()
 
       {:ok, shared} = Lotus.enable_public_sharing(dashboard, context: @context)
-      {before_payload, written} = assert_content_change(:update, :dashboard)
+      {before_payload, written} = assert_content_change(:enable_sharing, :dashboard)
 
+      assert %Dashboard{public_token: nil} = before_payload.record
       assert %{public_token: token} = before_payload.changeset.changes
       assert is_binary(token)
       assert written.changes == %{public_token: shared.public_token}
 
-      {:ok, _unshared} = Dashboards.disable_public_sharing(shared, context: @context)
-      {_before, written} = assert_content_change(:update, :dashboard)
+      {:ok, _rotated} = Dashboards.enable_public_sharing(shared, context: @context)
+      {before_payload, _written} = assert_content_change(:enable_sharing, :dashboard)
+      assert before_payload.record.public_token == shared.public_token
+    end
+
+    test "disabling is :disable_sharing, and disabling an unshared dashboard fires no after event" do
+      {:ok, shared} = Lotus.enable_public_sharing(dashboard_fixture())
+      capture_content_changes()
+
+      {:ok, unshared} = Dashboards.disable_public_sharing(shared, context: @context)
+      {_before, written} = assert_content_change(:disable_sharing, :dashboard)
       assert written.changes == %{public_token: nil}
+
+      {:ok, _unshared} = Lotus.disable_public_sharing(unshared, context: @context)
+      assert_received {:before_content_change, %{op: :disable_sharing}}
+      refute_received {:after_content_change, _payload}
+    end
+
+    test "setting :public_token through update_dashboard is an :update a plug still sees" do
+      dashboard = dashboard_fixture()
+      capture_content_changes()
+
+      {:ok, _dashboard} =
+        Lotus.update_dashboard(dashboard, %{public_token: "chosen-token"}, context: @context)
+
+      {before_payload, _written} = assert_content_change(:update, :dashboard)
+      assert before_payload.changeset.changes == %{public_token: "chosen-token"}
     end
 
     test "a plug refuses the enabling of a share link and lets other updates through" do
@@ -220,14 +286,6 @@ defmodule Lotus.MiddlewareContentChangeTest do
 
       assert {:ok, %Dashboard{name: "Revenue"}} =
                Lotus.update_dashboard(dashboard, %{name: "Revenue"}, context: @context)
-    end
-
-    test "a plug refuses a delete" do
-      dashboard = dashboard_fixture()
-      refuse_content_changes()
-
-      assert {:error, {:halted, _reason}} = Lotus.delete_dashboard(dashboard, context: @context)
-      assert %Dashboard{} = Dashboards.get_dashboard(dashboard.id)
     end
   end
 
@@ -261,6 +319,77 @@ defmodule Lotus.MiddlewareContentChangeTest do
                Dashboards.delete_dashboard_card(@missing_id, context: @context)
 
       refute_content_change()
+    end
+  end
+
+  describe "reordering dashboard cards" do
+    setup do
+      dashboard = dashboard_fixture()
+
+      [c1, c2, c3] =
+        for position <- 0..2, do: dashboard_card_fixture(dashboard, %{position: position})
+
+      %{dashboard: dashboard, c1: c1, c2: c2, c3: c3}
+    end
+
+    test "each moved card is an :update of its position with the context; unmoved cards fire nothing",
+         %{dashboard: dashboard, c1: c1, c2: c2, c3: c3} do
+      capture_content_changes()
+
+      assert :ok =
+               Lotus.reorder_dashboard_cards(dashboard, [c1.id, c3.id, c2.id], context: @context)
+
+      {before_c3, _written} = assert_content_change(:update, :dashboard_card)
+      {before_c2, _written} = assert_content_change(:update, :dashboard_card)
+      refute_content_change()
+
+      moved =
+        Map.new([before_c3, before_c2], &{&1.record.id, &1.changeset.changes})
+
+      assert moved == %{c3.id => %{position: 1}, c2.id => %{position: 2}}
+
+      assert Enum.map(Dashboards.list_dashboard_cards(dashboard), & &1.id) ==
+               [c1.id, c3.id, c2.id]
+    end
+
+    test "after events fire once every position is written",
+         %{dashboard: dashboard, c1: c1, c2: c2, c3: c3} do
+      Middleware.compile(%{after_content_change: [{PositionsPlug, []}]})
+
+      assert :ok = Dashboards.reorder_dashboard_cards(dashboard.id, [c3.id, c1.id, c2.id])
+
+      final = [{c1.id, 1}, {c2.id, 2}, {c3.id, 0}]
+
+      for _moved_card <- 1..3 do
+        assert_received {:positions_after, ^final}
+      end
+    end
+
+    test "a refusal on any card leaves every position as it was",
+         %{dashboard: dashboard, c1: c1, c2: c2, c3: c3} do
+      Middleware.compile(%{before_content_change: [{RefuseCardPlug, c1.id}]})
+
+      assert {:error, {:halted, "card is locked"}} =
+               Dashboards.reorder_dashboard_cards(dashboard, [c3.id, c2.id, c1.id],
+                 context: @context
+               )
+
+      assert Enum.map(Dashboards.list_dashboard_cards(dashboard), &{&1.id, &1.position}) ==
+               [{c1.id, 0}, {c2.id, 1}, {c3.id, 2}]
+    end
+
+    test "ids given as strings and ids of other dashboards' cards are handled as before",
+         %{dashboard: dashboard, c1: c1, c2: c2, c3: c3} do
+      other = dashboard_card_fixture(dashboard_fixture(), %{position: 5})
+      capture_content_changes()
+
+      ids = [to_string(c3.id), other.id, c2.id, c1.id]
+      assert :ok = Dashboards.reorder_dashboard_cards(dashboard, ids)
+
+      assert Enum.map(Dashboards.list_dashboard_cards(dashboard), &{&1.id, &1.position}) ==
+               [{c3.id, 0}, {c2.id, 2}, {c1.id, 3}]
+
+      assert %DashboardCard{position: 5} = Dashboards.get_dashboard_card(other.id)
     end
   end
 

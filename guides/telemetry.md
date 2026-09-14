@@ -76,17 +76,31 @@ The `result` field is `:ok` or `:error`.
 
 ### Content Changes
 
-| Event                          | Measurements | Metadata                                         |
-|--------------------------------|--------------|--------------------------------------------------|
-| `[:lotus, :content, :change]`  | `count`      | `op`, `resource`, `record`, `changes`, `context` |
+| Event                                     | Measurements  | Metadata                                                    |
+|-------------------------------------------|---------------|-------------------------------------------------------------|
+| `[:lotus, :content, :change, :start]`     | `system_time` | `op`, `resource`, `record`, `context`                       |
+| `[:lotus, :content, :change, :stop]`      | `duration`    | `op`, `resource`, `record`, `changes`, `context`            |
+| `[:lotus, :content, :change, :exception]` | `duration`    | `op`, `resource`, `record`, `context`, `kind`, `reason`, `stacktrace` |
 
-Emitted after a query, visualization, dashboard, dashboard card, dashboard
-filter or filter mapping is created, updated or deleted. The metadata is the
-`:after_content_change` middleware payload: `op` is `:create`, `:update` or
-`:delete`, `record` is the struct as written, `changes` is `%{}` on a delete,
-and `context` is the `:context` option the caller passed to the mutation
-function, or `nil`. A write that a `:before_content_change` plug refused, or
-that failed validation, emits nothing.
+A content change is one create, update or delete of a query, visualization,
+dashboard, dashboard card, dashboard filter or filter mapping, including enabling
+or disabling public sharing and moving a card in a reorder. The events bracket
+every change, refused or not, and always carry the `:context` option the caller
+passed, or `nil`.
+
+`op` is `:create`, `:update`, `:delete`, `:enable_sharing` or `:disable_sharing`.
+On `:start`, `record` is the struct as stored (`nil` on a create); on `:stop` it
+is the struct as written, and the metadata is the `:after_content_change`
+middleware payload. `changes` holds each changed field with its written value;
+it is `%{}` on a delete and on an update that wrote nothing, which still emits
+`:stop`.
+
+`:exception` is emitted when a `:before_content_change` plug refused the change,
+the changeset was invalid, or the write raised, threw or exited. `reason` is the
+error the caller receives — `{:halted, reason}` for a refusal, the changeset for
+a failed validation — and `stacktrace` is present only when the call raised,
+threw or exited. A reorder emits one span per card it moves, and every card
+shares the outcome of the call.
 
 ## Setup
 

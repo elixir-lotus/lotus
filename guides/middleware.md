@@ -14,12 +14,12 @@ defmodule MyApp.AuditMiddleware do
     # Inspect or transform the payload
     {:cont, payload}   # continue to next middleware
     # or
-    {:halt, "reason"}  # stop pipeline, Lotus returns {:error, reason}
+    {:halt, "reason"}  # stop pipeline, the caller gets an error tuple
   end
 end
 ```
 
-Each middleware receives a payload map whose contents depend on the pipeline event (see below), and must return either `{:cont, payload}` to continue or `{:halt, reason}` to abort.
+Each middleware receives a payload map whose contents depend on the pipeline event (see below), and must return either `{:cont, payload}` to continue or `{:halt, reason}` to abort. A halt returns `{:error, reason}` to the caller, except on `:before_content_change`, where it returns `{:error, {:halted, reason}}`.
 
 ## Pipeline Events
 
@@ -33,8 +33,8 @@ Each middleware receives a payload map whose contents depend on the pipeline eve
 | `:after_describe_table` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
 | `:after_list_relations` | After relation discovery and visibility filtering | `:relations`, `:source`, `:scope`, `:context` |
 | `:after_discover` | After any discovery call, following the kind-specific `:after_list_*` event | `:kind`, `:result`, `:source`, `:scope`, `:context` |
-| `:before_content_change` | Before a query, visualization, dashboard, card, filter or filter mapping is created, updated or deleted | `:op`, `:resource`, `:record`, `:changeset`, `:context` |
-| `:after_content_change` | After that write succeeds | `:op`, `:resource`, `:record`, `:changes`, `:context` |
+| `:before_content_change` | Before a query, visualization, dashboard, card, filter or filter mapping is created, updated, deleted, shared or reordered | `:op`, `:resource`, `:record`, `:changeset`, `:context` |
+| `:after_content_change` | After that change is written | `:op`, `:resource`, `:record`, `:changes`, `:context` |
 
 `:vars` is the map of bound query variables by name, after defaults and caller-supplied values are merged. It is `%{}` for a raw statement run through `Lotus.run_statement/3`.
 
@@ -47,7 +47,7 @@ What a plug can rely on, release to release:
 - **Payload keys are additive.** A release may add a key to a payload; it does not remove or rename one. Match on the keys you use, not on the whole map.
 - **`:relations` follows one rule.** A list is proven, an empty list means "touches nothing", a tuple means "unknown". `:before_execute` and `:after_query` carry the same value.
 - **Halting is final.** A halt returns `{:error, reason}` to the caller and later events for that run do not fire. The exception is `:before_content_change`, whose halt returns `{:error, {:halted, reason}}` — see [Refusing and Recording Content Changes](#refusing-and-recording-content-changes).
-- **Observation is telemetry's job.** A plug sees only its own event. To record every run, including refusals and cache-served reads, attach to `[:lotus, :run, :start | :stop | :exception]` — see `Lotus.Telemetry`.
+- **Observation is telemetry's job.** A plug sees only its own event. To record every run, including refusals and cache-served reads, attach to `[:lotus, :run, :start | :stop | :exception]` — see `Lotus.Telemetry`. For content changes, attach to `[:lotus, :content, :change, :start | :stop | :exception]`.
 
 ### The exact-count run
 
@@ -166,9 +166,10 @@ the payload, and that is the one that executes.
 ## Refusing and Recording Content Changes
 
 Every create, update and delete of a query, visualization, dashboard, dashboard
-card, dashboard filter or filter mapping fires two events. The mutation
-functions take `opts` with a `:context`, as `Lotus.run_query/2` does, so a plug
-knows who made the change:
+card, dashboard filter or filter mapping fires two events, and so do reordering
+cards and enabling or disabling public sharing. The mutation functions take
+`opts` with a `:context`, as `Lotus.run_query/2` does, so a plug knows who made
+the change:
 
 ```elixir
 case Lotus.update_query(query, attrs, context: %{user: current_user}) do
@@ -182,11 +183,11 @@ The existing arities still work, with a `nil` context.
 
 | Key | Value |
 |-----|-------|
-| `:op` | `:create`, `:update` or `:delete` |
+| `:op` | `:create`, `:update`, `:delete`, `:enable_sharing` or `:disable_sharing` |
 | `:resource` | `:query`, `:visualization`, `:dashboard`, `:dashboard_card`, `:dashboard_filter` or `:filter_mapping` |
 | `:record` | `:before_content_change`: the struct as stored, `nil` on a create. `:after_content_change`: the struct as written |
 | `:changeset` | `:before_content_change` only. The `Ecto.Changeset` Lotus is about to write; no changes on a delete |
-| `:changes` | `:after_content_change` only. The changes of that changeset; `%{}` on a delete |
+| `:changes` | `:after_content_change` only. Each changed field with its written value, embedded fields included; `%{}` on a delete |
 | `:context` | The caller's `:context`, or `nil` |
 
 ### Refusing a change
@@ -209,21 +210,38 @@ The event fires whether or not the changeset is valid, so a refusal does not
 first tell the caller what is wrong with the input. A plug may not change the
 changeset: Lotus writes the changeset it built.
 
-Enabling and disabling public sharing are updates of a `:dashboard` whose
-changes carry `:public_token` — a string when sharing is enabled, `nil` when it
-is disabled. A plug that refuses sharing matches on that:
+### Public sharing
+
+`Lotus.enable_public_sharing/2` fires `:enable_sharing` and
+`Lotus.disable_public_sharing/2` fires `:disable_sharing`, both on `:dashboard`
+with `:public_token` in the changes. On `:enable_sharing`, `:record` holds the
+token as stored: `nil` for a first enable, the previous token for a rotation.
+
+`:public_token` is still a field `Lotus.update_dashboard/3` accepts, and setting
+it there is a plain `:update` whose changes carry it. A plug that refuses public
+links checks both:
 
 ```elixir
 defmodule MyApp.NoPublicLinks do
   def init(opts), do: opts
 
-  def call(%{resource: :dashboard, changeset: %{changes: %{public_token: token}}}, _opts)
+  def call(%{op: :enable_sharing}, _opts), do: {:halt, "public links are disabled"}
+
+  def call(%{op: :update, resource: :dashboard, changeset: %{changes: %{public_token: token}}}, _opts)
       when is_binary(token),
       do: {:halt, "public links are disabled"}
 
   def call(payload, _opts), do: {:cont, payload}
 end
 ```
+
+### Reordering cards
+
+`Lotus.reorder_dashboard_cards/3` fires one `:update` of `:dashboard_card` for
+each card whose position changes, with `:position` in the changes. Every
+`:before_content_change` runs before any position is written, so a halt on one
+card leaves every position as it was. The positions are written in one
+transaction, and `:after_content_change` fires for each card after it commits.
 
 ### Recording a change
 
@@ -241,15 +259,36 @@ defmodule MyApp.ContentAudit do
 end
 ```
 
-The write has happened, so this event cannot stop it: the result of the
-pipeline is ignored, and a halt only stops the later plugs on the event. The
-event fires when the repo call returns; if the caller wraps the call in its own
-transaction, that transaction has not committed yet. A refused or failed write
-fires no `:after_content_change`, and a delete by id that finds no record fires
-no event at all.
+The write has happened, so this event cannot stop it. A plug that halts, raises,
+throws or exits is logged, the later plugs on the event do not run, and the
+caller still receives `{:ok, record}`. The event fires when the write returns, or
+for a reorder when its transaction commits; if the caller wraps the call in its
+own transaction, that transaction has not committed yet.
 
-The `[:lotus, :content, :change]` telemetry event carries the same metadata, for
-a consumer that prefers telemetry to a plug. See `Lotus.Telemetry`.
+A refused or failed write fires no `:after_content_change`, and neither does an
+update whose changeset has no changes, because it writes nothing. A delete by id
+that finds no record fires no event at all.
+
+### Deletes that remove other content
+
+A delete fires one event, for the record it names. The content removed with it
+fires none, so the parent's `:delete` is the event to gate and to record:
+
+| Deleting | Also removes, with no event |
+|----------|-----------------------------|
+| A dashboard | Its cards, its filters and their filter mappings |
+| A card | Its filter mappings |
+| A filter | Its filter mappings |
+| A query | Its visualizations; dashboard cards that showed it keep their place with `query_id` set to `nil` |
+
+### Observing content changes
+
+The `[:lotus, :content, :change, :start | :stop | :exception]` telemetry events
+bracket every content change, refused or not. `:stop` carries the
+`:after_content_change` metadata, and is emitted for an update that wrote nothing
+too. `:exception` carries the reason the caller receives: `{:halted, reason}` for
+a refusal, the changeset for a failed validation. A consumer that records every
+attempt attaches to these rather than to a plug. See `Lotus.Telemetry`.
 
 ## Configuration
 
@@ -557,7 +596,7 @@ Discovery middleware (`:after_list_*`, `:after_discover`) runs **outside** the s
 
 ## Halting the Pipeline
 
-When a middleware returns `{:halt, reason}`, the pipeline stops immediately and Lotus returns `{:error, reason}` to the caller. This is useful for enforcing access control, rate limiting, or any validation that should prevent execution:
+When a middleware returns `{:halt, reason}`, the pipeline stops immediately and Lotus returns `{:error, reason}` to the caller — or `{:error, {:halted, reason}}` on `:before_content_change`, and nothing at all on `:after_content_change`, which fires after the write. This is useful for enforcing access control, rate limiting, or any validation that should prevent execution:
 
 ```elixir
 def call(%{statement: %{body: body}} = payload, _opts) when is_binary(body) do

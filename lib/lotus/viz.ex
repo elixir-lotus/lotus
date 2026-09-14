@@ -60,11 +60,8 @@ defmodule Lotus.Viz do
           {:ok, Viz.t()} | {:error, Ecto.Changeset.t() | :not_found | Middleware.halted()}
   def delete_visualization(viz_or_id, opts \\ [])
 
-  def delete_visualization(%Viz{} = viz, opts) do
-    viz
-    |> Ecto.Changeset.change()
-    |> Mutation.run(:delete, :visualization, opts)
-  end
+  def delete_visualization(%Viz{} = viz, opts),
+    do: Mutation.run(viz, :delete, :visualization, opts)
 
   def delete_visualization(id, opts) do
     case Lotus.repo().get(Viz, id) do
