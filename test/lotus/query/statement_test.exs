@@ -25,7 +25,15 @@ defmodule Lotus.Query.StatementTest do
     end
 
     test "rejects params that are neither a list nor a map" do
-      assert_raise FunctionClauseError, fn -> Statement.new("SELECT 1", :nope) end
+      assert_raise FunctionClauseError, fn ->
+        Statement.new("SELECT 1", runtime_term(:nope))
+      end
     end
   end
+
+  # Hands the value over as an opaque term() so Elixir 1.20's type checker can't
+  # statically reject the deliberately-invalid argument above. The point is to
+  # exercise the *runtime* guard, which is what real (dynamic) callers hit.
+  @spec runtime_term(term()) :: term()
+  defp runtime_term(value), do: value
 end

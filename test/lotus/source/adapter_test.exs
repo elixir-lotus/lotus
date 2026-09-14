@@ -868,7 +868,6 @@ defmodule Lotus.Source.AdapterTest do
         @impl true
         def format_error(_, e), do: inspect(e)
         @impl true
-        @impl true
         def source_type(_), do: :other
         @impl true
         def supports_feature?(_, _), do: false
