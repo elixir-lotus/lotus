@@ -17,17 +17,30 @@ defmodule Lotus.Dashboards do
   Use `run_dashboard/2` to execute all query cards in a dashboard simultaneously.
   Filter values are resolved and passed to each card's query variables via the
   configured mappings.
+
+  ## Content changes
+
+  Every function that creates, updates or deletes a dashboard, a card, a filter
+  or a filter mapping takes `opts` with a `:context`, opaque caller data such as
+  the current user. So do `enable_public_sharing/2` and
+  `disable_public_sharing/2`, which update the dashboard's `:public_token`.
+  Each write fires the `:before_content_change` and `:after_content_change`
+  middleware. A plug that halts makes the function return
+  `{:error, {:halted, reason}}` and nothing is written. See `Lotus.Middleware`.
   """
 
   import Ecto.Query
 
   import Lotus.Helpers, only: [escape_like: 1]
 
+  alias Lotus.Middleware
+
   alias Lotus.Storage.{
     Dashboard,
     DashboardCard,
     DashboardCardFilterMapping,
-    DashboardFilter
+    DashboardFilter,
+    Mutation
   }
 
   @type id :: integer() | binary()
@@ -139,10 +152,12 @@ defmodule Lotus.Dashboards do
       {:error, %Ecto.Changeset{}}
 
   """
-  @spec create_dashboard(attrs()) :: {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t()}
-  def create_dashboard(attrs) do
-    Dashboard.new(attrs)
-    |> Lotus.repo().insert()
+  @spec create_dashboard(attrs(), keyword()) ::
+          {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
+  def create_dashboard(attrs, opts \\ []) do
+    attrs
+    |> Dashboard.new()
+    |> Mutation.run(:create, :dashboard, opts)
   end
 
   @doc """
@@ -154,11 +169,12 @@ defmodule Lotus.Dashboards do
       {:ok, %Dashboard{}}
 
   """
-  @spec update_dashboard(Dashboard.t(), attrs()) ::
-          {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t()}
-  def update_dashboard(%Dashboard{} = dashboard, attrs) do
-    Dashboard.update(dashboard, attrs)
-    |> Lotus.repo().update()
+  @spec update_dashboard(Dashboard.t(), attrs(), keyword()) ::
+          {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
+  def update_dashboard(%Dashboard{} = dashboard, attrs, opts \\ []) do
+    dashboard
+    |> Dashboard.update(attrs)
+    |> Mutation.run(:update, :dashboard, opts)
   end
 
   @doc """
@@ -172,9 +188,12 @@ defmodule Lotus.Dashboards do
       {:ok, %Dashboard{}}
 
   """
-  @spec delete_dashboard(Dashboard.t()) :: {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t()}
-  def delete_dashboard(%Dashboard{} = dashboard) do
-    Lotus.repo().delete(dashboard)
+  @spec delete_dashboard(Dashboard.t(), keyword()) ::
+          {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
+  def delete_dashboard(%Dashboard{} = dashboard, opts \\ []) do
+    dashboard
+    |> Ecto.Changeset.change()
+    |> Mutation.run(:delete, :dashboard, opts)
   end
 
   @doc """
@@ -189,11 +208,11 @@ defmodule Lotus.Dashboards do
       {:ok, %Dashboard{public_token: "abc123..."}}
 
   """
-  @spec enable_public_sharing(Dashboard.t()) ::
-          {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t()}
-  def enable_public_sharing(%Dashboard{} = dashboard) do
+  @spec enable_public_sharing(Dashboard.t(), keyword()) ::
+          {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
+  def enable_public_sharing(%Dashboard{} = dashboard, opts \\ []) do
     token = generate_secure_token()
-    update_dashboard(dashboard, %{public_token: token})
+    update_dashboard(dashboard, %{public_token: token}, opts)
   end
 
   @doc """
@@ -205,10 +224,10 @@ defmodule Lotus.Dashboards do
       {:ok, %Dashboard{public_token: nil}}
 
   """
-  @spec disable_public_sharing(Dashboard.t()) ::
-          {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t()}
-  def disable_public_sharing(%Dashboard{} = dashboard) do
-    update_dashboard(dashboard, %{public_token: nil})
+  @spec disable_public_sharing(Dashboard.t(), keyword()) ::
+          {:ok, Dashboard.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
+  def disable_public_sharing(%Dashboard{} = dashboard, opts \\ []) do
+    update_dashboard(dashboard, %{public_token: nil}, opts)
   end
 
   defp generate_secure_token do
@@ -302,15 +321,18 @@ defmodule Lotus.Dashboards do
       {:ok, %DashboardCard{}}
 
   """
-  @spec create_dashboard_card(Dashboard.t() | id(), attrs()) ::
-          {:ok, DashboardCard.t()} | {:error, Ecto.Changeset.t()}
-  def create_dashboard_card(%Dashboard{id: id}, attrs), do: create_dashboard_card(id, attrs)
+  @spec create_dashboard_card(Dashboard.t() | id(), attrs(), keyword()) ::
+          {:ok, DashboardCard.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
+  def create_dashboard_card(dashboard_or_id, attrs, opts \\ [])
 
-  def create_dashboard_card(dashboard_id, attrs) do
-    attrs = Map.put(attrs, :dashboard_id, dashboard_id)
+  def create_dashboard_card(%Dashboard{id: id}, attrs, opts),
+    do: create_dashboard_card(id, attrs, opts)
 
-    DashboardCard.new(attrs)
-    |> Lotus.repo().insert()
+  def create_dashboard_card(dashboard_id, attrs, opts) do
+    attrs
+    |> Map.put(:dashboard_id, dashboard_id)
+    |> DashboardCard.new()
+    |> Mutation.run(:create, :dashboard_card, opts)
   end
 
   @doc """
@@ -322,11 +344,12 @@ defmodule Lotus.Dashboards do
       {:ok, %DashboardCard{}}
 
   """
-  @spec update_dashboard_card(DashboardCard.t(), attrs()) ::
-          {:ok, DashboardCard.t()} | {:error, Ecto.Changeset.t()}
-  def update_dashboard_card(%DashboardCard{} = card, attrs) do
-    DashboardCard.update(card, attrs)
-    |> Lotus.repo().update()
+  @spec update_dashboard_card(DashboardCard.t(), attrs(), keyword()) ::
+          {:ok, DashboardCard.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
+  def update_dashboard_card(%DashboardCard{} = card, attrs, opts \\ []) do
+    card
+    |> DashboardCard.update(attrs)
+    |> Mutation.run(:update, :dashboard_card, opts)
   end
 
   @doc """
@@ -334,14 +357,21 @@ defmodule Lotus.Dashboards do
 
   Also deletes all associated filter mappings.
   """
-  @spec delete_dashboard_card(DashboardCard.t() | id()) ::
-          {:ok, DashboardCard.t()} | {:error, Ecto.Changeset.t() | :not_found}
-  def delete_dashboard_card(%DashboardCard{} = card), do: Lotus.repo().delete(card)
+  @spec delete_dashboard_card(DashboardCard.t() | id(), keyword()) ::
+          {:ok, DashboardCard.t()}
+          | {:error, Ecto.Changeset.t() | :not_found | Middleware.halted()}
+  def delete_dashboard_card(card_or_id, opts \\ [])
 
-  def delete_dashboard_card(id) do
+  def delete_dashboard_card(%DashboardCard{} = card, opts) do
+    card
+    |> Ecto.Changeset.change()
+    |> Mutation.run(:delete, :dashboard_card, opts)
+  end
+
+  def delete_dashboard_card(id, opts) do
     case Lotus.repo().get(DashboardCard, id) do
       nil -> {:error, :not_found}
-      card -> Lotus.repo().delete(card)
+      card -> delete_dashboard_card(card, opts)
     end
   end
 
@@ -430,15 +460,18 @@ defmodule Lotus.Dashboards do
       {:ok, %DashboardFilter{}}
 
   """
-  @spec create_dashboard_filter(Dashboard.t() | id(), attrs()) ::
-          {:ok, DashboardFilter.t()} | {:error, Ecto.Changeset.t()}
-  def create_dashboard_filter(%Dashboard{id: id}, attrs), do: create_dashboard_filter(id, attrs)
+  @spec create_dashboard_filter(Dashboard.t() | id(), attrs(), keyword()) ::
+          {:ok, DashboardFilter.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
+  def create_dashboard_filter(dashboard_or_id, attrs, opts \\ [])
 
-  def create_dashboard_filter(dashboard_id, attrs) do
-    attrs = Map.put(attrs, :dashboard_id, dashboard_id)
+  def create_dashboard_filter(%Dashboard{id: id}, attrs, opts),
+    do: create_dashboard_filter(id, attrs, opts)
 
-    DashboardFilter.new(attrs)
-    |> Lotus.repo().insert()
+  def create_dashboard_filter(dashboard_id, attrs, opts) do
+    attrs
+    |> Map.put(:dashboard_id, dashboard_id)
+    |> DashboardFilter.new()
+    |> Mutation.run(:create, :dashboard_filter, opts)
   end
 
   @doc """
@@ -450,11 +483,12 @@ defmodule Lotus.Dashboards do
       {:ok, %DashboardFilter{}}
 
   """
-  @spec update_dashboard_filter(DashboardFilter.t(), attrs()) ::
-          {:ok, DashboardFilter.t()} | {:error, Ecto.Changeset.t()}
-  def update_dashboard_filter(%DashboardFilter{} = filter, attrs) do
-    DashboardFilter.update(filter, attrs)
-    |> Lotus.repo().update()
+  @spec update_dashboard_filter(DashboardFilter.t(), attrs(), keyword()) ::
+          {:ok, DashboardFilter.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
+  def update_dashboard_filter(%DashboardFilter{} = filter, attrs, opts \\ []) do
+    filter
+    |> DashboardFilter.update(attrs)
+    |> Mutation.run(:update, :dashboard_filter, opts)
   end
 
   @doc """
@@ -462,14 +496,21 @@ defmodule Lotus.Dashboards do
 
   Also deletes all associated filter mappings.
   """
-  @spec delete_dashboard_filter(DashboardFilter.t() | id()) ::
-          {:ok, DashboardFilter.t()} | {:error, Ecto.Changeset.t() | :not_found}
-  def delete_dashboard_filter(%DashboardFilter{} = filter), do: Lotus.repo().delete(filter)
+  @spec delete_dashboard_filter(DashboardFilter.t() | id(), keyword()) ::
+          {:ok, DashboardFilter.t()}
+          | {:error, Ecto.Changeset.t() | :not_found | Middleware.halted()}
+  def delete_dashboard_filter(filter_or_id, opts \\ [])
 
-  def delete_dashboard_filter(id) do
+  def delete_dashboard_filter(%DashboardFilter{} = filter, opts) do
+    filter
+    |> Ecto.Changeset.change()
+    |> Mutation.run(:delete, :dashboard_filter, opts)
+  end
+
+  def delete_dashboard_filter(id, opts) do
     case Lotus.repo().get(DashboardFilter, id) do
       nil -> {:error, :not_found}
-      filter -> Lotus.repo().delete(filter)
+      filter -> delete_dashboard_filter(filter, opts)
     end
   end
 
@@ -495,6 +536,7 @@ defmodule Lotus.Dashboards do
   ## Options
 
     * `:transform` - Optional transformation config for the filter value
+    * `:context` - Opaque caller data passed to the content change middleware
 
   ## Examples
 
@@ -511,7 +553,8 @@ defmodule Lotus.Dashboards do
           String.t(),
           keyword()
         ) ::
-          {:ok, DashboardCardFilterMapping.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, DashboardCardFilterMapping.t()}
+          | {:error, Ecto.Changeset.t() | Middleware.halted()}
   def create_filter_mapping(card, filter, variable_name, opts \\ [])
 
   def create_filter_mapping(%DashboardCard{id: card_id}, filter, variable_name, opts) do
@@ -530,23 +573,29 @@ defmodule Lotus.Dashboards do
       transform: Keyword.get(opts, :transform)
     }
 
-    DashboardCardFilterMapping.new(attrs)
-    |> Lotus.repo().insert()
+    attrs
+    |> DashboardCardFilterMapping.new()
+    |> Mutation.run(:create, :filter_mapping, opts)
   end
 
   @doc """
   Deletes a filter mapping.
   """
-  @spec delete_filter_mapping(DashboardCardFilterMapping.t() | id()) ::
-          {:ok, DashboardCardFilterMapping.t()} | {:error, Ecto.Changeset.t() | :not_found}
-  def delete_filter_mapping(%DashboardCardFilterMapping{} = mapping) do
-    Lotus.repo().delete(mapping)
+  @spec delete_filter_mapping(DashboardCardFilterMapping.t() | id(), keyword()) ::
+          {:ok, DashboardCardFilterMapping.t()}
+          | {:error, Ecto.Changeset.t() | :not_found | Middleware.halted()}
+  def delete_filter_mapping(mapping_or_id, opts \\ [])
+
+  def delete_filter_mapping(%DashboardCardFilterMapping{} = mapping, opts) do
+    mapping
+    |> Ecto.Changeset.change()
+    |> Mutation.run(:delete, :filter_mapping, opts)
   end
 
-  def delete_filter_mapping(id) do
+  def delete_filter_mapping(id, opts) do
     case Lotus.repo().get(DashboardCardFilterMapping, id) do
       nil -> {:error, :not_found}
-      mapping -> Lotus.repo().delete(mapping)
+      mapping -> delete_filter_mapping(mapping, opts)
     end
   end
 

@@ -3,13 +3,21 @@ defmodule Lotus.Storage do
   Storage operations for Lotus queries.
 
   Handles CRUD operations for persisting and retrieving queries.
+
+  ## Content changes
+
+  `create_query/2`, `update_query/3` and `delete_query/2` take `opts` with a
+  `:context`, opaque caller data such as the current user. Each write fires the
+  `:before_content_change` and `:after_content_change` middleware. A plug that
+  halts makes the function return `{:error, {:halted, reason}}` and nothing is
+  written. See `Lotus.Middleware`.
   """
 
   import Ecto.Query
   import Lotus.Helpers, only: [escape_like: 1]
 
-  alias Lotus.Result
-  alias Lotus.Storage.Query
+  alias Lotus.{Middleware, Result}
+  alias Lotus.Storage.{Mutation, Query}
 
   @type id :: integer() | binary()
   @type attrs :: map()
@@ -87,10 +95,12 @@ defmodule Lotus.Storage do
       iex> create_query(%{})
       {:error, %Ecto.Changeset{}}
   """
-  @spec create_query(attrs()) :: {:ok, Query.t()} | {:error, changeset_error()}
-  def create_query(attrs) do
-    Query.new(attrs)
-    |> Lotus.repo().insert()
+  @spec create_query(attrs(), keyword()) ::
+          {:ok, Query.t()} | {:error, changeset_error() | Middleware.halted()}
+  def create_query(attrs, opts \\ []) do
+    attrs
+    |> Query.new()
+    |> Mutation.run(:create, :query, opts)
   end
 
   @doc """
@@ -104,11 +114,12 @@ defmodule Lotus.Storage do
       iex> update_query(query, %{name: ""})
       {:error, %Ecto.Changeset{}}
   """
-  @spec update_query(Query.t(), attrs()) ::
-          {:ok, Query.t()} | {:error, changeset_error()}
-  def update_query(%Query{} = query, attrs) do
-    Query.update(query, attrs)
-    |> Lotus.repo().update()
+  @spec update_query(Query.t(), attrs(), keyword()) ::
+          {:ok, Query.t()} | {:error, changeset_error() | Middleware.halted()}
+  def update_query(%Query{} = query, attrs, opts \\ []) do
+    query
+    |> Query.update(attrs)
+    |> Mutation.run(:update, :query, opts)
   end
 
   @doc """
@@ -119,9 +130,12 @@ defmodule Lotus.Storage do
       iex> delete_query(query)
       {:ok, %Query{}}
   """
-  @spec delete_query(Query.t()) :: {:ok, Query.t()} | {:error, changeset_error()}
-  def delete_query(%Query{} = query) do
-    Lotus.repo().delete(query)
+  @spec delete_query(Query.t(), keyword()) ::
+          {:ok, Query.t()} | {:error, changeset_error() | Middleware.halted()}
+  def delete_query(%Query{} = query, opts \\ []) do
+    query
+    |> Ecto.Changeset.change()
+    |> Mutation.run(:delete, :query, opts)
   end
 
   @doc """
