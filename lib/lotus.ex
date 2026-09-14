@@ -147,18 +147,27 @@ defmodule Lotus do
 
   @doc """
   Creates a new saved query.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate create_query(attrs), to: Storage
+  defdelegate create_query(attrs, opts \\ []), to: Storage
 
   @doc """
   Updates an existing query.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate update_query(query, attrs), to: Storage
+  defdelegate update_query(query, attrs, opts \\ []), to: Storage
 
   @doc """
   Deletes a saved query.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate delete_query(query), to: Storage
+  defdelegate delete_query(query, opts \\ []), to: Storage
 
   # ── Visualization Functions ─────────────────────────────────────────────────
 
@@ -171,18 +180,27 @@ defmodule Lotus do
 
   @doc """
   Creates a new visualization for a query.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate create_visualization(query_or_id, attrs), to: Viz
+  defdelegate create_visualization(query_or_id, attrs, opts \\ []), to: Viz
 
   @doc """
   Updates an existing visualization.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate update_visualization(viz, attrs), to: Viz
+  defdelegate update_visualization(viz, attrs, opts \\ []), to: Viz
 
   @doc """
   Deletes a visualization (by struct or id).
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate delete_visualization(viz_or_id), to: Viz
+  defdelegate delete_visualization(viz_or_id, opts \\ []), to: Viz
 
   @doc """
   Validates a visualization config against query results.
@@ -231,28 +249,43 @@ defmodule Lotus do
 
   @doc """
   Creates a new dashboard.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate create_dashboard(attrs), to: Dashboards
+  defdelegate create_dashboard(attrs, opts \\ []), to: Dashboards
 
   @doc """
   Updates an existing dashboard.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate update_dashboard(dashboard, attrs), to: Dashboards
+  defdelegate update_dashboard(dashboard, attrs, opts \\ []), to: Dashboards
 
   @doc """
   Deletes a dashboard.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate delete_dashboard(dashboard), to: Dashboards
+  defdelegate delete_dashboard(dashboard, opts \\ []), to: Dashboards
 
   @doc """
   Enables public sharing for a dashboard by generating a unique token.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate enable_public_sharing(dashboard), to: Dashboards
+  defdelegate enable_public_sharing(dashboard, opts \\ []), to: Dashboards
 
   @doc """
   Disables public sharing for a dashboard.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate disable_public_sharing(dashboard), to: Dashboards
+  defdelegate disable_public_sharing(dashboard, opts \\ []), to: Dashboards
 
   # ── Dashboard Card Functions ───────────────────────────────────────────────
 
@@ -288,18 +321,27 @@ defmodule Lotus do
 
   @doc """
   Creates a new card for a dashboard.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate create_dashboard_card(dashboard_or_id, attrs), to: Dashboards
+  defdelegate create_dashboard_card(dashboard_or_id, attrs, opts \\ []), to: Dashboards
 
   @doc """
   Updates a card.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate update_dashboard_card(card, attrs), to: Dashboards
+  defdelegate update_dashboard_card(card, attrs, opts \\ []), to: Dashboards
 
   @doc """
   Deletes a card.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate delete_dashboard_card(card_or_id), to: Dashboards
+  defdelegate delete_dashboard_card(card_or_id, opts \\ []), to: Dashboards
 
   @doc """
   Reorders cards in a dashboard.
@@ -325,30 +367,45 @@ defmodule Lotus do
 
   @doc """
   Creates a new filter for a dashboard.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate create_dashboard_filter(dashboard_or_id, attrs), to: Dashboards
+  defdelegate create_dashboard_filter(dashboard_or_id, attrs, opts \\ []), to: Dashboards
 
   @doc """
   Updates a filter.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate update_dashboard_filter(filter, attrs), to: Dashboards
+  defdelegate update_dashboard_filter(filter, attrs, opts \\ []), to: Dashboards
 
   @doc """
   Deletes a filter.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate delete_dashboard_filter(filter_or_id), to: Dashboards
+  defdelegate delete_dashboard_filter(filter_or_id, opts \\ []), to: Dashboards
 
   # ── Filter Mapping Functions ───────────────────────────────────────────────
 
   @doc """
   Creates a filter mapping connecting a dashboard filter to a card's query variable.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
   defdelegate create_filter_mapping(card, filter, variable_name, opts \\ []), to: Dashboards
 
   @doc """
   Deletes a filter mapping.
+
+  Takes `:context` in `opts` for the content change middleware; see
+  `Lotus.Middleware`.
   """
-  defdelegate delete_filter_mapping(mapping_or_id), to: Dashboards
+  defdelegate delete_filter_mapping(mapping_or_id, opts \\ []), to: Dashboards
 
   @doc """
   Lists all filter mappings for a card.

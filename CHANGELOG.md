@@ -4,6 +4,21 @@
 
 ### Added
 
+- **`:before_content_change` and `:after_content_change` middleware events.**
+  Creating, updating or deleting a query, a visualization, a dashboard, a
+  card, a filter or a filter mapping wrote straight to the repo, so a host
+  could not refuse a change from a plug or record one for a version history
+  or an audit log. Every mutation function now takes `opts` with a
+  `:context`, as `Lotus.run_query/2` does; the existing arities keep working.
+  `:before_content_change` fires before the write with `:op`, `:resource`,
+  `:record`, `:changeset` and `:context`, and a halt makes the function
+  return `{:error, {:halted, reason}}`. `:after_content_change` fires after a
+  successful write with the written `:record` and its `:changes`; it cannot
+  stop the write. Enabling and disabling public sharing are updates of the
+  dashboard's `:public_token`, so a plug can refuse a share link. A
+  `[:lotus, :content, :change]` telemetry event mirrors
+  `:after_content_change`.
+
 - **`:before_execute` middleware event.** A plug that must authorise a
   statement against the tables it touches had no way to learn them:
   `:before_query` runs before the statement is analysed, on purpose, so a

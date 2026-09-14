@@ -5,11 +5,20 @@ defmodule Lotus.Viz do
   - CRUD wrappers around `Lotus.Storage.QueryVisualization`
   - Validation against a `%Lotus.Result{}` to ensure field references exist and
     numeric aggregations apply to numeric columns.
+
+  ## Content changes
+
+  `create_visualization/3`, `update_visualization/3` and
+  `delete_visualization/2` take `opts` with a `:context`, opaque caller data
+  such as the current user. Each write fires the `:before_content_change` and
+  `:after_content_change` middleware with resource `:visualization`. A plug
+  that halts makes the function return `{:error, {:halted, reason}}` and
+  nothing is written. See `Lotus.Middleware`.
   """
 
   import Ecto.Query
-  alias Lotus.Result
-  alias Lotus.Storage.Query
+  alias Lotus.{Middleware, Result}
+  alias Lotus.Storage.{Mutation, Query}
   alias Lotus.Storage.QueryVisualization, as: Viz
 
   @type id :: integer() | binary()
@@ -26,30 +35,41 @@ defmodule Lotus.Viz do
     |> Lotus.repo().all()
   end
 
-  @spec create_visualization(Query.t() | id(), attrs()) ::
-          {:ok, Viz.t()} | {:error, Ecto.Changeset.t()}
-  def create_visualization(%Query{id: id}, attrs), do: create_visualization(id, attrs)
+  @spec create_visualization(Query.t() | id(), attrs(), keyword()) ::
+          {:ok, Viz.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
+  def create_visualization(query_or_id, attrs, opts \\ [])
 
-  def create_visualization(query_id, attrs) do
-    attrs = Map.put(attrs, :query_id, query_id)
+  def create_visualization(%Query{id: id}, attrs, opts), do: create_visualization(id, attrs, opts)
 
-    Viz.new(attrs)
-    |> Lotus.repo().insert()
+  def create_visualization(query_id, attrs, opts) do
+    attrs
+    |> Map.put(:query_id, query_id)
+    |> Viz.new()
+    |> Mutation.run(:create, :visualization, opts)
   end
 
-  @spec update_visualization(Viz.t(), attrs()) :: {:ok, Viz.t()} | {:error, Ecto.Changeset.t()}
-  def update_visualization(%Viz{} = viz, attrs) do
-    Viz.update(viz, attrs)
-    |> Lotus.repo().update()
+  @spec update_visualization(Viz.t(), attrs(), keyword()) ::
+          {:ok, Viz.t()} | {:error, Ecto.Changeset.t() | Middleware.halted()}
+  def update_visualization(%Viz{} = viz, attrs, opts \\ []) do
+    viz
+    |> Viz.update(attrs)
+    |> Mutation.run(:update, :visualization, opts)
   end
 
-  @spec delete_visualization(Viz.t() | id()) :: {:ok, Viz.t()} | {:error, Ecto.Changeset.t()}
-  def delete_visualization(%Viz{} = viz), do: Lotus.repo().delete(viz)
+  @spec delete_visualization(Viz.t() | id(), keyword()) ::
+          {:ok, Viz.t()} | {:error, Ecto.Changeset.t() | :not_found | Middleware.halted()}
+  def delete_visualization(viz_or_id, opts \\ [])
 
-  def delete_visualization(id) do
+  def delete_visualization(%Viz{} = viz, opts) do
+    viz
+    |> Ecto.Changeset.change()
+    |> Mutation.run(:delete, :visualization, opts)
+  end
+
+  def delete_visualization(id, opts) do
     case Lotus.repo().get(Viz, id) do
       nil -> {:error, :not_found}
-      viz -> Lotus.repo().delete(viz)
+      viz -> delete_visualization(viz, opts)
     end
   end
 

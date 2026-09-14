@@ -180,6 +180,28 @@ defmodule Lotus.Telemetry do
     * `:source` - The data source name
     * `:result` - `:ok` or `:error`
 
+  ## Content Events
+
+  ### `[:lotus, :content, :change]`
+
+  Emitted after a query, visualization, dashboard, dashboard card, dashboard
+  filter or filter mapping is created, updated or deleted. It carries the same
+  metadata as the `:after_content_change` middleware payload. A write that a
+  `:before_content_change` plug refused, or that failed, emits nothing.
+
+  **Measurements:**
+
+    * `:count` - Always `1`
+
+  **Metadata:**
+
+    * `:op` - `:create`, `:update` or `:delete`
+    * `:resource` - `:query`, `:visualization`, `:dashboard`,
+      `:dashboard_card`, `:dashboard_filter` or `:filter_mapping`
+    * `:record` - The struct as written
+    * `:changes` - The changes from the changeset; `%{}` on a delete
+    * `:context` - The caller-supplied context (or `nil`)
+
   ## Example
 
   Attach a handler in your application's `start/2` callback:
@@ -236,6 +258,8 @@ defmodule Lotus.Telemetry do
   @schema_start [:lotus, :schema, :introspection, :start]
   @schema_stop [:lotus, :schema, :introspection, :stop]
 
+  @content_change [:lotus, :content, :change]
+
   @doc false
   def events do
     [
@@ -249,7 +273,8 @@ defmodule Lotus.Telemetry do
       @cache_miss,
       @cache_put,
       @schema_start,
-      @schema_stop
+      @schema_stop,
+      @content_change
     ]
   end
 
@@ -324,6 +349,11 @@ defmodule Lotus.Telemetry do
   @doc false
   def cache_put(key, ttl_ms) do
     :telemetry.execute(@cache_put, %{count: 1}, %{key: key, ttl_ms: ttl_ms})
+  end
+
+  @doc false
+  def content_change(metadata) do
+    :telemetry.execute(@content_change, %{count: 1}, metadata)
   end
 
   @doc false

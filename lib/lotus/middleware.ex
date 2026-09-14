@@ -1,6 +1,7 @@
 defmodule Lotus.Middleware do
   @moduledoc """
-  Generic middleware pipeline for query execution and schema discovery hooks.
+  Generic middleware pipeline for query execution, schema discovery and content
+  change hooks.
 
   Each middleware module implements `init/1` and `call/2`, following
   the standard Plug pattern:
@@ -27,6 +28,8 @@ defmodule Lotus.Middleware do
   | `:after_describe_table` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
   | `:after_list_relations` | After relation discovery and visibility filtering | `:relations`, `:source`, `:scope`, `:context` |
   | `:after_discover` | After any discovery call, following the kind-specific `:after_list_*` event | `:kind`, `:result`, `:source`, `:scope`, `:context` |
+  | `:before_content_change` | Before a query, visualization, dashboard, card, filter or filter mapping is created, updated or deleted | `:op`, `:resource`, `:record`, `:changeset`, `:context` |
+  | `:after_content_change` | After that write succeeds | `:op`, `:resource`, `:record`, `:changes`, `:context` |
 
   ### Query event ordering
 
@@ -133,6 +136,47 @@ defmodule Lotus.Middleware do
   If any middleware in either phase halts, later middleware do not run and
   the caller receives `{:error, reason}`.
 
+  ### Content change events
+
+  Every create, update and delete of a query, visualization, dashboard,
+  dashboard card, dashboard filter or filter mapping fires
+  `:before_content_change` and then, when the write succeeds,
+  `:after_content_change`. The mutation functions in `Lotus`, `Lotus.Storage`,
+  `Lotus.Dashboards` and `Lotus.Viz` take `opts` with a `:context`, as
+  `Lotus.run_query/2` does.
+
+    * `:op` is `:create`, `:update` or `:delete`.
+    * `:resource` is `:query`, `:visualization`, `:dashboard`,
+      `:dashboard_card`, `:dashboard_filter` or `:filter_mapping`.
+    * `:record` is the struct as stored on `:before_content_change`, or `nil`
+      on a create, and the struct as written on `:after_content_change`.
+    * `:changeset` is the `Ecto.Changeset` Lotus is about to write. On a delete
+      it has no changes.
+    * `:changes` is the changes of that changeset, `%{}` on a delete.
+
+  `:before_content_change` fires whether or not the changeset is valid, so a
+  refusal does not first tell the caller what is wrong with the input. A halt
+  makes the mutation function return `{:error, {:halted, reason}}` and nothing
+  is written. The `:halted` tag keeps a refusal apart from
+  `{:error, %Ecto.Changeset{}}` and `{:error, :not_found}`, which the same
+  functions already return. A plug may not change the changeset: Lotus writes
+  the changeset it built.
+
+  Enabling and disabling public sharing are updates of a `:dashboard` whose
+  changes carry `:public_token`: a string when sharing is enabled, `nil` when
+  it is disabled. A plug that refuses sharing matches on that.
+
+  `:after_content_change` fires after a successful write. The write has
+  happened, so the event cannot stop it: the result of the pipeline is
+  ignored, and a halt only stops the later plugs on that event. The event
+  fires when the repo call returns. If the caller wraps the call in its own
+  transaction, that transaction has not committed yet. The
+  `[:lotus, :content, :change]` telemetry event carries the same metadata for
+  a consumer that prefers telemetry. A refused or failed write fires neither.
+
+  A delete by id that finds no record returns `{:error, :not_found}` and fires
+  no event.
+
   ## Configuration
 
       config :lotus,
@@ -166,6 +210,14 @@ defmodule Lotus.Middleware do
           | :after_describe_table
           | :after_list_relations
           | :after_discover
+          | :before_content_change
+          | :after_content_change
+
+  @typedoc """
+  The error reason a mutation function returns when a `:before_content_change`
+  plug halts, wrapping the reason the plug gave.
+  """
+  @type halted :: {:halted, term()}
 
   @type discover_kind ::
           :list_schemas

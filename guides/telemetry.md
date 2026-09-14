@@ -74,6 +74,20 @@ The `result` field is `:ok` or `:error`.
 > events which renamed it to `:source`. The value is the same thing in both —
 > the data source *name* (`"main"`), not an Ecto repo module.
 
+### Content Changes
+
+| Event                          | Measurements | Metadata                                         |
+|--------------------------------|--------------|--------------------------------------------------|
+| `[:lotus, :content, :change]`  | `count`      | `op`, `resource`, `record`, `changes`, `context` |
+
+Emitted after a query, visualization, dashboard, dashboard card, dashboard
+filter or filter mapping is created, updated or deleted. The metadata is the
+`:after_content_change` middleware payload: `op` is `:create`, `:update` or
+`:delete`, `record` is the struct as written, `changes` is `%{}` on a delete,
+and `context` is the `:context` option the caller passed to the mutation
+function, or `nil`. A write that a `:before_content_change` plug refused, or
+that failed validation, emits nothing.
+
 ## Setup
 
 Attach handlers in your application's `start/2` callback:
