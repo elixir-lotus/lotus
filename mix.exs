@@ -108,7 +108,7 @@ defmodule Lotus.MixProject do
           Lotus.Source.Adapters.Ecto.Dialect,
           ~r/Lotus\.Source\.Adapters\..+/
         ],
-        "Schema Introspection": [Lotus.Schema, Lotus.Visibility],
+        "Schema Introspection": [Lotus.Schema, Lotus.Visibility, Lotus.Visibility.Mask],
         Telemetry: [Lotus.Telemetry],
         Caching: [Lotus.Cache, ~r/Lotus\.Cache\..+/],
         "Database Migrations": [Lotus.Migration, Lotus.Migrations, ~r/Lotus\.Migrations\..+/],

@@ -448,34 +448,35 @@ Use `payload.context` in the same plug for per-user exceptions, or `payload.sour
 
 ### Redacting Sensitive Data in Results
 
-Mask PII columns (emails, phone numbers, etc.) so non-admin users only see partial values:
+Mask PII columns (emails, phone numbers, etc.) so non-admin users only see partial values.
+`Lotus.Visibility.Mask.apply/2` applies the same strategies as
+[column visibility policies](visibility.md#masking-strategies), so the plug does
+not need its own masking code:
 
 ```elixir
 defmodule MyApp.ResultRedactionMiddleware do
   @moduledoc """
-  Masks sensitive columns in query results based on configurable field names.
+  Masks sensitive columns in query results with a mask strategy per column name.
   Admins (identified via context) see full values; everyone else sees masked output.
   """
 
-  def init(opts), do: Keyword.get(opts, :fields, [])
+  alias Lotus.Visibility.Mask
+
+  def init(opts), do: Keyword.get(opts, :fields, %{})
 
   def call(%{result: result, context: context} = payload, fields) do
     if admin?(context) do
       {:cont, payload}
     else
-      col_indexes =
-        result.columns
-        |> Enum.with_index()
-        |> Enum.filter(fn {col, _i} -> col in fields end)
-        |> Enum.map(fn {_col, i} -> i end)
-        |> MapSet.new()
+      strategies = Enum.map(result.columns, &Map.get(fields, &1))
 
       redacted_rows =
         Enum.map(result.rows, fn row ->
           row
-          |> Enum.with_index()
-          |> Enum.map(fn {val, i} ->
-            if i in col_indexes, do: mask(val), else: val
+          |> Enum.zip(strategies)
+          |> Enum.map(fn
+            {val, nil} -> val
+            {val, strategy} -> Mask.apply(val, strategy)
           end)
         end)
 
@@ -485,22 +486,23 @@ defmodule MyApp.ResultRedactionMiddleware do
 
   defp admin?(%{role: :admin}), do: true
   defp admin?(_), do: false
-
-  defp mask(val) when is_binary(val) and String.length(val) > 4 do
-    String.slice(val, 0, 2) <> String.duplicate("*", max(String.length(val) - 4, 3)) <> String.slice(val, -2, 2)
-  end
-
-  defp mask(_val), do: "****"
 end
 ```
 
-Configure which fields to redact:
+Configure which fields to redact and how:
 
 ```elixir
 config :lotus,
   middleware: %{
     after_query: [
-      {MyApp.ResultRedactionMiddleware, [fields: ~w(email phone ssn)]}
+      {MyApp.ResultRedactionMiddleware,
+       [
+         fields: %{
+           "email" => {:partial, keep_domain: true, keep_first: 1, keep_last: 0},
+           "phone" => {:partial, keep_last: 4},
+           "ssn" => :sha256
+         }
+       ]}
     ]
   }
 ```
@@ -509,8 +511,8 @@ A query like `SELECT name, email FROM users` would return:
 
 | name | email |
 |------|-------|
-| Alice Johnson | al***************om |
-| Bob Smith | bo***********om |
+| Alice Johnson | a****@example.com |
+| Bob Smith | b**@example.com |
 
 ### Filtering Schema Discovery
 
