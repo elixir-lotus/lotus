@@ -571,6 +571,114 @@ defmodule Lotus.Storage.DashboardTest do
 
       assert changeset.valid?
     end
+
+    test "accepts a source query on a filter with the select widget" do
+      for filter_type <- [:select, :text, :number] do
+        changeset =
+          DashboardFilter.new(%{
+            dashboard_id: 1,
+            name: "city",
+            label: "City",
+            filter_type: filter_type,
+            widget: :select,
+            position: 0,
+            source_query_id: 1
+          })
+
+        assert changeset.valid?, "Expected filter_type #{filter_type} to be valid"
+      end
+    end
+
+    test "rejects a source query on a filter without the select widget" do
+      changeset =
+        DashboardFilter.new(%{
+          dashboard_id: 1,
+          name: "city",
+          label: "City",
+          filter_type: :text,
+          widget: :input,
+          position: 0,
+          source_query_id: 1
+        })
+
+      refute changeset.valid?
+      assert %{source_query_id: ["needs the select widget"]} = errors_on(changeset)
+    end
+
+    test "accepts a dependency with a source query" do
+      changeset = DashboardFilter.new(Map.put(city_filter_attrs(), :depends_on_filter_id, 2))
+
+      assert changeset.valid?
+    end
+
+    test "rejects a dependency without a source query" do
+      changeset =
+        city_filter_attrs()
+        |> Map.merge(%{source_query_id: nil, depends_on_filter_id: 2})
+        |> DashboardFilter.new()
+
+      refute changeset.valid?
+      assert %{depends_on_filter_id: ["needs a source query"]} = errors_on(changeset)
+    end
+
+    test "rejects a removal of the source query of a filter with a dependency" do
+      filter =
+        struct!(
+          DashboardFilter,
+          Map.merge(city_filter_attrs(), %{id: 3, depends_on_filter_id: 2})
+        )
+
+      changeset = DashboardFilter.update(filter, %{source_query_id: nil})
+
+      refute changeset.valid?
+      assert %{depends_on_filter_id: ["needs a source query"]} = errors_on(changeset)
+    end
+
+    test "accepts an update of a filter with a dependency whose source query was deleted" do
+      filter =
+        struct!(
+          DashboardFilter,
+          Map.merge(city_filter_attrs(), %{id: 3, source_query_id: nil, depends_on_filter_id: 2})
+        )
+
+      changeset = DashboardFilter.update(filter, %{label: "Town"})
+
+      assert changeset.valid?
+    end
+
+    test "rejects a dependency on the filter itself" do
+      filter = struct!(DashboardFilter, Map.put(city_filter_attrs(), :id, 3))
+
+      changeset = DashboardFilter.update(filter, %{depends_on_filter_id: 3})
+
+      refute changeset.valid?
+      assert %{depends_on_filter_id: ["cannot be the filter itself"]} = errors_on(changeset)
+    end
+  end
+
+  describe "DashboardFilter JSON" do
+    test "encodes the source query id and the dependency id" do
+      filter =
+        struct!(
+          DashboardFilter,
+          Map.merge(city_filter_attrs(), %{id: 3, depends_on_filter_id: 2})
+        )
+
+      assert %{"source_query_id" => 1, "depends_on_filter_id" => 2} =
+               filter |> Lotus.JSON.encode!() |> Lotus.JSON.decode!()
+    end
+  end
+
+  defp city_filter_attrs do
+    %{
+      dashboard_id: 1,
+      name: "city",
+      label: "City",
+      filter_type: :select,
+      widget: :select,
+      position: 0,
+      source_query_id: 1
+    }
   end
 
   describe "DashboardCardFilterMapping schema" do

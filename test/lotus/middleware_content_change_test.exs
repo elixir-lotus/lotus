@@ -428,6 +428,32 @@ defmodule Lotus.MiddlewareContentChangeTest do
 
       refute_content_change()
     end
+
+    test "a filter rejected by the dependency check writes nothing and fires no after event" do
+      dashboard = dashboard_fixture()
+      filter_on_other_dashboard = dashboard_filter_fixture(dashboard_fixture())
+      query = query_fixture()
+      capture_content_changes()
+
+      attrs = %{
+        name: "city",
+        label: "City",
+        filter_type: :select,
+        widget: :select,
+        position: 0,
+        source_query_id: query.id,
+        depends_on_filter_id: filter_on_other_dashboard.id
+      }
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Dashboards.create_dashboard_filter(dashboard, attrs, context: @context)
+
+      assert %{depends_on_filter_id: ["must be a filter of the same dashboard"]} =
+               errors_on(changeset)
+
+      refute_received {:after_content_change, _payload}
+      assert [] == Dashboards.list_dashboard_filters(dashboard)
+    end
   end
 
   describe "filter mappings" do

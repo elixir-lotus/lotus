@@ -727,6 +727,213 @@ defmodule Lotus.DashboardsTest do
     end
   end
 
+  describe "list_dashboard_filter_options/2" do
+    test "returns the static options of a filter with no source query" do
+      filter =
+        dashboard_filter_fixture(dashboard_fixture(), %{
+          filter_type: :select,
+          widget: :select,
+          config: %{"options" => [%{"value" => "us", "label" => "United States"}, "eu"]}
+        })
+
+      assert {:ok, [%{value: "us", label: "United States"}, %{value: "eu", label: "eu"}]} =
+               Dashboards.list_dashboard_filter_options(filter)
+    end
+
+    test "returns no options for a filter with no source query and no static options" do
+      filter = dashboard_filter_fixture(dashboard_fixture())
+
+      assert {:ok, []} = Dashboards.list_dashboard_filter_options(filter)
+    end
+
+    test "uses the first column as the value and the second column as the label" do
+      filter = country_filter_fixture(dashboard_fixture())
+
+      assert {:ok, [%{value: "PT", label: "Portugal"}, %{value: "US", label: "United States"}]} =
+               Dashboards.list_dashboard_filter_options(filter)
+    end
+
+    test "passes the parent filter value from :filter_values to the source query" do
+      dashboard = dashboard_fixture()
+      city = city_filter_fixture(dashboard, country_filter_fixture(dashboard))
+
+      assert {:ok, [%{value: "Lisbon", label: "Lisbon"}, %{value: "Porto", label: "Porto"}]} =
+               Dashboards.list_dashboard_filter_options(city,
+                 filter_values: %{"country" => "PT"}
+               )
+    end
+
+    test "passes the default value of the parent filter when :filter_values has no value" do
+      dashboard = dashboard_fixture()
+
+      city =
+        city_filter_fixture(dashboard, country_filter_fixture(dashboard, %{default_value: "US"}))
+
+      assert {:ok, [%{value: "Austin", label: "Austin"}]} =
+               Dashboards.list_dashboard_filter_options(city)
+    end
+
+    test "returns no options and does not run the source query when the parent filter has no value" do
+      dashboard = dashboard_fixture()
+      country = country_filter_fixture(dashboard)
+
+      failing_query =
+        query_fixture(%{statement: "SELECT city FROM missing_table WHERE country = {{country}}"})
+
+      city =
+        city_filter_fixture(dashboard, country, %{source_query_id: failing_query.id})
+
+      assert {:ok, []} = Dashboards.list_dashboard_filter_options(city)
+
+      assert {:error, _reason} =
+               Dashboards.list_dashboard_filter_options(city,
+                 filter_values: %{"country" => "PT"}
+               )
+    end
+
+    test "accepts a filter id" do
+      filter = country_filter_fixture(dashboard_fixture())
+
+      assert Dashboards.list_dashboard_filter_options(filter.id) ==
+               Dashboards.list_dashboard_filter_options(filter)
+    end
+
+    test "returns :not_found for a missing filter id" do
+      assert {:error, :not_found} = Dashboards.list_dashboard_filter_options(999_999)
+    end
+
+    test "returns the static options after the source query is deleted" do
+      country = country_filter_fixture(dashboard_fixture(), %{config: %{"options" => ["PT"]}})
+
+      {:ok, _query} = Lotus.delete_query(Lotus.get_query!(country.source_query_id))
+      country = Dashboards.get_dashboard_filter!(country.id)
+
+      assert country.source_query_id == nil
+
+      assert {:ok, [%{value: "PT", label: "PT"}]} =
+               Dashboards.list_dashboard_filter_options(country)
+    end
+  end
+
+  describe "filter dependencies" do
+    test "rejects a dependency on a filter of another dashboard" do
+      country = country_filter_fixture(dashboard_fixture())
+      query = query_fixture()
+
+      assert {:error, changeset} =
+               Dashboards.create_dashboard_filter(dashboard_fixture(), %{
+                 name: "city",
+                 label: "City",
+                 filter_type: :select,
+                 widget: :select,
+                 position: 0,
+                 source_query_id: query.id,
+                 depends_on_filter_id: country.id
+               })
+
+      assert %{depends_on_filter_id: ["must be a filter of the same dashboard"]} =
+               errors_on(changeset)
+    end
+
+    test "rejects an update that makes two filters depend on each other" do
+      dashboard = dashboard_fixture()
+      country = country_filter_fixture(dashboard)
+      city = city_filter_fixture(dashboard, country)
+
+      assert {:error, changeset} =
+               Dashboards.update_dashboard_filter(country, %{depends_on_filter_id: city.id})
+
+      assert %{depends_on_filter_id: ["would create a dependency cycle"]} = errors_on(changeset)
+    end
+
+    test "rejects an update that closes a longer dependency chain" do
+      dashboard = dashboard_fixture()
+      country = country_filter_fixture(dashboard)
+      city = city_filter_fixture(dashboard, country)
+      district = city_filter_fixture(dashboard, city, %{name: "district"})
+
+      assert {:error, changeset} =
+               Dashboards.update_dashboard_filter(country, %{depends_on_filter_id: district.id})
+
+      assert %{depends_on_filter_id: ["would create a dependency cycle"]} = errors_on(changeset)
+    end
+
+    test "accepts a dependency on a filter higher in the same chain" do
+      dashboard = dashboard_fixture()
+      country = country_filter_fixture(dashboard)
+      city = city_filter_fixture(dashboard, country)
+      district = city_filter_fixture(dashboard, city, %{name: "district"})
+      country_id = country.id
+
+      assert {:ok, %DashboardFilter{depends_on_filter_id: ^country_id}} =
+               Dashboards.update_dashboard_filter(district, %{depends_on_filter_id: country_id})
+    end
+
+    test "sets depends_on_filter_id to nil when the parent filter is deleted" do
+      dashboard = dashboard_fixture()
+      country = country_filter_fixture(dashboard)
+      city = city_filter_fixture(dashboard, country)
+
+      {:ok, _country} = Dashboards.delete_dashboard_filter(country)
+
+      assert %DashboardFilter{depends_on_filter_id: nil} =
+               Dashboards.get_dashboard_filter!(city.id)
+    end
+
+    test "deletes a dashboard whose filters depend on each other" do
+      dashboard = dashboard_fixture()
+      city = city_filter_fixture(dashboard, country_filter_fixture(dashboard))
+
+      assert {:ok, _dashboard} = Dashboards.delete_dashboard(dashboard)
+      assert nil == Dashboards.get_dashboard_filter(city.id)
+    end
+  end
+
+  defp country_filter_fixture(dashboard, attrs \\ %{}) do
+    query =
+      query_fixture(%{
+        statement: """
+        SELECT code, name
+        FROM (VALUES ('PT', 'Portugal'), ('US', 'United States')) AS countries(code, name)
+        ORDER BY code
+        """
+      })
+
+    dashboard_filter_fixture(
+      dashboard,
+      Map.merge(
+        %{name: "country", filter_type: :select, widget: :select, source_query_id: query.id},
+        attrs
+      )
+    )
+  end
+
+  defp city_filter_fixture(dashboard, parent, attrs \\ %{}) do
+    query =
+      query_fixture(%{
+        statement: """
+        SELECT city
+        FROM (VALUES ('Lisbon', 'PT'), ('Porto', 'PT'), ('Austin', 'US')) AS cities(city, country)
+        WHERE country = {{country}}
+        ORDER BY city
+        """
+      })
+
+    dashboard_filter_fixture(
+      dashboard,
+      Map.merge(
+        %{
+          name: "city",
+          filter_type: :select,
+          widget: :select,
+          source_query_id: query.id,
+          depends_on_filter_id: parent.id
+        },
+        attrs
+      )
+    )
+  end
+
   defp date_range_card_fixture(dashboard) do
     query =
       query_fixture(%{
@@ -761,6 +968,13 @@ defmodule Lotus.DashboardsTest do
   describe "Lotus module delegations" do
     test "delegates list_relative_date_tokens/0" do
       assert Lotus.list_relative_date_tokens() == DateToken.tokens()
+    end
+
+    test "delegates list_dashboard_filter_options/2" do
+      filter = country_filter_fixture(dashboard_fixture())
+
+      assert Lotus.list_dashboard_filter_options(filter, filter_values: %{}) ==
+               Dashboards.list_dashboard_filter_options(filter)
     end
 
     test "delegates list_dashboards/0" do

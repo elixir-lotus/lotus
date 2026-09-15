@@ -102,6 +102,13 @@ defmodule Lotus.Migrations.MySQL do
       add(:default_value, :string, size: 255)
       add(:config, :json, null: false, default: fragment("('{}')"))
       add(:position, :integer, null: false)
+      add(:source_query_id, references(:lotus_queries, type: :serial, on_delete: :nilify_all))
+
+      add(
+        :depends_on_filter_id,
+        references(:lotus_dashboard_filters, type: :serial, on_delete: :nilify_all)
+      )
+
       add(:inserted_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
       add(:updated_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
     end
@@ -113,6 +120,9 @@ defmodule Lotus.Migrations.MySQL do
         name: "lotus_dashboard_filters_dashboard_id_name_index"
       )
     )
+
+    create(index(:lotus_dashboard_filters, [:source_query_id]))
+    create(index(:lotus_dashboard_filters, [:depends_on_filter_id]))
 
     create_if_not_exists table(:lotus_dashboard_card_filter_mappings, primary_key: false) do
       add(:id, :serial, primary_key: true)

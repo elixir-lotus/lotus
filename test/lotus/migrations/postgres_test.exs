@@ -22,6 +22,8 @@ defmodule Lotus.Migrations.PostgresTest do
     assert Ecto.Migrator.up(MigrationRepo, 1, Lotus.Migrations) in [:ok, :already_up]
     assert table_exists?("lotus_queries")
     assert column_exists?("lotus_queries", "query_language")
+    assert column_exists?("lotus_dashboard_filters", "source_query_id")
+    assert column_exists?("lotus_dashboard_filters", "depends_on_filter_id")
 
     assert :ok = Ecto.Migrator.down(MigrationRepo, 1, Lotus.Migrations)
     refute table_exists?("lotus_queries")
