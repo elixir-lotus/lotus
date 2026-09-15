@@ -41,9 +41,11 @@ them raise, the `:exception` metadata is uniform: `kind` is always `:error`,
 `reason` is the `{:error, reason}` tuple the caller receives, and `stacktrace`
 is `[]`. Match on `reason` rather than expecting an exception struct.
 
-Query telemetry brackets the phase the result cache stores, so a query served
-from cache emits no `[:lotus, :query, *]` events at all; `[:lotus, :cache, :hit]`
-is the event to count for those. The `:before_query` and `:after_query`
+Query telemetry brackets what a result cache hit skips — authorizing the
+statement and executing it — so a query served from cache emits no
+`[:lotus, :query, *]` events at all; `[:lotus, :cache, :hit]` is the event to
+count for those. On a miss the span includes the cache write, which stores only
+the result and the relations. The `:before_query` and `:after_query`
 middleware run outside that phase, on every call: a plug that halts there yields
 `{:error, reason}` to the caller without emitting query events, because no
 statement ran. For the same reason `:stop` carries the result as the source

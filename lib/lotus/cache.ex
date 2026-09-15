@@ -56,6 +56,20 @@ defmodule Lotus.Cache do
     end
   end
 
+  @doc false
+  # `get/1` for a caller that follows a miss with `get_or_store/4`, which
+  # reports the miss itself. A miss here would be counted twice.
+  @spec lookup(key) :: {:ok, value} | :miss
+  def lookup(key) do
+    with {:ok, adapter} <- adapter(),
+         {:ok, _} = hit <- adapter.get(ns(key)) do
+      Telemetry.cache_hit(key)
+      hit
+    else
+      _ -> :miss
+    end
+  end
+
   @spec get_or_store(key, ttl_ms, (-> value), opts) ::
           {:ok, value, :hit | :miss | atom()} | {:error, term}
   def get_or_store(key, ttl_ms, fun, opts \\ []) do
