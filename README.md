@@ -16,7 +16,7 @@
 
 **The embeddable BI engine for Elixir apps — query editor, dashboards, visualizations, and AI-powered query generation that mount directly in your Phoenix app. SQL and non-SQL data sources behind one pluggable adapter contract. No Metabase. No Redash. No extra infrastructure.**
 
-[Try the live demo](https://lotus.typhoon.works/)
+[Try the live demo](https://demo.lotusbi.com/lotus)
 
 <!-- TODO: Replace with a 30-second demo GIF showing: mount in router → open browser → write SQL → see chart → save to dashboard -->
 
@@ -30,7 +30,7 @@ And it is not limited to SQL. Every data source is wrapped behind a uniform `Lot
 
 ## See It in Action
 
-[Try the live demo](https://lotus.typhoon.works/) — a full Lotus Web instance with sample data.
+[Try the live demo](https://demo.lotusbi.com/lotus) — a full Lotus Web instance with sample data.
 
 **What you get out of the box:**
 - Ask your database questions in plain English — AI-powered query generation with multi-turn conversations, query explanations, and optimization suggestions (bring your own OpenAI, Anthropic, or Gemini key)
