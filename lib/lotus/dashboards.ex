@@ -32,7 +32,13 @@ defmodule Lotus.Dashboards do
   A delete fires an event only for the record it names. Deleting a dashboard
   also deletes its cards, its filters and their filter mappings, and deleting a
   card or a filter also deletes its filter mappings, with no event for those.
-  See `Lotus.Middleware`.
+  Deleting a filter also sets `depends_on_filter_id` to `nil` on the filters
+  that depend on it, with no event for those either. See `Lotus.Middleware`.
+
+  ## Cascading filters
+
+  A filter can get its select options from a saved query, and that query can
+  use the value of another filter. See `list_dashboard_filter_options/2`.
   """
 
   import Ecto.Query
@@ -495,6 +501,7 @@ defmodule Lotus.Dashboards do
     attrs
     |> Map.put(:dashboard_id, dashboard_id)
     |> DashboardFilter.new()
+    |> validate_filter_dependency()
     |> Mutation.run(:create, :dashboard_filter, opts)
   end
 
@@ -512,13 +519,16 @@ defmodule Lotus.Dashboards do
   def update_dashboard_filter(%DashboardFilter{} = filter, attrs, opts \\ []) do
     filter
     |> DashboardFilter.update(attrs)
+    |> validate_filter_dependency()
     |> Mutation.run(:update, :dashboard_filter, opts)
   end
 
   @doc """
   Deletes a filter.
 
-  Also deletes all associated filter mappings.
+  Also deletes all associated filter mappings. The filters that depend on it
+  get `depends_on_filter_id` set to `nil` by the database, with no content
+  change event for them.
   """
   @spec delete_dashboard_filter(DashboardFilter.t() | id(), keyword()) ::
           {:ok, DashboardFilter.t()}
@@ -534,6 +544,158 @@ defmodule Lotus.Dashboards do
       filter -> delete_dashboard_filter(filter, opts)
     end
   end
+
+  defp validate_filter_dependency(%Ecto.Changeset{} = changeset) do
+    parent_id = Ecto.Changeset.get_change(changeset, :depends_on_filter_id)
+
+    if is_nil(parent_id) or Keyword.has_key?(changeset.errors, :depends_on_filter_id) do
+      changeset
+    else
+      validate_dependency_parent(changeset, Lotus.repo().get(DashboardFilter, parent_id))
+    end
+  end
+
+  defp validate_dependency_parent(changeset, nil), do: changeset
+
+  defp validate_dependency_parent(changeset, %DashboardFilter{} = parent) do
+    dashboard_id = Ecto.Changeset.get_field(changeset, :dashboard_id)
+    filter_id = changeset.data.id
+
+    cond do
+      parent.dashboard_id != dashboard_id ->
+        Ecto.Changeset.add_error(
+          changeset,
+          :depends_on_filter_id,
+          "must be a filter of the same dashboard"
+        )
+
+      filter_id != nil and dependency_chain_reaches?(dashboard_id, parent.id, filter_id) ->
+        Ecto.Changeset.add_error(
+          changeset,
+          :depends_on_filter_id,
+          "would create a dependency cycle"
+        )
+
+      true ->
+        changeset
+    end
+  end
+
+  defp dependency_chain_reaches?(dashboard_id, start_id, target_id) do
+    parent_ids =
+      from(f in DashboardFilter,
+        where: f.dashboard_id == ^dashboard_id,
+        select: {f.id, f.depends_on_filter_id}
+      )
+      |> Lotus.repo().all()
+      |> Map.new()
+
+    walk_dependency_chain(start_id, target_id, parent_ids, map_size(parent_ids))
+  end
+
+  defp walk_dependency_chain(nil, _target_id, _parent_ids, _steps_left), do: false
+  defp walk_dependency_chain(target_id, target_id, _parent_ids, _steps_left), do: true
+  defp walk_dependency_chain(_id, _target_id, _parent_ids, 0), do: false
+
+  defp walk_dependency_chain(id, target_id, parent_ids, steps_left) do
+    parent_ids
+    |> Map.get(id)
+    |> walk_dependency_chain(target_id, parent_ids, steps_left - 1)
+  end
+
+  # ── Filter Options ─────────────────────────────────────────────────────────
+
+  @doc """
+  Lists the select options of a filter.
+
+  A filter with no `source_query_id` returns the options under `"options"` in
+  its `config`: a map with `"value"` and `"label"`, or a bare value that is both.
+  A filter with a `source_query_id` runs that query and returns one option for
+  each row. The first column is the value and the second column is the label. A
+  query with one column uses that column for both.
+
+  When the filter has a `depends_on_filter_id`, the value of that other filter
+  goes to the source query as the variable named after the other filter's
+  `name`. The value comes from `:filter_values`, or else from the
+  `default_value` of the other filter, and a relative date token resolves
+  first. When the other filter has no value, the result is `{:ok, []}` and the
+  query does not run.
+
+  ## Options
+
+    * `:filter_values` - Map of filter names to their current values
+    * Every other option goes to `Lotus.run_query/2`, for example `:context`,
+      `:scope`, `:cache` and `:timeout`
+
+  ## Examples
+
+      iex> list_dashboard_filter_options(city_filter, filter_values: %{"country" => "PT"})
+      {:ok, [%{value: "Lisbon", label: "Lisbon"}, %{value: "Porto", label: "Porto"}]}
+
+      iex> list_dashboard_filter_options(999_999)
+      {:error, :not_found}
+
+  """
+  @spec list_dashboard_filter_options(DashboardFilter.t() | id(), keyword()) ::
+          {:ok, [%{value: term(), label: term()}]} | {:error, term()}
+  def list_dashboard_filter_options(filter_or_id, opts \\ [])
+
+  def list_dashboard_filter_options(%DashboardFilter{source_query_id: nil} = filter, _opts),
+    do: {:ok, static_filter_options(filter.config)}
+
+  def list_dashboard_filter_options(%DashboardFilter{} = filter, opts) do
+    filter_values = Keyword.get(opts, :filter_values, %{})
+
+    case source_query_vars(filter, filter_values) do
+      {:ok, vars} ->
+        run_opts = opts |> Keyword.drop([:filter_values]) |> Keyword.put(:vars, vars)
+
+        with {:ok, result} <- Lotus.run_query(filter.source_query_id, run_opts) do
+          {:ok, Enum.flat_map(result.rows, &row_to_options/1)}
+        end
+
+      :no_parent_value ->
+        {:ok, []}
+    end
+  end
+
+  def list_dashboard_filter_options(id, opts) do
+    case get_dashboard_filter(id) do
+      nil -> {:error, :not_found}
+      filter -> list_dashboard_filter_options(filter, opts)
+    end
+  end
+
+  defp static_filter_options(%{"options" => options}) when is_list(options),
+    do: Enum.map(options, &static_filter_option/1)
+
+  defp static_filter_options(_config), do: []
+
+  defp static_filter_option(%{"value" => value} = option),
+    do: %{value: value, label: Map.get(option, "label", value)}
+
+  defp static_filter_option(value), do: %{value: value, label: value}
+
+  defp source_query_vars(%DashboardFilter{depends_on_filter_id: nil}, _filter_values),
+    do: {:ok, %{}}
+
+  defp source_query_vars(%DashboardFilter{} = filter, filter_values) do
+    case Lotus.repo().preload(filter, :depends_on_filter).depends_on_filter do
+      nil -> {:ok, %{}}
+      parent -> parent_value_vars(parent, filter_values)
+    end
+  end
+
+  defp parent_value_vars(parent, filter_values) do
+    case Map.fetch(resolve_filter_values([parent], filter_values), parent.id) do
+      {:ok, value} -> {:ok, %{parent.name => value}}
+      :error -> :no_parent_value
+    end
+  end
+
+  defp row_to_options([]), do: []
+  defp row_to_options([value]), do: [%{value: value, label: value}]
+  defp row_to_options([value, label | _other_columns]), do: [%{value: value, label: label}]
 
   # ── Filter Mapping CRUD ────────────────────────────────────────────────────
 

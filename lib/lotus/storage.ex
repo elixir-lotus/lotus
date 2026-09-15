@@ -12,8 +12,9 @@ defmodule Lotus.Storage do
   halts makes the function return `{:error, {:halted, reason}}` and nothing is
   written.
 
-  Deleting a query also deletes its visualizations and sets `query_id` to `nil`
-  on the dashboard cards that showed it. Those changes fire no event; the
+  Deleting a query also deletes its visualizations, sets `query_id` to `nil`
+  on the dashboard cards that showed it and sets `source_query_id` to `nil` on
+  the dashboard filters that got their options from it. Those changes fire no event; the
   query's `:delete` is the event to gate and to record. See `Lotus.Middleware`.
   """
 

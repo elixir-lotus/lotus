@@ -31,6 +31,20 @@ defmodule Lotus.Storage.DashboardFilter do
   `"today"` or `"yesterday"`. The token resolves each time a card runs, see
   `Lotus.Dashboards.DateToken`. The changeset does not accept a range token as
   the `default_value` of a `:date` filter.
+
+  ## Cascading Filters
+
+  A filter with the `:select` widget can get its options from a saved query in
+  `source_query_id`. With `depends_on_filter_id`, the value of that other filter
+  of the same dashboard goes to the source query as the variable named after
+  the other filter's `name`. A `city` filter that depends on a `country` filter
+  can use `SELECT DISTINCT city FROM locations WHERE country = {{country}}`.
+  See `Lotus.Dashboards.list_dashboard_filter_options/2`.
+
+  A dependency needs a source query and cannot be the filter itself.
+  `Lotus.Dashboards` also rejects a dependency on a filter of another dashboard
+  and a dependency that makes a cycle. A delete of the source query or of the
+  other filter sets the field to `nil`.
   """
 
   use Ecto.Schema
@@ -39,7 +53,7 @@ defmodule Lotus.Storage.DashboardFilter do
   import Lotus.Helpers, only: [stringify_keys: 1]
 
   alias Lotus.Dashboards.DateToken
-  alias Lotus.Storage.{Dashboard, DashboardCardFilterMapping}
+  alias Lotus.Storage.{Dashboard, DashboardCardFilterMapping, Query}
 
   @type t :: %__MODULE__{
           id: term(),
@@ -52,6 +66,11 @@ defmodule Lotus.Storage.DashboardFilter do
           position: non_neg_integer(),
           dashboard_id: term(),
           dashboard: Dashboard.t() | Ecto.Association.NotLoaded.t(),
+          source_query_id: term() | nil,
+          source_query: Query.t() | Ecto.Association.NotLoaded.t() | nil,
+          depends_on_filter_id: term() | nil,
+          depends_on_filter: t() | Ecto.Association.NotLoaded.t() | nil,
+          dependent_filters: [t()] | Ecto.Association.NotLoaded.t(),
           card_mappings: [DashboardCardFilterMapping.t()] | Ecto.Association.NotLoaded.t(),
           inserted_at: DateTime.t(),
           updated_at: DateTime.t()
@@ -73,6 +92,8 @@ defmodule Lotus.Storage.DashboardFilter do
              :config,
              :position,
              :dashboard_id,
+             :source_query_id,
+             :depends_on_filter_id,
              :inserted_at,
              :updated_at
            ]}
@@ -87,6 +108,10 @@ defmodule Lotus.Storage.DashboardFilter do
     field(:position, :integer)
 
     belongs_to(:dashboard, Dashboard, references: :id, type: :id)
+    belongs_to(:source_query, Query, references: :id, type: :id)
+    belongs_to(:depends_on_filter, __MODULE__, references: :id, type: :id)
+
+    has_many(:dependent_filters, __MODULE__, foreign_key: :depends_on_filter_id)
 
     has_many(:card_mappings, DashboardCardFilterMapping,
       foreign_key: :filter_id,
@@ -97,7 +122,8 @@ defmodule Lotus.Storage.DashboardFilter do
   end
 
   @required ~w(dashboard_id name label filter_type widget position)a
-  @permitted ~w(dashboard_id name label filter_type widget default_value config position)a
+  @permitted ~w(dashboard_id name label filter_type widget default_value config position
+                source_query_id depends_on_filter_id)a
 
   def new(attrs), do: changeset(%__MODULE__{}, attrs)
   def update(filter, attrs), do: changeset(filter, attrs)
@@ -113,11 +139,16 @@ defmodule Lotus.Storage.DashboardFilter do
     |> validate_number(:position, greater_than_or_equal_to: 0)
     |> validate_widget_type_compatibility()
     |> validate_default_value_for_filter_type()
+    |> validate_source_query_needs_select_widget()
+    |> validate_dependency_needs_source_query()
+    |> validate_dependency_is_another_filter()
     |> unique_constraint(:name,
       name: "lotus_dashboard_filters_dashboard_id_name_index",
       message: "name must be unique within the dashboard"
     )
     |> foreign_key_constraint(:dashboard_id)
+    |> foreign_key_constraint(:source_query_id)
+    |> foreign_key_constraint(:depends_on_filter_id)
   end
 
   defp normalize_config(%Ecto.Changeset{} = cs) do
@@ -150,6 +181,32 @@ defmodule Lotus.Storage.DashboardFilter do
         :widget,
         "#{widget} is not compatible with filter type #{filter_type}"
       )
+    end
+  end
+
+  defp validate_source_query_needs_select_widget(changeset) do
+    if get_field(changeset, :source_query_id) != nil and get_field(changeset, :widget) != :select do
+      add_error(changeset, :source_query_id, "needs the select widget")
+    else
+      changeset
+    end
+  end
+
+  defp validate_dependency_needs_source_query(changeset) do
+    if (changed?(changeset, :depends_on_filter_id) or changed?(changeset, :source_query_id)) and
+         get_field(changeset, :depends_on_filter_id) != nil and
+         get_field(changeset, :source_query_id) == nil do
+      add_error(changeset, :depends_on_filter_id, "needs a source query")
+    else
+      changeset
+    end
+  end
+
+  defp validate_dependency_is_another_filter(%Ecto.Changeset{data: %{id: id}} = changeset) do
+    if id != nil and get_field(changeset, :depends_on_filter_id) == id do
+      add_error(changeset, :depends_on_filter_id, "cannot be the filter itself")
+    else
+      changeset
     end
   end
 

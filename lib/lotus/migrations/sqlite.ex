@@ -99,6 +99,13 @@ defmodule Lotus.Migrations.SQLite do
       add(:default_value, :string)
       add(:config, :map, null: false, default: "{}")
       add(:position, :integer, null: false)
+      add(:source_query_id, references(:lotus_queries, type: :integer, on_delete: :nilify_all))
+
+      add(
+        :depends_on_filter_id,
+        references(:lotus_dashboard_filters, type: :integer, on_delete: :nilify_all)
+      )
+
       timestamps(type: :utc_datetime_usec)
     end
 
@@ -109,6 +116,9 @@ defmodule Lotus.Migrations.SQLite do
         name: "lotus_dashboard_filters_dashboard_id_name_index"
       )
     )
+
+    create_if_not_exists(index(:lotus_dashboard_filters, [:source_query_id]))
+    create_if_not_exists(index(:lotus_dashboard_filters, [:depends_on_filter_id]))
 
     create_if_not_exists table(:lotus_dashboard_card_filter_mappings, primary_key: false) do
       add(:id, :serial, primary_key: true)
@@ -158,6 +168,8 @@ defmodule Lotus.Migrations.SQLite do
       )
     )
 
+    drop_if_exists(index(:lotus_dashboard_filters, [:depends_on_filter_id]))
+    drop_if_exists(index(:lotus_dashboard_filters, [:source_query_id]))
     drop_if_exists(index(:lotus_dashboard_filters, [:dashboard_id, :position]))
     drop_if_exists(table(:lotus_dashboard_filters))
 

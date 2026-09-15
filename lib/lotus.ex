@@ -398,6 +398,12 @@ defmodule Lotus do
   """
   defdelegate list_relative_date_tokens(), to: Dashboards.DateToken, as: :tokens
 
+  @doc """
+  Lists the select options of a dashboard filter, from its source query or its
+  static config. See `Lotus.Dashboards.list_dashboard_filter_options/2`.
+  """
+  defdelegate list_dashboard_filter_options(filter_or_id, opts \\ []), to: Dashboards
+
   # ── Filter Mapping Functions ───────────────────────────────────────────────
 
   @doc """

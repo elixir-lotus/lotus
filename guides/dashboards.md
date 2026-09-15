@@ -398,6 +398,92 @@ On 2026-09-14 the card's query receives `start_date` = `"2026-08-16"` and
 select in a filter UI. `Lotus.Dashboards.DateToken` resolves tokens outside a
 dashboard run.
 
+### Cascading Filters
+
+A select filter can get its options from a saved query, and the options of one
+filter can depend on the value of another filter. For example, a `city`
+dropdown can show only the cities of the selected `country`.
+
+Two optional fields set this up:
+
+- `source_query_id` — a saved query that gives the options. The filter must use
+  the `:select` widget.
+- `depends_on_filter_id` — another filter of the same dashboard. Its value goes
+  to the source query as the variable named after that filter's `name`. A
+  filter with a dependency needs a `source_query_id`.
+
+```elixir
+{:ok, countries} = Lotus.create_query(%{
+  name: "Countries",
+  statement: "SELECT code, name FROM countries ORDER BY name"
+})
+
+{:ok, cities} = Lotus.create_query(%{
+  name: "Cities by country",
+  statement: "SELECT DISTINCT city FROM locations WHERE country = {{country}} ORDER BY city"
+})
+
+{:ok, country_filter} = Lotus.create_dashboard_filter(dashboard, %{
+  name: "country",
+  label: "Country",
+  filter_type: :select,
+  widget: :select,
+  source_query_id: countries.id,
+  position: 0
+})
+
+{:ok, city_filter} = Lotus.create_dashboard_filter(dashboard, %{
+  name: "city",
+  label: "City",
+  filter_type: :select,
+  widget: :select,
+  source_query_id: cities.id,
+  depends_on_filter_id: country_filter.id,
+  position: 1
+})
+
+Lotus.list_dashboard_filter_options(country_filter)
+# => {:ok, [%{value: "PT", label: "Portugal"}, %{value: "US", label: "United States"}]}
+
+Lotus.list_dashboard_filter_options(city_filter, filter_values: %{"country" => "PT"})
+# => {:ok, [%{value: "Lisbon", label: "Lisbon"}, %{value: "Porto", label: "Porto"}]}
+```
+
+`Lotus.list_dashboard_filter_options/2` works for every filter:
+
+| Filter | Options |
+|--------|---------|
+| No `source_query_id` | The static options under `"options"` in `config` (`[]` when there are none) |
+| `source_query_id`, no dependency | One option for each row of the source query |
+| `source_query_id` and a dependency with a value | One option for each row, with the value of the other filter as a variable |
+| `source_query_id` and a dependency with no value | `[]`, and the source query does not run |
+
+The first column of a row is the value and the second column is the label. A
+query with one column uses that column for both. The value of the other filter
+comes from `:filter_values`, or else from its `default_value`, and a relative
+date token resolves first. Other options, such as `:context`, `:scope` and
+`:cache`, go to `Lotus.run_query/2`. An error from the source query comes back
+unchanged.
+
+Lotus does not fetch the options again by itself. Call
+`list_dashboard_filter_options/2` again when the value of the other filter
+changes. `run_dashboard/2` does not check the value of a filter against its
+options.
+
+`Lotus.create_dashboard_filter/3` and `Lotus.update_dashboard_filter/3` reject:
+
+- a `source_query_id` on a filter without the `:select` widget
+- a `depends_on_filter_id` with no `source_query_id`
+- a dependency on the filter itself, on a filter of another dashboard, or a
+  dependency that makes a cycle (`country` → `city` → `country`)
+
+Two updates at the same time can still make a cycle. The options of a filter
+use only the filter it depends on, so a cycle cannot make them loop.
+
+Deleting the source query sets `source_query_id` to `nil`, and the filter then
+returns its static options. Deleting the other filter sets
+`depends_on_filter_id` to `nil`.
+
 ## Running Dashboards
 
 Execute all query cards in a dashboard with a single call. `run_dashboard/2`
@@ -534,6 +620,44 @@ This creates:
 - `lotus_dashboard_cards`
 - `lotus_dashboard_filters`
 - `lotus_dashboard_card_filter_mappings`
+
+Migration V6 adds `source_query_id` and `depends_on_filter_id` to
+`lotus_dashboard_filters` for [Cascading Filters](#cascading-filters).
+
+**Postgres:** `mix ecto.migrate` applies it (`Lotus.Migrations.Postgres.V6`).
+
+**MySQL and SQLite:** these migrations have no versions. A fresh install gets
+the columns. An existing install must run this SQL by hand before it deploys the
+new Lotus version, because Lotus reads every column of a filter:
+
+```sql
+-- MySQL
+ALTER TABLE lotus_dashboard_filters
+  ADD COLUMN source_query_id BIGINT UNSIGNED NULL,
+  ADD COLUMN depends_on_filter_id BIGINT UNSIGNED NULL,
+  ADD CONSTRAINT lotus_dashboard_filters_source_query_id_fkey
+    FOREIGN KEY (source_query_id) REFERENCES lotus_queries (id) ON DELETE SET NULL,
+  ADD CONSTRAINT lotus_dashboard_filters_depends_on_filter_id_fkey
+    FOREIGN KEY (depends_on_filter_id) REFERENCES lotus_dashboard_filters (id) ON DELETE SET NULL;
+
+CREATE INDEX lotus_dashboard_filters_source_query_id_index
+  ON lotus_dashboard_filters (source_query_id);
+CREATE INDEX lotus_dashboard_filters_depends_on_filter_id_index
+  ON lotus_dashboard_filters (depends_on_filter_id);
+
+-- SQLite
+ALTER TABLE lotus_dashboard_filters ADD COLUMN source_query_id INTEGER
+  CONSTRAINT lotus_dashboard_filters_source_query_id_fkey
+  REFERENCES lotus_queries (id) ON DELETE SET NULL;
+ALTER TABLE lotus_dashboard_filters ADD COLUMN depends_on_filter_id INTEGER
+  CONSTRAINT lotus_dashboard_filters_depends_on_filter_id_fkey
+  REFERENCES lotus_dashboard_filters (id) ON DELETE SET NULL;
+
+CREATE INDEX lotus_dashboard_filters_source_query_id_index
+  ON lotus_dashboard_filters (source_query_id);
+CREATE INDEX lotus_dashboard_filters_depends_on_filter_id_index
+  ON lotus_dashboard_filters (depends_on_filter_id);
+```
 
 ## Example: Sales Dashboard
 

@@ -4,6 +4,24 @@
 
 ### Added
 
+- **Cascading dashboard filters.** Dashboard filters were independent, so a
+  `city` dropdown could not show only the cities of the selected `country`. A
+  filter now has an optional `source_query_id`, a saved query that gives its
+  select options, and an optional `depends_on_filter_id`, another filter of
+  the same dashboard whose value goes to the source query as the variable
+  named after that filter's `name`. `Lotus.list_dashboard_filter_options/2`
+  returns the options of any filter: one option for each row of its source
+  query, with the first column as the value and the second as the label, or
+  the static options under `"options"` in its `config`. When the other filter
+  has no value, the result is empty and the query does not run. The filter
+  changeset rejects a source query on a filter without the `:select` widget, a
+  dependency with no source query and a dependency on the filter itself, and
+  `Lotus.Dashboards` rejects a dependency on a filter of another dashboard and
+  a dependency that makes a cycle. Deleting the source query or the other
+  filter sets the field to `nil`. Postgres gets the columns from migration V6.
+  An existing MySQL or SQLite install must add them by hand before it deploys
+  this version; the SQL is in "Database Migration" in the dashboards guide.
+
 - **Relative date tokens in dashboard filters.** A dashboard filter value had
   to be a concrete date, so a default such as "the last 30 days" went out of
   date. A `:date_range` filter now accepts `today`, `yesterday`,
