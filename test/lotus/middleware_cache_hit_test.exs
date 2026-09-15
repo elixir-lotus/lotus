@@ -134,7 +134,7 @@ defmodule Lotus.MiddlewareCacheHitTest do
     Lotus.run_statement(@statement, [], repo: "postgres", context: context)
   end
 
-  # `[:lotus, :query, :stop]` brackets the phase the cache stores, so counting
+  # `[:lotus, :query, :stop]` brackets what a cache hit skips, so counting
   # those events counts executions. Asserting that middleware ran twice proves
   # nothing unless the second call was really served from the cache.
   defp count_executions(fun) do

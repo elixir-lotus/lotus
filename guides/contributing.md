@@ -218,31 +218,34 @@ When you call `Lotus.run_query(query, opts)` the request flows through roughly t
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Lotus.Cache.get_or_store/4                                           │
+│ Lotus.Cache.lookup/1                                                 │
 │  • Key: from the configured Lotus.Cache.KeyBuilder, over the body,   │
 │    bound values and window of the statement that will execute        │
 │  • Tags: ["query:<id>", "source:<name>", "scope:<digest>", ...]      │
 │  • Hit  → the stored %{result:, relations:}, then :before_execute    │
-│  • Miss → run the fetcher below                                      │
+│  • Miss → authorize, then execute inside the cache write below       │
 └─────────────────────────────────────────────────────────────────────┘
                                │ miss / :bypass / :refresh
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Lotus.Runner.execute_statement(%Adapter{}, %Statement{}, opts)       │
+│ Lotus.Runner.authorize_phases/3, then execute_authorized/4           │
 │  1. Telemetry.query_start                                            │
 │  2. Adapter.sanitize_query (single statement + deny list)            │
 │  3. Adapter.needs_preflight? → Lotus.Preflight.authorize             │
-│  4. Middleware.run(:before_execute, _) — carries the relations       │
-│  5. Adapter.transaction (read-only) → Adapter.execute_query          │
-│  6. Column policy enforcement (omit / mask / error)                  │
-│  7. Telemetry.query_stop / query_exception                           │
-│  → {:ok, %{result:, relations:}}, which is what the cache stores     │
+│  4. Middleware.run(:before_execute, _) — relations in, assigns out   │
+│  5. Lotus.Cache.get_or_store/4, around the execution only:           │
+│     Adapter.transaction (read-only) → Adapter.execute_query,         │
+│     then column policy enforcement (omit / mask / error)             │
+│  6. Telemetry.query_stop / query_exception                           │
+│  → the cache stores %{result:, relations:}; the assigns stay with    │
+│    this call                                                         │
 └─────────────────────────────────────────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │ Lotus.Runner.after_query/4                                           │
-│  • Middleware.run(:after_query, _) — on the result, hit or miss      │
+│  • Middleware.run(:after_query, _) — on the result, hit or miss,     │
+│    with the assigns :before_execute left on this call                │
 │  • Outside the cache, so a plug that changes the result changes      │
 │    what this caller gets, not what is stored                         │
 └─────────────────────────────────────────────────────────────────────┘
@@ -256,7 +259,7 @@ A few notes on the pipeline:
 - **Variable binding** happens inside `Lotus.Storage.Query.compile/2`, which also consults `Lotus.Storage.SchemaCache` for type-aware casting of user-supplied values. Substitution itself is adapter-owned: prepared-statement adapters push a placeholder into `statement.body` and the value into `statement.params`, while JSON/DSL adapters inline a properly escaped literal. **Those adapters are the injection boundary** — escape through the target language's own encoder, never by string concatenation.
 - **Filters and sorts** are injected through the adapter, not concatenated naively — see `Lotus.Source.Adapters.Ecto.SQL.FilterInjector` and `SortInjector`. An adapter must declare the operators it handles via `supported_filter_operators/1`; anything else raises `Lotus.UnsupportedOperatorError`.
 - **Pagination** has two strategies for `count: :exact`. An engine that returns the total as a side-effect of the main query puts it in `execute_query/4`'s `:total_count` key; everything else places a count spec in `statement.meta[:count_spec]` and Lotus core runs it. The inline count wins when both are present.
-- **Caching** is optional. When no cache adapter is configured, `Lotus.Cache` is a pass-through and the fetcher always runs. The cache wraps the execution phase only, and stores the relations preflight found alongside the result, so all three query events fire on a hit — `:before_execute` gates on the stored relations. `Lotus.Runner.run_statement/3` composes the same phases with no cache between them. What a hit skips is sanitization, preflight and column visibility, all of which read `:scope`, which is in the key.
+- **Caching** is optional. When no cache adapter is configured, `Lotus.Cache` is a pass-through and the fetcher always runs. The cache wraps the execution only, and stores the relations preflight found alongside the result, so all three query events fire on a hit — `:before_execute` gates on the stored relations. On a miss, sanitization, preflight and `:before_execute` run before the cache write, so the assigns `:before_execute` leaves for `:after_query` never reach the entry. `Lotus.Runner.run_statement/3` composes the same phases with no cache between them. What a hit skips is sanitization, preflight and column visibility, all of which read `:scope`, which is in the key.
 - **Preflight** is skipped when `needs_preflight?/2` returns false (the Ecto adapter keeps the `EXPLAIN` / `SHOW` / `PRAGMA` heuristic internally). The relations it discovers are stashed in `Lotus.Preflight.Relations`, from where the runner reads them once and carries them down the pipeline — to `:before_execute` middleware, and to column visibility policy lookup, without re-parsing the statement. An adapter that cannot enumerate resources returns `{:unrestricted, reason}`, which is blocked unless the operator opts in with `:allow_unrestricted_resources`.
 - **Middleware runs first**, outside the cache and before pagination, sanitization and preflight, because a `:before_query` plug may rewrite the statement — row-level security and tenant predicates are the point of the hook. Sanitization and preflight then apply to whatever will actually execute. Halting from a `:before_query` plug yields `{:error, reason}` to the caller. A plug that needs the table list instead of the chance to rewrite registers `:before_execute`, which runs once preflight has named the relations.
 

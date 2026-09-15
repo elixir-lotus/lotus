@@ -4,6 +4,21 @@
 
 ### Added
 
+- **`:before_execute` hands `:assigns` to `:after_query`.** The runner kept
+  only the verdict of a `:before_execute` plug and ignored the payload it
+  continued with, so an `:after_query` plug that needed the same decision, such
+  as the grants that restrict the columns of a result, had to make it again,
+  and the two decisions could differ when policies reloaded between the hooks.
+  `:before_execute` now starts with `assigns: %{}`, and `:after_query` receives
+  the `:assigns` its plugs left, on a cache hit too. It is the only key Lotus
+  reads back: a change to `:statement`, `:relations` or any other key is still
+  ignored, and a value that is not a map arrives as `%{}`. On a miss,
+  sanitization, preflight and `:before_execute` now run before the result cache
+  is written, so the entry stores the result and the relations and never the
+  assigns. `Lotus.Runner.before_execute/5` returns `{:ok, assigns}` in place of
+  `:ok`, and `Lotus.Runner.execute_statement/3` returns the assigns with the
+  result and the relations; both were unreleased.
+
 - **Cascading dashboard filters.** Dashboard filters were independent, so a
   `city` dropdown could not show only the cities of the selected `country`. A
   filter now has an optional `source_query_id`, a saved query that gives its

@@ -56,20 +56,39 @@ defmodule Lotus.Runner do
   @type execution :: %{result: query_result(), relations: relations()}
 
   @typedoc """
+  What the `:before_execute` plugs of a call left under `:assigns`, handed to
+  the `:after_query` plugs of the same call. It belongs to that call alone, so
+  the result cache never stores it.
+  """
+  @type assigns :: map()
+
+  @typedoc """
+  What authorizing a statement produced: the relations preflight proved it
+  touches, and the assigns its `:before_execute` plugs left.
+  """
+  @type authorization :: %{relations: relations(), assigns: assigns()}
+
+  @typedoc """
   What a run produced, as `:after_query` sees it: the statement that ran, its
-  result, the relations, and where the result came from.
+  result, the relations, where the result came from, and the assigns of
+  `:before_execute`.
   """
   @type outcome :: %{
-          statement: Statement.t(),
-          result: query_result(),
-          relations: relations(),
-          origin: origin()
+          required(:statement) => Statement.t(),
+          required(:result) => query_result(),
+          required(:relations) => relations(),
+          required(:origin) => origin(),
+          optional(:assigns) => assigns()
         }
 
   @typedoc """
   The execute step of a run: takes the statement `:before_query` returned and
   produces the outcome. `run/4` supplies one that executes against the source;
   a caller that caches executions supplies one that consults the cache first.
+
+  A step that reports origin `:executed` has run `:before_execute` and returns
+  its assigns. A step that reports `:cached` has not, and returns none: `run/4`
+  runs the gate and takes the assigns from it.
   """
   @type executor :: (Statement.t() -> {:ok, outcome()} | {:error, term()})
 
@@ -101,7 +120,7 @@ defmodule Lotus.Runner do
   3. `:before_execute`, when the step served a cached result — the relations
      stored with the entry stand in for preflight, so the gate fires on a hit
      as it does on a miss.
-  4. `:after_query`.
+  4. `:after_query`, with the assigns `:before_execute` left on this call.
 
   `[:lotus, :run, *]` telemetry brackets all of it: `:start` before the first
   phase, `:stop` after `:after_query` with the origin and the relations, and
@@ -131,9 +150,9 @@ defmodule Lotus.Runner do
         {:ok, %Statement{} = statement} ->
           case executor.(statement) do
             {:ok, %{statement: %Statement{}, result: %Result{}} = outcome} ->
-              with :ok <- gate_cached(adapter, outcome, opts),
+              with {:ok, gated} <- gate_cached(adapter, outcome, opts),
                    {:ok, %Result{} = res} <-
-                     tag(:after_query, after_query(adapter, outcome, opts)) do
+                     tag(:after_query, after_query(adapter, gated, opts)) do
                 {:ok, res}
               end
               |> finish(start_time, meta, outcome)
@@ -171,13 +190,16 @@ defmodule Lotus.Runner do
   # A step that served a cached result skipped preflight and, with it, the
   # gate. The relations stored with the entry make the gate possible here.
   defp gate_cached(%Adapter{} = adapter, %{origin: :cached} = outcome, opts) do
-    tag(
-      :before_execute,
-      before_execute(adapter, outcome.statement, outcome.relations, :cached, opts)
-    )
+    with {:ok, assigns} <-
+           tag(
+             :before_execute,
+             before_execute(adapter, outcome.statement, outcome.relations, :cached, opts)
+           ) do
+      {:ok, Map.put(outcome, :assigns, assigns)}
+    end
   end
 
-  defp gate_cached(_adapter, _outcome, _opts), do: :ok
+  defp gate_cached(_adapter, outcome, _opts), do: {:ok, outcome}
 
   defp finish({:ok, %Result{} = res}, start_time, meta, outcome) do
     Telemetry.run_stop(
@@ -268,10 +290,11 @@ defmodule Lotus.Runner do
   yields.
 
   The payload carries the statement that ran, the result, the relations
-  preflight found for it — the same value `:before_execute` received — and the
-  origin, `:executed` or `:cached`. It runs whether the result came from the
-  cache or from the source. A plug that changes the result changes what this
-  call returns; the stored entry keeps the raw execution.
+  preflight found for it — the same value `:before_execute` received — the
+  origin, `:executed` or `:cached`, and the assigns the `:before_execute` plugs
+  of this call left, `%{}` when the outcome has none. It runs whether the
+  result came from the cache or from the source. A plug that changes the result
+  changes what this call returns; the stored entry keeps the raw execution.
   """
   @spec after_query(Adapter.t(), outcome(), opts()) :: {:ok, query_result()} | {:error, term()}
   def after_query(%Adapter{} = adapter, %{result: %Result{} = result} = outcome, opts \\ []) do
@@ -281,6 +304,7 @@ defmodule Lotus.Runner do
       result: result,
       relations: outcome.relations,
       origin: outcome.origin,
+      assigns: Map.get(outcome, :assigns, %{}),
       context: Keyword.get(opts, :context),
       vars: vars(opts)
     }
@@ -304,9 +328,14 @@ defmodule Lotus.Runner do
   alongside a cached result and origin `:cached`, so the gate fires on every
   call: a plug that authorizes a statement against its tables is an access
   control, and an access control that a warm cache skips is no control at all.
+
+  The payload starts with `assigns: %{}`. Returns the `:assigns` of the payload
+  the last plug continued with, for `:after_query`; `%{}` when that value is not
+  a map. The other keys a plug changes are ignored: `:before_execute` decides
+  whether the statement proceeds, it does not rewrite it.
   """
   @spec before_execute(Adapter.t(), Statement.t(), relations(), origin(), opts()) ::
-          :ok | {:error, term()}
+          {:ok, assigns()} | {:error, term()}
   def before_execute(
         %Adapter{} = adapter,
         %Statement{} = statement,
@@ -320,12 +349,14 @@ defmodule Lotus.Runner do
       statement: statement,
       relations: relations,
       origin: origin,
+      assigns: %{},
       context: Keyword.get(opts, :context),
       vars: vars(opts)
     }
 
     case Middleware.run(:before_execute, payload) do
-      {:cont, _payload} -> :ok
+      {:cont, %{assigns: assigns}} when is_map(assigns) -> {:ok, assigns}
+      {:cont, _payload} -> {:ok, %{}}
       {:halt, reason} -> {:error, reason}
     end
   end
@@ -334,14 +365,16 @@ defmodule Lotus.Runner do
   Executes a statement: sanitization, preflight, `:before_execute`, the query
   itself and column policy enforcement.
 
-  Returns the result together with the relations preflight proved the statement
-  touches, which is what the result cache stores — see `t:execution/0`. The
-  query middleware around this phase lives in `before_query/3` and
-  `after_query/4`, and `[:lotus, :query, *]` telemetry covers this phase only,
-  so a statement served from the cache emits no query events.
+  Returns the result, the relations preflight proved the statement touches and
+  the assigns `:before_execute` left. The result cache stores the result and the
+  relations only — see `t:execution/0`. The query middleware around this phase
+  lives in `before_query/3` and `after_query/4`, and `[:lotus, :query, *]`
+  telemetry covers this phase only, so a statement served from the cache emits
+  no query events.
   """
   @spec execute_statement(Adapter.t(), Statement.t(), opts()) ::
-          {:ok, execution()} | {:error, term()}
+          {:ok, %{result: query_result(), relations: relations(), assigns: assigns()}}
+          | {:error, term()}
   def execute_statement(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
     adapter
     |> execute_phases(statement, opts)
@@ -350,11 +383,53 @@ defmodule Lotus.Runner do
 
   @doc false
   # `execute_statement/3` with the failing phase named in the error, for
-  # `run/4` and for an execute step that wraps this in the result cache. The
-  # phase travels as `{:error, {Lotus.Runner, phase, reason}}`.
+  # `run/4`. The phase travels as `{:error, {Lotus.Runner, phase, reason}}`.
   @spec execute_phases(Adapter.t(), Statement.t(), opts()) ::
-          {:ok, execution()} | {:error, {module(), atom(), term()}}
+          {:ok, %{result: query_result(), relations: relations(), assigns: assigns()}}
+          | {:error, {module(), atom(), term()}}
   def execute_phases(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
+    query_span(adapter, statement, opts, fn ->
+      with {:ok, %{relations: relations} = authorization} <-
+             authorize_phases(adapter, statement, opts),
+           {:ok, %Result{} = res} <- execute_authorized(adapter, statement, relations, opts) do
+        {:ok, Map.put(authorization, :result, res)}
+      end
+    end)
+  end
+
+  @doc false
+  # Sanitization, preflight and `:before_execute`: what decides whether a
+  # statement may execute. A step that caches executions runs this before it
+  # writes the cache, so the assigns stay with the call that produced them.
+  @spec authorize_phases(Adapter.t(), Statement.t(), opts()) ::
+          {:ok, authorization()} | {:error, {module(), atom(), term()}}
+  def authorize_phases(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
+    # Preflight hands its relations back as a value, and they travel down the
+    # pipeline explicitly. Nothing crosses a statement boundary through the
+    # process dictionary.
+    with :ok <- tag(:sanitize, Adapter.sanitize_query(adapter, statement, sanitize_opts(opts))),
+         {:ok, relations} <- tag(:preflight, preflight_visibility(adapter, statement, opts)),
+         {:ok, assigns} <-
+           tag(:before_execute, before_execute(adapter, statement, relations, :executed, opts)) do
+      {:ok, %{relations: relations, assigns: assigns}}
+    end
+  end
+
+  @doc false
+  # The query and column policy enforcement, for a statement
+  # `authorize_phases/3` let through with these relations.
+  @spec execute_authorized(Adapter.t(), Statement.t(), relations(), opts()) ::
+          {:ok, query_result()} | {:error, {module(), atom(), term()}}
+  def execute_authorized(%Adapter{} = adapter, %Statement{} = statement, relations, opts \\ []) do
+    tag(:execute, exec_read_only(adapter, statement, relations, opts))
+  end
+
+  @doc false
+  # `[:lotus, :query, *]` telemetry around `fun`, which authorizes and executes
+  # the statement and returns its result under `:result`.
+  @spec query_span(Adapter.t(), Statement.t(), opts(), (-> {:ok, map()} | {:error, term()})) ::
+          {:ok, map()} | {:error, term()}
+  def query_span(%Adapter{} = adapter, %Statement{} = statement, opts, fun) do
     telemetry_meta = %{
       source: adapter.name,
       statement: statement,
@@ -363,27 +438,14 @@ defmodule Lotus.Runner do
 
     start_time = Telemetry.query_start(telemetry_meta)
 
-    # Preflight hands its relations back as a value, and they travel down the
-    # pipeline explicitly. Nothing crosses a statement boundary through the
-    # process dictionary.
-    result =
-      with :ok <- tag(:sanitize, Adapter.sanitize_query(adapter, statement, sanitize_opts(opts))),
-           {:ok, relations} <- tag(:preflight, preflight_visibility(adapter, statement, opts)),
-           :ok <-
-             tag(:before_execute, before_execute(adapter, statement, relations, :executed, opts)),
-           {:ok, %Result{} = res} <-
-             tag(:execute, exec_read_only(adapter, statement, relations, opts)) do
-        {:ok, %{result: res, relations: relations}}
-      end
-
-    case result do
-      {:ok, %{result: %Result{} = res}} ->
+    case fun.() do
+      {:ok, %{result: %Result{} = res}} = ok ->
         Telemetry.query_stop(
           start_time,
           Map.merge(telemetry_meta, %{row_count: res.num_rows, result: res})
         )
 
-        result
+        ok
 
       {:error, _} = error ->
         Telemetry.query_exception(start_time, :error, untag(error), [], telemetry_meta)

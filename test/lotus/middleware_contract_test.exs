@@ -7,6 +7,8 @@ defmodule Lotus.MiddlewareContractTest do
       known: `{:unrestricted, reason}` or `{:skipped, reason}`.
     * `:after_query` carries the same `:relations` as `:before_execute`, and
       both carry `:origin`, `:executed` or `:cached`.
+    * `:after_query` carries the `:assigns` the `:before_execute` plugs of the
+      same call left, on a miss and on a hit, and the cache never stores them.
     * `[:lotus, :run, *]` telemetry brackets the whole run on every path —
       a cache hit, a halt in any phase — with the caller's context.
     * Preflight hands its relations back as a value. Nothing crosses phases
@@ -16,7 +18,7 @@ defmodule Lotus.MiddlewareContractTest do
   use Lotus.Case, async: false
   use Mimic
 
-  alias Lotus.Cache.ETS
+  alias Lotus.Cache.{ETS, Key}
   alias Lotus.{Config, Middleware, Preflight, Runner}
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
@@ -37,6 +39,47 @@ defmodule Lotus.MiddlewareContractTest do
     def init(opts), do: opts
     def call(%{context: %{user: "b"}}, _opts), do: {:halt, "denied"}
     def call(payload, _opts), do: {:cont, payload}
+  end
+
+  defmodule AssignPlug do
+    @moduledoc false
+    def init(opts), do: opts
+
+    def call(%{assigns: assigns} = payload, key: key, value: value) do
+      {:cont, %{payload | assigns: Map.put(assigns, key, value)}}
+    end
+  end
+
+  defmodule AssignUserPlug do
+    @moduledoc false
+    def init(opts), do: opts
+
+    def call(%{assigns: assigns, context: %{user: user}} = payload, _opts) do
+      {:cont, %{payload | assigns: Map.put(assigns, :granted_to, user)}}
+    end
+  end
+
+  defmodule RewriteCoreKeysPlug do
+    @moduledoc false
+    def init(opts), do: opts
+
+    def call(%{statement: statement} = payload, _opts) do
+      {:cont,
+       %{
+         payload
+         | statement: %{statement | body: "SELECT 'rewritten' AS id"},
+           relations: [{"public", "decoy"}],
+           origin: :cached,
+           context: %{user: "impostor"},
+           assigns: %{kept: true}
+       }}
+    end
+  end
+
+  defmodule NonMapAssignsPlug do
+    @moduledoc false
+    def init(opts), do: opts
+    def call(payload, _opts), do: {:cont, %{payload | assigns: :not_a_map}}
   end
 
   defmodule DenyingResolver do
@@ -183,6 +226,157 @@ defmodule Lotus.MiddlewareContractTest do
                          origin: :executed,
                          context: %{user: "a"}
                        }}
+    end
+  end
+
+  describe ":assigns" do
+    test ":before_execute starts with empty assigns, and each plug sees what the previous one left" do
+      Middleware.compile(%{
+        before_execute: [
+          {CapturePlug, [event: :first]},
+          {AssignPlug, [key: :grant, value: :read]},
+          {CapturePlug, [event: :second]}
+        ]
+      })
+
+      assert {:ok, _} = run(context: %{user: "a"})
+
+      assert_received {:first, %{assigns: %{} = first}}
+      assert first == %{}
+      assert_received {:second, %{assigns: %{grant: :read}}}
+    end
+
+    test ":after_query receives the assigns :before_execute left, on a miss" do
+      Middleware.compile(%{
+        before_execute: [{AssignUserPlug, []}],
+        after_query: [{CapturePlug, [event: :after_query]}]
+      })
+
+      assert {:ok, _} = run(context: %{user: "a"})
+
+      assert_received {:after_query, %{assigns: %{granted_to: "a"}, origin: :executed}}
+    end
+
+    test "on a cache hit, :after_query receives the assigns of this call's :before_execute" do
+      Middleware.compile(%{
+        before_execute: [{AssignUserPlug, []}],
+        after_query: [{CapturePlug, [event: :after_query]}]
+      })
+
+      assert {:ok, _} = run(context: %{user: "a"})
+      drain()
+
+      assert {:ok, _} = run(context: %{user: "b"})
+
+      assert_received {:after_query, %{assigns: %{granted_to: "b"}, origin: :cached}}
+    end
+
+    test "the cache stores the execution without the assigns" do
+      Middleware.compile(%{before_execute: [{AssignUserPlug, []}]})
+
+      assert {:ok, _} = run(context: %{user: "a"})
+
+      key =
+        Key.result(
+          @statement,
+          %{__params__: []},
+          [data_source: "postgres", search_path: nil, lotus_version: Lotus.version()],
+          nil
+        )
+
+      assert {:ok, entry} = Lotus.Cache.get(key)
+      assert entry |> Map.keys() |> Enum.sort() == [:relations, :result]
+    end
+
+    test "the uncached runner path carries the assigns" do
+      Middleware.compile(%{
+        before_execute: [{AssignUserPlug, []}],
+        after_query: [{CapturePlug, [event: :after_query]}]
+      })
+
+      assert {:ok, _} =
+               Runner.run_statement(@pg_adapter, Statement.new(@statement, []),
+                 context: %{user: "a"}
+               )
+
+      assert_received {:after_query, %{assigns: %{granted_to: "a"}}}
+    end
+
+    test ":after_query receives empty assigns when no :before_execute plug is configured" do
+      Middleware.compile(%{after_query: [{CapturePlug, [event: :after_query]}]})
+
+      assert {:ok, _} = run(context: %{user: "a"})
+
+      assert_received {:after_query, %{assigns: assigns}}
+      assert assigns == %{}
+    end
+
+    test "a :before_execute plug that changes the core keys changes only the assigns" do
+      Middleware.compile(%{
+        before_execute: [{RewriteCoreKeysPlug, []}],
+        after_query: [{CapturePlug, [event: :after_query]}]
+      })
+
+      assert {:ok, result} = run(context: %{user: "a"})
+      assert result.rows == [[1], [2]]
+
+      assert_received {:after_query, payload}
+      assert payload.statement.body == @statement
+      assert payload.relations == [{"public", "test_users"}]
+      assert payload.origin == :executed
+      assert payload.context == %{user: "a"}
+      assert payload.assigns == %{kept: true}
+    end
+
+    test "assigns that are not a map reach :after_query as an empty map" do
+      Middleware.compile(%{
+        before_execute: [{NonMapAssignsPlug, []}],
+        after_query: [{CapturePlug, [event: :after_query]}]
+      })
+
+      assert {:ok, _} = run(context: %{user: "a"})
+
+      assert_received {:after_query, %{assigns: assigns}}
+      assert assigns == %{}
+    end
+
+    test "a :before_execute halt on a miss stores nothing" do
+      Middleware.compile(%{
+        before_execute: [{DenyUserPlug, []}],
+        after_query: [{CapturePlug, [event: :after_query]}]
+      })
+
+      assert {:error, "denied"} = run(context: %{user: "b"})
+      assert {:ok, _} = run(context: %{user: "a"})
+
+      assert_received {:after_query, %{origin: :executed}}
+    end
+  end
+
+  describe "[:lotus, :cache, *] telemetry for a run" do
+    setup do
+      ref = make_ref()
+      pid = self()
+      events = [[:lotus, :cache, :hit], [:lotus, :cache, :miss], [:lotus, :cache, :put]]
+
+      :telemetry.attach_many(
+        ref,
+        events,
+        fn [:lotus, :cache, kind], _measurements, _metadata, _config ->
+          send(pid, {:cache_event, kind})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(ref) end)
+    end
+
+    test "a miss reports one miss and one put, and a hit reports one hit" do
+      assert {:ok, _} = run(context: %{user: "a"})
+      assert Enum.sort(for {:cache_event, kind} <- drain(), do: kind) == [:miss, :put]
+
+      assert {:ok, _} = run(context: %{user: "a"})
+      assert for({:cache_event, kind} <- drain(), do: kind) == [:hit]
     end
   end
 

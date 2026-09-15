@@ -21,8 +21,8 @@ defmodule Lotus.Middleware do
   | Event | Triggered | Payload keys |
   |-------|-----------|--------------|
   | `:before_query` | First, before sanitization, preflight and execution | `:statement` (`%Lotus.Query.Statement{}`), `:source`, `:context`, `:vars` |
-  | `:before_execute` | After sanitization and preflight pass, before execution — or, on a cache hit, before the stored result is returned | `:statement` (`%Lotus.Query.Statement{}`), `:relations`, `:origin`, `:source`, `:context`, `:vars` |
-  | `:after_query` | After execution, before result returned to caller | `:result`, `:statement` (`%Lotus.Query.Statement{}`), `:relations`, `:origin`, `:source`, `:context`, `:vars` |
+  | `:before_execute` | After sanitization and preflight pass, before execution — or, on a cache hit, before the stored result is returned | `:statement` (`%Lotus.Query.Statement{}`), `:relations`, `:origin`, `:assigns`, `:source`, `:context`, `:vars` |
+  | `:after_query` | After execution, before result returned to caller | `:result`, `:statement` (`%Lotus.Query.Statement{}`), `:relations`, `:origin`, `:assigns`, `:source`, `:context`, `:vars` |
   | `:after_list_schemas` | After schema discovery and visibility filtering | `:schemas`, `:source`, `:scope`, `:context` |
   | `:after_list_tables` | After table discovery and visibility filtering | `:tables`, `:source`, `:scope`, `:context` |
   | `:after_describe_table` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
@@ -71,6 +71,22 @@ defmodule Lotus.Middleware do
   and `:cached` when it was served from the result cache. Both events carry
   it, so a plug that meters usage or cost can tell a read from an execution.
 
+  #### The `:assigns` payload
+
+  `:assigns` carries what a `:before_execute` plug decided to the
+  `:after_query` plugs of the same call. `:before_execute` starts with
+  `assigns: %{}`, each plug sees what the plugs before it left, and
+  `:after_query` receives the `:assigns` of the payload the last
+  `:before_execute` plug continued with — on a cache hit too, where the gate
+  runs again for this call. A plug that resolves grants at the gate hands them
+  to a plug that restricts columns, and the decision is made once.
+
+  `:assigns` is the only key Lotus reads back from `:before_execute`. A change
+  to `:statement`, `:relations` or any other key is ignored, and a value that is
+  not a map reaches `:after_query` as `%{}`. The assigns belong to the call that
+  made them: the result cache never stores them, so one caller's assigns never
+  reach another.
+
   #### Derived statements
 
   `window: [count: :exact]` runs a second statement, derived from the page
@@ -93,9 +109,11 @@ defmodule Lotus.Middleware do
 
   Every query event fires on a cache hit. Only the raw execution is cached, and
   the relations preflight found are stored with it, so `:before_execute` carries
-  them whether the result came from the source or from the cache. Middleware is
-  therefore safe to make context-dependent — per-user access control, audit —
-  without keying the cache on `:context`.
+  them whether the result came from the source or from the cache. On a miss,
+  sanitization, preflight and `:before_execute` run before the entry is written,
+  and the entry holds the result and the relations, never the assigns.
+  Middleware is therefore safe to make context-dependent — per-user access
+  control, audit — without keying the cache on `:context`.
 
   A `:before_query` plug that rewrites the statement keys its own entry: the
   event runs before pagination and before the key is built, so the body, the

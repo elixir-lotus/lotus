@@ -609,35 +609,67 @@ defmodule Lotus do
   # The execute step of a cached run. Only the execution is cached, and it is
   # stored with the relations preflight found, so the runner can fire
   # `:before_execute` on a hit as well: the step reports `:cached`, and
-  # `Lotus.Runner.run/4` runs the gate with the stored relations. On a miss the
-  # gate runs inside the callback, where it still gates execution. Errors keep
-  # the phase the runner tagged them with, so the run span can report it.
+  # `Lotus.Runner.run/4` runs the gate with the stored relations. On every other
+  # path the statement is authorized before the cache is written, and only the
+  # execution goes inside the callback: the assigns `:before_execute` leaves
+  # belong to this call and must never reach the shared entry. Errors keep the
+  # phase the runner tagged them with, so the run span can report it.
   defp exec_cached_statement(adapter, statement, runner_opts, cache, pagination_meta) do
-    fetch = fn ->
-      with {:ok, %{result: res, relations: relations}} <-
-             Runner.execute_phases(adapter, statement, runner_opts) do
-        {:ok, %{result: merge_pagination_meta(res, pagination_meta), relations: relations}}
-      end
-    end
-
-    case exec_with_cache_origin(cache, fetch) do
-      {:ok, %{result: %Result{} = res, relations: relations}, :hit} ->
+    case lookup_execution(cache) do
+      {:ok, %{result: %Result{} = res, relations: relations}} ->
         {:ok, %{statement: statement, result: res, relations: relations, origin: :cached}}
 
-      {:ok, %{result: %Result{} = res, relations: relations}, _executed} ->
-        {:ok, %{statement: statement, result: res, relations: relations, origin: :executed}}
+      lookup ->
+        Runner.query_span(adapter, statement, runner_opts, fn ->
+          authorize_and_store(adapter, statement, runner_opts, cache, lookup, pagination_meta)
+        end)
+    end
+  end
 
-      # An entry stored before results carried their relations. `:before_execute`
-      # has nothing to gate on, so the entry is of no use: execute, and replace
-      # it with one that carries them.
-      {:ok, _stale, :hit} ->
-        with {:ok, %{result: %Result{} = res, relations: relations} = fresh} <- fetch.() do
-          put_cache_entry(cache, fresh)
-          {:ok, %{statement: statement, result: res, relations: relations, origin: :executed}}
-        end
+  defp authorize_and_store(adapter, statement, runner_opts, cache, lookup, pagination_meta) do
+    with {:ok, %{relations: relations} = authorization} <-
+           Runner.authorize_phases(adapter, statement, runner_opts),
+         {:ok, %{result: %Result{} = res}} <-
+           store_execution(cache, lookup, fn ->
+             execute_authorized(adapter, statement, relations, runner_opts, pagination_meta)
+           end) do
+      # When another caller stores the entry while this one waits for the lock,
+      # the result comes from the cache, but this call was authorized on fresh
+      # preflight relations with origin `:executed`, and the gate must not run
+      # twice.
+      {:ok, Map.merge(authorization, %{statement: statement, result: res, origin: :executed})}
+    end
+  end
 
-      {:error, _} = error ->
-        error
+  defp execute_authorized(adapter, statement, relations, runner_opts, pagination_meta) do
+    with {:ok, %Result{} = res} <-
+           Runner.execute_authorized(adapter, statement, relations, runner_opts) do
+      {:ok, %{result: merge_pagination_meta(res, pagination_meta), relations: relations}}
+    end
+  end
+
+  defp lookup_execution(cache) do
+    case cache_mode(Keyword.get(cache, :mode)) do
+      :use -> Lotus.Cache.lookup(Keyword.fetch!(cache, :key))
+      _off_bypass_or_refresh -> :miss
+    end
+  end
+
+  # An entry stored before results carried their relations. `:before_execute`
+  # has nothing to gate on, so the entry is of no use: execute, and replace it
+  # with one that carries them.
+  defp store_execution(cache, {:ok, _stale}, fetch) do
+    with {:ok, execution} <- fetch.() do
+      put_cache_entry(cache, execution)
+      {:ok, execution}
+    end
+  end
+
+  defp store_execution(cache, :miss, fetch) do
+    case exec_with_cache_origin(cache, fetch) do
+      {:ok, %{result: %Result{}, relations: _} = execution, _origin} -> {:ok, execution}
+      {:ok, stale, :hit} -> store_execution(cache, {:ok, stale}, fetch)
+      {:error, _} = error -> error
     end
   end
 

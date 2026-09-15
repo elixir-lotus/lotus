@@ -26,8 +26,8 @@ Each middleware receives a payload map whose contents depend on the pipeline eve
 | Event | Triggered | Payload keys |
 |-------|-----------|--------------|
 | `:before_query` | Before sanitization, preflight and execution | `:statement`, `:source`, `:context`, `:vars` |
-| `:before_execute` | After sanitization and preflight pass, before execution — or, on a cache hit, before the stored result is returned | `:statement`, `:relations`, `:origin`, `:source`, `:context`, `:vars` |
-| `:after_query` | After execution, before result returned to caller | `:result`, `:statement`, `:relations`, `:origin`, `:source`, `:context`, `:vars` |
+| `:before_execute` | After sanitization and preflight pass, before execution — or, on a cache hit, before the stored result is returned | `:statement`, `:relations`, `:origin`, `:assigns`, `:source`, `:context`, `:vars` |
+| `:after_query` | After execution, before result returned to caller | `:result`, `:statement`, `:relations`, `:origin`, `:assigns`, `:source`, `:context`, `:vars` |
 | `:after_list_schemas` | After schema discovery and visibility filtering | `:schemas`, `:source`, `:scope`, `:context` |
 | `:after_list_tables` | After table discovery and visibility filtering | `:tables`, `:source`, `:scope`, `:context` |
 | `:after_describe_table` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
@@ -46,6 +46,7 @@ What a plug can rely on, release to release:
 - **Every query event fires on a cache hit.** See [Caching](#caching). `:before_execute` gets the relations stored with the entry; `:after_query` gets the stored result.
 - **Payload keys are additive.** A release may add a key to a payload; it does not remove or rename one. Match on the keys you use, not on the whole map.
 - **`:relations` follows one rule.** A list is proven, an empty list means "touches nothing", a tuple means "unknown". `:before_execute` and `:after_query` carry the same value.
+- **`:assigns` belongs to one call.** `:before_execute` starts with `%{}`, and `:after_query` receives what its plugs left, on a cache hit too. It is the only key Lotus reads back from `:before_execute`, and the result cache never stores it. See [Handing a Decision to `:after_query`](#handing-a-decision-to-after_query).
 - **Halting is final.** A halt returns `{:error, reason}` to the caller and later events for that run do not fire. The exception is `:before_content_change`, whose halt returns `{:error, {:halted, reason}}` — see [Refusing and Recording Content Changes](#refusing-and-recording-content-changes).
 - **Observation is telemetry's job.** A plug sees only its own event. To record every run, including refusals and cache-served reads, attach to `[:lotus, :run, :start | :stop | :exception]` — see `Lotus.Telemetry`. For content changes, attach to `[:lotus, :content, :change, :start | :stop | :exception]`.
 
@@ -162,6 +163,66 @@ A row-level-security plug that rewrites the statement uses the first. An
 authorization plug that gates on tables uses the second. A `:before_execute`
 plug may not rewrite the statement: preflight has already authorized the one in
 the payload, and that is the one that executes.
+
+## Handing a Decision to `:after_query`
+
+A gate at `:before_execute` and a plug at `:after_query` often need the same
+decision — the grants that let a user read a table, and the columns those grants
+restrict. `:assigns` carries it from one to the other, so the decision is made
+once per call and both plugs work from the same answer:
+
+```elixir
+defmodule MyApp.GrantGate do
+  def init(opts), do: opts
+
+  def call(%{relations: relations, context: %{user: user}, assigns: assigns} = payload, _opts)
+      when is_list(relations) do
+    case MyApp.Grants.resolve(user, relations) do
+      {:ok, grants} -> {:cont, %{payload | assigns: Map.put(assigns, :grants, grants)}}
+      {:error, reason} -> {:halt, reason}
+    end
+  end
+
+  def call(_payload, _opts), do: {:halt, "cannot determine which tables this query reads"}
+end
+
+defmodule MyApp.ColumnRestrictions do
+  def init(opts), do: opts
+
+  def call(%{result: result, assigns: %{grants: grants}} = payload, _opts) do
+    {:cont, %{payload | result: MyApp.Grants.restrict_columns(result, grants)}}
+  end
+
+  def call(_payload, _opts), do: {:halt, "no grants were resolved for this query"}
+end
+```
+
+```elixir
+config :lotus,
+  middleware: %{
+    before_execute: [{MyApp.GrantGate, []}],
+    after_query: [{MyApp.ColumnRestrictions, []}]
+  }
+```
+
+The rules:
+
+- `:before_execute` starts with `assigns: %{}`, and each plug sees what the
+  plugs before it left. Put your own keys into the map rather than replace it,
+  so plugs on the same event do not remove each other's keys.
+- `:after_query` receives the `:assigns` of the payload the last
+  `:before_execute` plug continued with. With no `:before_execute` plug, or
+  when a plug leaves a value that is not a map, it receives `%{}`.
+- `:assigns` is the only key Lotus reads back. A change to `:statement`,
+  `:relations`, `:origin` or `:context` at `:before_execute` is ignored.
+- The assigns belong to the call that made them. On a cache hit the gate runs
+  again for the new caller, and `:after_query` receives that caller's assigns.
+  The result cache never stores them, so a grant resolved for one user never
+  reaches another.
+- A halt at `:before_execute` ends the run, so `:after_query` does not fire.
+
+The exact-count run fires `:before_execute` but not `:after_query`, so the
+assigns its plugs leave are not used.
 
 ## Refusing and Recording Content Changes
 
@@ -557,6 +618,10 @@ from the cache:
   access control, and one a warm cache skips would be no control at all. The
   payload says which case it is: `origin: :cached` on a hit, `:executed` on a
   miss.
+- **`:assigns` stays with the call.** On a miss, sanitization, preflight and
+  `:before_execute` run before the entry is written, and the entry holds only
+  the result and the relations. On a hit the gate runs again for this caller.
+  Either way, `:after_query` receives the assigns of this call.
 - **The stored entry keeps the raw result.** `:after_query` runs on the way out,
   so what a plug makes of the result is returned to that caller and never
   written back. A halt there withholds the result from that caller; the rows
