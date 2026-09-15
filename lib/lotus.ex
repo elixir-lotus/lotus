@@ -399,6 +399,13 @@ defmodule Lotus do
   defdelegate list_relative_date_tokens(), to: Dashboards.DateToken, as: :tokens
 
   @doc """
+  Returns the query variables of a card for the given filter values, the
+  `:vars` that `run_dashboard_card/2` uses. See
+  `Lotus.Dashboards.card_variables/4`.
+  """
+  defdelegate card_variables(mappings, filters, filter_values, opts \\ []), to: Dashboards
+
+  @doc """
   Lists the select options of a dashboard filter, from its source query or its
   static config. See `Lotus.Dashboards.list_dashboard_filter_options/2`.
   """

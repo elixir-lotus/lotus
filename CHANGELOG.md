@@ -4,6 +4,18 @@
 
 ### Added
 
+- **`Lotus.card_variables/4` gives the query variables of a dashboard card.**
+  The rule that turns filter values into the variables of a card was private
+  to `Lotus.Dashboards`, so a UI that runs cards with its own executor had to
+  copy it, and the copy could pass a relative date token or a full
+  `"start,end"` range to a variable. `Lotus.Dashboards.card_variables/4` takes
+  the mappings of a card, the filters, the filter values and a `:today` option,
+  and returns the `:vars` that `run_dashboard_card/2` uses: it applies the
+  `default_value` of each filter, resolves relative date tokens against
+  `:today` and applies the `date_range_start` and `date_range_end` transforms.
+  `run_dashboard/2` and `run_dashboard_card/2` now call it, so their results do
+  not change. The mappings and filters can be structs or plain maps.
+
 - **`:before_execute` hands `:assigns` to `:after_query`.** The runner kept
   only the verdict of a `:before_execute` plug and ignored the payload it
   continued with, so an `:after_query` plug that needed the same decision, such
