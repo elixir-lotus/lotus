@@ -602,6 +602,115 @@ defmodule Lotus.DashboardsTest do
     end
   end
 
+  describe "card_variables/4" do
+    test "split a resolved date range token with the start and end transforms" do
+      filter = %DashboardFilter{
+        id: 1,
+        name: "period",
+        filter_type: :date_range,
+        default_value: "last_7_days"
+      }
+
+      mappings = [
+        %DashboardCardFilterMapping{
+          filter_id: 1,
+          variable_name: "start_date",
+          transform: %{"type" => "date_range_start"}
+        },
+        %DashboardCardFilterMapping{
+          filter_id: 1,
+          variable_name: "end_date",
+          transform: %{"type" => "date_range_end"}
+        }
+      ]
+
+      assert Dashboards.card_variables(mappings, [filter], %{}, today: ~D[2026-09-14]) ==
+               %{"start_date" => "2026-09-08", "end_date" => "2026-09-14"}
+    end
+
+    test "use the value in filter_values in place of the default value" do
+      filter = %DashboardFilter{
+        id: 1,
+        name: "period",
+        filter_type: :date_range,
+        default_value: "last_7_days"
+      }
+
+      mapping = %DashboardCardFilterMapping{filter_id: 1, variable_name: "period"}
+
+      assert Dashboards.card_variables([mapping], [filter], %{"period" => "this_month"},
+               today: ~D[2026-09-14]
+             ) == %{"period" => "2026-09-01,2026-09-30"}
+    end
+
+    test "resolve tokens against today when :today is not given" do
+      filter = %DashboardFilter{id: 1, name: "day", filter_type: :date, default_value: "today"}
+      mapping = %DashboardCardFilterMapping{filter_id: 1, variable_name: "day"}
+
+      assert {%{"day" => day}, days} =
+               run_with_possible_days(fn ->
+                 Dashboards.card_variables([mapping], [filter], %{})
+               end)
+
+      assert day in Enum.map(days, &Date.to_iso8601/1)
+    end
+
+    test "keep the value unchanged for an unknown transform" do
+      filter = %DashboardFilter{id: 1, name: "region", filter_type: :text, default_value: "eu,us"}
+
+      mapping = %DashboardCardFilterMapping{
+        filter_id: 1,
+        variable_name: "region",
+        transform: %{"type" => "upcase"}
+      }
+
+      assert Dashboards.card_variables([mapping], [filter], %{}) == %{"region" => "eu,us"}
+    end
+
+    test "give no variable for a filter with no value" do
+      filter = %DashboardFilter{id: 1, name: "region", filter_type: :text}
+      mapping = %DashboardCardFilterMapping{filter_id: 1, variable_name: "region"}
+
+      assert Dashboards.card_variables([mapping], [filter], %{}) == %{}
+    end
+
+    test "give no variable for a mapping whose filter is not in filters" do
+      mapping = %DashboardCardFilterMapping{filter_id: 1, variable_name: "region"}
+
+      assert Dashboards.card_variables([mapping], [], %{"region" => "eu"}) == %{}
+    end
+
+    test "accept plain maps as mappings and filters" do
+      filter = %{id: 1, name: "region", filter_type: :text, default_value: nil}
+      mapping = %{filter_id: 1, variable_name: "region", transform: nil}
+
+      assert Dashboards.card_variables([mapping], [filter], %{"region" => "eu"}) ==
+               %{"region" => "eu"}
+    end
+
+    test "resolve stored mappings and dashboard filters" do
+      dashboard = dashboard_fixture()
+      card = dashboard_card_fixture(dashboard)
+
+      filter =
+        dashboard_filter_fixture(dashboard, %{
+          filter_type: :date_range,
+          widget: :date_range_picker,
+          default_value: "last_quarter"
+        })
+
+      filter_mapping_fixture(card, filter, "start_date", transform: %{type: "date_range_start"})
+      filter_mapping_fixture(card, filter, "end_date", transform: %{type: "date_range_end"})
+
+      assert Dashboards.card_variables(
+               Dashboards.list_card_filter_mappings(card),
+               Dashboards.list_dashboard_filters(dashboard),
+               %{},
+               today: ~D[2026-09-14]
+             ) == %{"start_date" => "2026-04-01", "end_date" => "2026-06-30"}
+    end
+  end
+
   describe "relative date tokens" do
     test "resolve a date range token in the default value of a date range filter" do
       dashboard = dashboard_fixture()
@@ -968,6 +1077,14 @@ defmodule Lotus.DashboardsTest do
   describe "Lotus module delegations" do
     test "delegates list_relative_date_tokens/0" do
       assert Lotus.list_relative_date_tokens() == DateToken.tokens()
+    end
+
+    test "delegates card_variables/4" do
+      filter = %DashboardFilter{id: 1, name: "region", filter_type: :text, default_value: "eu"}
+      mapping = %DashboardCardFilterMapping{filter_id: 1, variable_name: "region"}
+
+      assert Lotus.card_variables([mapping], [filter], %{}, today: ~D[2026-09-14]) ==
+               Dashboards.card_variables([mapping], [filter], %{}, today: ~D[2026-09-14])
     end
 
     test "delegates list_dashboard_filter_options/2" do

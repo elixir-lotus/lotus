@@ -687,7 +687,7 @@ defmodule Lotus.Dashboards do
   end
 
   defp parent_value_vars(parent, filter_values) do
-    case Map.fetch(resolve_filter_values([parent], filter_values), parent.id) do
+    case Map.fetch(resolve_filter_values([parent], filter_values, Date.utc_today()), parent.id) do
       {:ok, value} -> {:ok, %{parent.name => value}}
       :error -> :no_parent_value
     end
@@ -795,14 +795,8 @@ defmodule Lotus.Dashboards do
 
   ## Filter Resolution
 
-  Filter values are resolved to query variables through the configured mappings:
-  1. For each filter, get the value from `:filter_values`, or else the filter's
-     `default_value`
-  2. Resolve a relative date token in the value, see `Lotus.Dashboards.DateToken`
-  3. For each mapping of a card, apply any configured transform to the value
-  4. Pass the value to the query as the mapped variable name
-
-  All cards of one run resolve tokens against the same day.
+  Filter values become the query variables of each card as `card_variables/4`
+  describes. All cards of one run resolve tokens against the same day.
 
   ## Examples
 
@@ -824,25 +818,34 @@ defmodule Lotus.Dashboards do
   def run_dashboard(dashboard_id, opts) do
     cards = list_dashboard_cards(dashboard_id)
     filters = list_dashboard_filters(dashboard_id)
+    filter_values = Keyword.get(opts, :filter_values, %{})
+    today = Date.utc_today()
     parallel? = Keyword.get(opts, :parallel, true)
     timeout = Keyword.get(opts, :timeout, 30_000)
 
-    values_by_filter_id = resolve_filter_values(filters, Keyword.get(opts, :filter_values, %{}))
     query_cards = Enum.filter(cards, &(&1.card_type == :query))
 
     # Preload all filter mappings for all query cards to avoid N+1 queries
     card_ids = Enum.map(query_cards, & &1.id)
     all_mappings = preload_mappings_for_cards(card_ids)
 
+    vars_for_card = fn card ->
+      all_mappings
+      |> Map.get(card.id, [])
+      |> card_variables(filters, filter_values, today: today)
+    end
+
     if parallel? do
-      run_cards_parallel(query_cards, values_by_filter_id, all_mappings, opts, timeout)
+      run_cards_parallel(query_cards, vars_for_card, opts, timeout)
     else
-      run_cards_sequential(query_cards, values_by_filter_id, all_mappings, opts)
+      run_cards_sequential(query_cards, vars_for_card, opts)
     end
   end
 
   @doc """
   Runs a single dashboard card and returns its result.
+
+  The query variables of the card come from `card_variables/4`.
 
   ## Options
 
@@ -865,8 +868,7 @@ defmodule Lotus.Dashboards do
     else
       mappings = list_card_filter_mappings(card.id)
       filters = mappings |> Enum.map(& &1.filter) |> Enum.reject(&is_nil/1)
-      values_by_filter_id = resolve_filter_values(filters, Keyword.get(opts, :filter_values, %{}))
-      vars = resolve_card_variables(mappings, values_by_filter_id)
+      vars = card_variables(mappings, filters, Keyword.get(opts, :filter_values, %{}))
 
       query_opts = Keyword.drop(opts, [:filter_values])
       run_opts = Keyword.put(query_opts, :vars, vars)
@@ -882,6 +884,74 @@ defmodule Lotus.Dashboards do
     end
   end
 
+  @doc """
+  Returns the query variables of a card for the given filter values.
+
+  `run_dashboard/2` and `run_dashboard_card/2` get the `:vars` of each card
+  from this function. A caller that runs cards with its own executor can use it
+  to give a card the same variables.
+
+  ## Arguments
+
+    * `mappings` - The filter mappings of the card, for example from
+      `list_card_filter_mappings/1`. Each mapping is a
+      `Lotus.Storage.DashboardCardFilterMapping` struct or a map with the keys
+      `:filter_id`, `:variable_name` and `:transform`. The `:filter`
+      association does not have to be loaded
+    * `filters` - The filters that the mappings refer to, for example from
+      `list_dashboard_filters/1`. Each filter is a
+      `Lotus.Storage.DashboardFilter` struct or a map with the keys `:id`,
+      `:name`, `:filter_type` and `:default_value`
+    * `filter_values` - Map of filter names to their current values
+
+  ## Options
+
+    * `:today` - The date that relative date tokens resolve against (default:
+      `Date.utc_today/0`). Give the same date for every card of one run
+
+  ## Resolution
+
+  1. For each filter, get the value from `filter_values`, or else the filter's
+     `default_value`. A filter with no value gives no variable
+  2. Resolve a relative date token in the value for the `filter_type` of the
+     filter. See `Lotus.Dashboards.DateToken` for the rules and
+     `Lotus.list_relative_date_tokens/0` for the tokens
+  3. For each mapping, apply its transform to the value. The keys of the
+     transform are strings, as `Lotus.Storage.DashboardCardFilterMapping`
+     stores them:
+     - `%{"type" => "date_range_start"}` - keeps the part before the comma
+     - `%{"type" => "date_range_end"}` - keeps the part after the comma. A
+       value with no comma does not change
+     - `nil` or any other transform - the value does not change
+  4. Put the value under the `variable_name` of the mapping
+
+  A mapping whose filter is not in `filters`, or whose filter has no value,
+  gives no variable.
+
+  ## Examples
+
+      iex> filter = %DashboardFilter{id: 1, name: "period", filter_type: :date_range, default_value: "last_7_days"}
+      iex> mappings = [
+      ...>   %DashboardCardFilterMapping{filter_id: 1, variable_name: "start_date", transform: %{"type" => "date_range_start"}},
+      ...>   %DashboardCardFilterMapping{filter_id: 1, variable_name: "end_date", transform: %{"type" => "date_range_end"}}
+      ...> ]
+      iex> card_variables(mappings, [filter], %{}, today: ~D[2026-09-14])
+      %{"start_date" => "2026-09-08", "end_date" => "2026-09-14"}
+
+  """
+  @spec card_variables(
+          [DashboardCardFilterMapping.t() | map()],
+          [DashboardFilter.t() | map()],
+          %{String.t() => term()},
+          keyword()
+        ) :: %{String.t() => term()}
+  def card_variables(mappings, filters, filter_values, opts \\ []) do
+    today = Keyword.get_lazy(opts, :today, &Date.utc_today/0)
+    values_by_filter_id = resolve_filter_values(filters, filter_values, today)
+
+    resolve_card_variables(mappings, values_by_filter_id)
+  end
+
   defp preload_mappings_for_cards([]), do: %{}
 
   defp preload_mappings_for_cards(card_ids) do
@@ -893,7 +963,7 @@ defmodule Lotus.Dashboards do
     |> Enum.group_by(& &1.card_id)
   end
 
-  defp run_cards_parallel(cards, values_by_filter_id, all_mappings, opts, timeout) do
+  defp run_cards_parallel(cards, vars_for_card, opts, timeout) do
     cards
     |> Enum.map(fn card ->
       # Capture card_id before spawning to handle timeouts
@@ -901,7 +971,7 @@ defmodule Lotus.Dashboards do
 
       task =
         Task.Supervisor.async(Lotus.Supervisor.task_supervisor_name(Lotus), fn ->
-          execute_card(card, values_by_filter_id, all_mappings, opts)
+          execute_card(card, vars_for_card, opts)
         end)
 
       {card_id, task}
@@ -917,16 +987,15 @@ defmodule Lotus.Dashboards do
     end)
   end
 
-  defp run_cards_sequential(cards, values_by_filter_id, all_mappings, opts) do
+  defp run_cards_sequential(cards, vars_for_card, opts) do
     Enum.reduce(cards, %{}, fn card, acc ->
-      result = execute_card(card, values_by_filter_id, all_mappings, opts)
+      result = execute_card(card, vars_for_card, opts)
       Map.put(acc, card.id, result)
     end)
   end
 
-  defp execute_card(card, values_by_filter_id, all_mappings, opts) do
-    mappings = Map.get(all_mappings, card.id, [])
-    vars = resolve_card_variables(mappings, values_by_filter_id)
+  defp execute_card(card, vars_for_card, opts) do
+    vars = vars_for_card.(card)
 
     query_opts = Keyword.drop(opts, [:filter_values, :parallel, :timeout])
     run_opts = Keyword.put(query_opts, :vars, vars)
@@ -936,10 +1005,7 @@ defmodule Lotus.Dashboards do
     e -> {:error, Exception.message(e)}
   end
 
-  # Takes today once, so every card of one run resolves tokens against the same day
-  defp resolve_filter_values(filters, filter_values) do
-    today = Date.utc_today()
-
+  defp resolve_filter_values(filters, filter_values, today) do
     Enum.reduce(filters, %{}, fn filter, values ->
       case Map.get(filter_values, filter.name) || filter.default_value do
         missing when missing in [nil, false] ->

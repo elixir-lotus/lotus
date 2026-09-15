@@ -396,7 +396,9 @@ On 2026-09-14 the card's query receives `start_date` = `"2026-08-16"` and
 
 `Lotus.list_relative_date_tokens/0` returns all tokens, for example to fill a
 select in a filter UI. `Lotus.Dashboards.DateToken` resolves tokens outside a
-dashboard run.
+dashboard run, and `Lotus.card_variables/4` gives the variables of a card with
+the tokens and transforms applied (see [Resolving Card
+Variables](#resolving-card-variables)).
 
 ### Cascading Filters
 
@@ -541,6 +543,33 @@ Any other option is forwarded to `Lotus.run_query/2`, so `:search_path`,
 
 `run_dashboard_card/2` takes `:filter_values` plus any `Lotus.run_query/2`
 option.
+
+### Resolving Card Variables
+
+A UI that runs cards with its own executor, for its own concurrency,
+cancellation or per-card authorization, can get the variables of a card from
+`Lotus.card_variables/4`. It returns the `:vars` that `run_dashboard_card/2`
+gives to `Lotus.run_query/2`: it applies the `default_value` of each filter,
+resolves relative date tokens and applies the mapping transforms.
+
+```elixir
+mappings = Lotus.list_card_filter_mappings(card)
+filters = Lotus.list_dashboard_filters(dashboard)
+today = Date.utc_today()
+
+vars =
+  Lotus.card_variables(mappings, filters, %{"period" => "last_30_days"}, today: today)
+# => %{"start_date" => "2026-08-16", "end_date" => "2026-09-14"}
+
+Lotus.run_query(card.query_id, vars: vars)
+```
+
+Give the same `:today` to every card of one run, so that all cards resolve
+tokens against the same day. The mappings can be
+`Lotus.Storage.DashboardCardFilterMapping` structs or maps with `:filter_id`,
+`:variable_name` and `:transform`. The filters can be
+`Lotus.Storage.DashboardFilter` structs or maps with `:id`, `:name`,
+`:filter_type` and `:default_value`.
 
 ## Public Sharing
 
