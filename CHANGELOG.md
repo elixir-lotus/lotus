@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.0] - 2026-09-15
+
+The dashboard features a UI needs to run cards the way core does, and the
+middleware events a plug needs to see a run and a content change from start
+to end. Filters can depend on one another, a date filter can hold a relative
+date, and `Lotus.card_variables/4` gives a card runner the variables core
+would give the card. A `:before_content_change` plug can refuse a write, a
+`:before_execute` plug can hand `:assigns` to `:after_query`, and a run emits
+telemetry. Every change is additive: no host code has to change.
 
 ### Added
 
