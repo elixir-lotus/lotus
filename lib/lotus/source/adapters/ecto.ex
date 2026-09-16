@@ -128,7 +128,7 @@ defmodule Lotus.Source.Adapters.Ecto do
     quote do
       @impl true
       def can_handle?(repo) when is_atom(repo) do
-        function_exported?(repo, :__adapter__, 0) and
+        Code.ensure_loaded?(repo) and function_exported?(repo, :__adapter__, 0) and
           repo.__adapter__() == @dialect.ecto_adapter()
       end
 
@@ -399,7 +399,8 @@ defmodule Lotus.Source.Adapters.Ecto do
         # Guard the fallback path: `can_handle?/1` is broad (any atom), so
         # without this check we'd happily wrap a non-Ecto atom like :typoed_name
         # and fail later with an opaque error during query execution.
-        unless function_exported?(repo_module, :__adapter__, 0) do
+        unless Code.ensure_loaded?(repo_module) and
+                 function_exported?(repo_module, :__adapter__, 0) do
           raise ArgumentError,
                 "Cannot wrap #{inspect(repo_module)} as an Ecto source — " <>
                   "the module does not export __adapter__/0. Either register " <>
@@ -432,7 +433,7 @@ defmodule Lotus.Source.Adapters.Ecto do
   @impl true
   @spec can_handle?(term()) :: boolean()
   def can_handle?(repo) when is_atom(repo) do
-    function_exported?(repo, :__adapter__, 0)
+    Code.ensure_loaded?(repo) and function_exported?(repo, :__adapter__, 0)
   end
 
   def can_handle?(_), do: false

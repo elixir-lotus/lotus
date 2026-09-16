@@ -85,6 +85,14 @@ that keeps wrapped adapters in a registry or a cache implements
 `invalidate/1` to drop the entry for a name, and the code that changes the
 source calls `Lotus.Source.invalidate/1` so the next resolution rebuilds it.
 
+Adapters can own processes for a source (a pool, a dynamic repo; see the
+[Source Lifecycle](source-adapters.md#source-lifecycle) section). Those
+processes follow `list_sources/0`: after any change to the sources a
+resolver serves, call `Lotus.Source.reconcile/0` so they are started,
+restarted or stopped to match. Boot runs the first reconcile. A resolver
+that is not ready at boot, because it reads a database whose repo starts
+after `:lotus`, logs a warning then and reconciles when the host calls it.
+
 > ### Return `{:error, :not_found}` on failure {: .warning}
 >
 > `Lotus.Source.resolve!/2` matches exactly two shapes: `{:ok, %Adapter{}}` and `{:error, :not_found}` — the latter becomes an `ArgumentError` naming the configured sources (from your `list_source_names/0`). Any other error tuple raises a `CaseClauseError` instead of that message.

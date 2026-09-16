@@ -523,11 +523,70 @@ defmodule Lotus.Source.Adapter do
   # Callbacks — Lifecycle
   # ---------------------------------------------------------------------------
 
-  @doc "Check that the data source is reachable."
+  @doc """
+  Check that the data source is reachable.
+
+  Must work for a source whose processes are not running yet, so a UI can
+  test a connection before the source is saved. An adapter that pools
+  connections through `source_children/2` makes a one-off connection here
+  when `Lotus.Source.Registry.whereis/2` returns `nil`.
+  """
   @callback health_check(state :: term()) :: :ok | {:error, term()}
 
   @doc "Disconnect from the data source and release resources."
   @callback disconnect(state :: term()) :: :ok
+
+  @typedoc "A child spec as `Supervisor.start_link/2` accepts it."
+  @type child_spec :: Supervisor.child_spec() | {module(), term()} | module()
+
+  @doc """
+  Processes the adapter needs once, however many sources it has.
+
+  Started under `Lotus.Source.Supervisor` when the first source of this
+  module appears and stopped when the last one goes. An HTTP adapter puts
+  its `Finch` instance here, since a Finch name must be an atom and its
+  pools are added per URL as sources come and go.
+
+  Optional. Defaults to no children.
+  """
+  @callback shared_children() :: [child_spec()]
+
+  @doc """
+  Processes the adapter needs for one source.
+
+  Started under `Lotus.Source.Supervisor` when the source appears or when
+  its state changes, and stopped when it goes. A pool that takes a name
+  registers it through `Lotus.Source.Registry.via/2`, so no atom is minted
+  per source. A dynamic Ecto repo, a `DBConnection` pool and a `NimblePool`
+  of NIF handles all belong here.
+
+  Children run under a supervisor of their own per source, so a source
+  crashing past its restart limit does not affect the others.
+
+  Optional. Defaults to no children.
+  """
+  @callback source_children(name :: String.t(), state :: term()) :: [child_spec()]
+
+  @doc """
+  Called after the children of a source are up.
+
+  Adapters that add a source to shared infrastructure instead of owning a
+  process use this hook: an HTTP adapter calls `Finch.start_pool/3` with the
+  source URL here. Raising or exiting counts as a failed start: the
+  source's children are stopped and the source is tried again on the next
+  reconcile.
+
+  Optional. Defaults to `:ok`.
+  """
+  @callback source_started(name :: String.t(), state :: term()) :: :ok
+
+  @doc """
+  Called before the children of a source are stopped, with the state the
+  source was started with.
+
+  Optional. Defaults to `:ok`.
+  """
+  @callback source_stopped(name :: String.t(), state :: term()) :: :ok
 
   # ---------------------------------------------------------------------------
   # Callbacks — Error Handling
@@ -960,7 +1019,11 @@ defmodule Lotus.Source.Adapter do
     supports_feature?: 2,
     db_type_to_lotus_type: 2,
     editor_config: 1,
-    table_stats: 3
+    table_stats: 3,
+    shared_children: 0,
+    source_children: 2,
+    source_started: 2,
+    source_stopped: 2
   ]
 
   # Conservative fallback deny rules applied when no adapter can be resolved
@@ -1112,6 +1175,38 @@ defmodule Lotus.Source.Adapter do
   @spec disconnect(t()) :: :ok
   def disconnect(%__MODULE__{module: mod, state: state}) do
     mod.disconnect(state)
+  end
+
+  @doc "Children the adapter module needs once. `[]` if not implemented."
+  @spec shared_children(module()) :: [child_spec()]
+  def shared_children(mod) when is_atom(mod) do
+    if function_exported?(mod, :shared_children, 0),
+      do: mod.shared_children(),
+      else: []
+  end
+
+  @doc "Children the adapter needs for this source. `[]` if not implemented."
+  @spec source_children(t()) :: [child_spec()]
+  def source_children(%__MODULE__{module: mod, name: name, state: state}) do
+    if function_exported?(mod, :source_children, 2),
+      do: mod.source_children(name, state),
+      else: []
+  end
+
+  @doc "Tell the adapter this source's children are up. `:ok` if not implemented."
+  @spec source_started(t()) :: :ok
+  def source_started(%__MODULE__{module: mod, name: name, state: state}) do
+    if function_exported?(mod, :source_started, 2),
+      do: mod.source_started(name, state),
+      else: :ok
+  end
+
+  @doc "Tell the adapter this source's children are about to stop. `:ok` if not implemented."
+  @spec source_stopped(t()) :: :ok
+  def source_stopped(%__MODULE__{module: mod, name: name, state: state}) do
+    if function_exported?(mod, :source_stopped, 2),
+      do: mod.source_stopped(name, state),
+      else: :ok
   end
 
   # ---------------------------------------------------------------------------

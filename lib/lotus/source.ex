@@ -62,10 +62,23 @@ defmodule Lotus.Source do
   end
 
   @doc """
+  Starts and stops the processes adapters own so they match the resolver's
+  sources.
+
+  Call this after a source is added, edited, paused or removed at runtime.
+  Boot runs the first reconcile. The call is node-local: in a cluster, run
+  it on every node. See `Lotus.Source.Supervisor` for what a reconcile does
+  and what it returns.
+  """
+  @spec reconcile() :: {:ok, Lotus.Source.Supervisor.report()} | {:error, term()}
+  def reconcile, do: Lotus.Source.Supervisor.reconcile()
+
+  @doc """
   Tells the configured resolver to drop what it holds for `name`.
 
   Call this after a source is edited, paused or removed at runtime, so the
-  next `resolve!/2` rebuilds its adapter. A resolver that does not implement
+  next `resolve!/2` rebuilds its adapter, then call `reconcile/0` so its
+  processes follow. A resolver that does not implement
   `c:Lotus.Source.Resolver.invalidate/1` has nothing to drop and this is a
   no-op.
   """

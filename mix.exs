@@ -106,7 +106,13 @@ defmodule Lotus.MixProject do
           ~r/Lotus\.Storage\.Dashboard.*/
         ],
         "Data Export": [Lotus.Export, ~r/Lotus\.Export\..+/],
-        "Data Sources": [Lotus.Source, Lotus.Source.Adapter, Lotus.Source.Resolver],
+        "Data Sources": [
+          Lotus.Source,
+          Lotus.Source.Adapter,
+          Lotus.Source.Resolver,
+          Lotus.Source.Supervisor,
+          Lotus.Source.Registry
+        ],
         "Adapter Authoring": [
           Lotus.Query.Statement,
           Lotus.Source.Adapters.Ecto,
