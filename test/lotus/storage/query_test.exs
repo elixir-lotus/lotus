@@ -1194,4 +1194,20 @@ defmodule Lotus.Storage.QueryTest do
                Query.compile(q, %{})
     end
   end
+
+  describe "compile/2 with a schema-qualified table" do
+    test "looks the column type up in the explicit schema" do
+      q = %Query{
+        statement: "SELECT * FROM public.test_uuid_records WHERE id = {{id}}",
+        variables: [],
+        data_source: "postgres"
+      }
+
+      assert {:ok, %Statement{body: body, params: [uuid]}} =
+               Query.compile(q, %{"id" => "550e8400-e29b-41d4-a716-446655440000"})
+
+      assert body == "SELECT * FROM public.test_uuid_records WHERE id = $1::uuid"
+      assert byte_size(uuid) == 16
+    end
+  end
 end

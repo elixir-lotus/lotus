@@ -56,6 +56,22 @@
   comment ends at the first `*/`, and on MySQL a `;` inside a `#` comment, a
   backtick identifier or after `\'` in a literal no longer rejects the
   statement.
+### Fixed
+
+- **Variable bindings resolve qualified, quoted and CTE names.**
+  `Lotus.Storage.VariableResolver` guesses which column a `{{var}}` is
+  compared against so `compile/2` can cast the value to the column type. It
+  ran regex over lowercased raw text: `FROM public.users WHERE id = {{id}}`
+  bound to a table named `public`, `FROM "Users" WHERE "Id" = {{id}}` found
+  no table, a CTE name was looked up as a base table, and an alias could be
+  read out of a string literal. It now scans tokenizer tokens under the
+  source's lexical profile. A qualified table carries its `:schema`, which
+  `compile/2` uses for the type lookup instead of the search path. Quoted
+  identifiers keep their case and unquoted names fold to lowercase. A column
+  of a CTE, of an alias of one, or of a subquery in `FROM` binds with
+  `table: nil` and falls back to the declared type, and `compile/2` skips the
+  schema lookup for such bindings. Each binding gained a `:schema` key.
+
 
 ## [1.1.0] - 2026-09-15
 

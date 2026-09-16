@@ -228,10 +228,14 @@ When you use a variable in your query, Lotus:
 
 This all happens automatically - you don't need to manually specify types in most cases.
 
-Binding resolution is regex-based heuristics, not a full SQL parser: it
-handles explicit (`users.id = {{id}}`), implicit (`id = {{id}}`) and aliased
-(`u.id = {{id}}`) bindings, and falls back to the variable's declared
-`:type` when it cannot resolve one.
+Binding resolution scans `Lotus.Query.Tokenizer` tokens with a few
+heuristics, not a full SQL parser. It handles explicit (`users.id = {{id}}`),
+implicit (`id = {{id}}`) and aliased (`u.id = {{id}}`) bindings, carries the
+schema of a qualified table (`public.users`), keeps the case of quoted
+identifiers (`"Users"."Id"`) and folds unquoted names to lowercase. A column
+of a CTE, of an alias of one, or of a subquery in `FROM` has no base table,
+so it falls back to the variable's declared `:type`, as does any binding the
+resolver cannot make. Comments and string literals are never read.
 
 ### Supported Types
 
