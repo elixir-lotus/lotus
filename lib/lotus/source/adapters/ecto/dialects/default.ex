@@ -45,8 +45,8 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Default do
   alias __MODULE__.EditorConfig
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
-  alias Lotus.Source.Adapters.Ecto.SQL.FilterInjector
-  alias Lotus.Source.Adapters.Ecto.SQL.SortInjector
+  alias Lotus.SQL.FilterInjector
+  alias Lotus.SQL.SortInjector
 
   @impl true
   def source_type, do: :other

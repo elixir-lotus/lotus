@@ -450,7 +450,7 @@ Type casting adds minimal overhead:
 
 The Ecto adapter's dialects rewrite a statement before variables are bound,
 through the `transform_statement/1` dialect callback backed by
-`Lotus.Source.Adapters.Ecto.SQL.Transformer`. This is what lets one query
+`Lotus.SQL.Transformer`. This is what lets one query
 text work across Postgres, MySQL and SQLite. It is a dialect concern, not a
 core one — an adapter for a non-SQL engine implements whatever
 preprocessing its own language needs, or none.

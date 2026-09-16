@@ -1,7 +1,7 @@
-defmodule Lotus.Source.Adapters.Ecto.SQL.SanitizerTest do
+defmodule Lotus.SQL.SanitizerTest do
   use ExUnit.Case, async: true
 
-  alias Lotus.Source.Adapters.Ecto.SQL.Sanitizer
+  alias Lotus.SQL.Sanitizer
 
   describe "strip_trailing_semicolon/1" do
     test "strips trailing semicolon" do

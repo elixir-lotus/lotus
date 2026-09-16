@@ -47,6 +47,16 @@
 
 ### Changed
 
+- **SQL helpers moved out of the Ecto adapter's namespace.**
+  `FilterInjector`, `SortInjector`, `Transformer`, `Identifier`, `Sanitizer`
+  and `Validator` lived under `Lotus.Source.Adapters.Ecto.SQL` although none
+  of them depends on Ecto. A SQL engine without an Ecto adapter, such as
+  ClickHouse over HTTP, DuckDB, BigQuery or Trino, implements
+  `Lotus.Source.Adapter` directly and had to reach into another adapter's
+  tree to reuse them. They now live at `Lotus.SQL.*` with the same
+  functions, next to `Lotus.Query.Tokenizer`, and the Ecto dialects call
+  the new names. The old names remain as deprecated delegates.
+
 - **Visibility rules are compiled once and checked against a matcher.**
   `Lotus.Runner` resolved the column policy of every result column by
   asking the resolver for the rules and walking them, regex rules
@@ -111,6 +121,15 @@
   comment ends at the first `*/`, and on MySQL a `;` inside a `#` comment, a
   backtick identifier or after `\'` in a literal no longer rejects the
   statement.
+
+### Deprecated
+
+- **`Lotus.Source.Adapters.Ecto.SQL.*` in favour of `Lotus.SQL.*`.** The six
+  old modules delegate to the new ones and each function carries
+  `@deprecated`, so a custom dialect that aliases the old names keeps
+  compiling with a warning that names the replacement. The delegates are
+  removed in v2.0; the upgrade guide for v2.0 lists the renames.
+
 ### Fixed
 
 - **Variable bindings resolve qualified, quoted and CTE names.**

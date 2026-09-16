@@ -1,8 +1,8 @@
-defmodule Lotus.Source.Adapters.Ecto.SQL.TransformerTest do
+defmodule Lotus.SQL.TransformerTest do
   use ExUnit.Case, async: true
 
   alias Lotus.Query.Tokenizer.Profile
-  alias Lotus.Source.Adapters.Ecto.SQL.Transformer
+  alias Lotus.SQL.Transformer
 
   defp pg, do: Profile.for_language("sql:postgres")
   defp mysql, do: Profile.for_language("sql:mysql")
