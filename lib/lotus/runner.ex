@@ -495,11 +495,8 @@ defmodule Lotus.Runner do
     duration_ms = System.convert_time_unit(elapsed_us, :microsecond, :millisecond)
 
     rels = Relations.to_list(relations)
-
-    policies =
-      Enum.map(cols || [], fn c ->
-        Visibility.column_policy_for(adapter.name, rels, c, scope)
-      end)
+    matcher = Visibility.matcher_for(adapter.name, scope)
+    policies = Enum.map(cols || [], &Visibility.column_policy_for(matcher, rels, &1))
 
     case enforce_column_policies(cols || [], rows || [], policies) do
       {:error, msg} ->

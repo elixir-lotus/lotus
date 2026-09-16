@@ -197,67 +197,148 @@ defmodule Lotus.Visibility do
 
   alias Lotus.Config
   alias Lotus.Source.Adapter
-  alias Lotus.Visibility.Policy
+  alias Lotus.Visibility.Matcher
+
+  @typedoc """
+  What every check accepts in place of a source name: a compiled
+  `Lotus.Visibility.Matcher`, or a raw rule set with optional `:schema`,
+  `:table` and `:column` keys in the formats the resolver callbacks return.
+  A raw rule set is compiled as given, with no builtin denies.
+  """
+  @type source :: String.t() | Matcher.t() | rules()
+
+  @type rules :: %{
+          optional(:schema) => keyword(),
+          optional(:table) => keyword(),
+          optional(:column) => list()
+        }
 
   @doc """
-  Checks if a schema is visible for the given data repo.
+  Compiles a rule set into a `Lotus.Visibility.Matcher`.
+
+  Exact names become sets and regex rules a short ordered list, so a check
+  against the matcher does not walk the raw rules. Pure: the same rules give
+  the same matcher. A matcher passed in is returned as it is, apart from the
+  merge below.
+
+  ## Options
+
+    * `:adapter` — an `%Lotus.Source.Adapter{}` whose built-in schema and
+      table denies are merged into the matcher, or `nil` for the
+      conservative fallback denies used when no source can be resolved.
+    * `:builtin_schema_denies`, `:builtin_table_denies` — the deny lists to
+      merge when the caller has them instead of the adapter.
+
+  A resolver that serves rules changed at runtime compiles once when a rule
+  set is written and returns the matcher from
+  `c:Lotus.Visibility.Resolver.matcher_for/2`.
+  """
+  @spec compile(Matcher.t() | rules(), keyword()) :: Matcher.t()
+  def compile(rules, opts \\ [])
+  def compile(%Matcher{} = matcher, opts), do: merge_builtin(matcher, opts)
+  def compile(%{} = rules, opts), do: rules |> Matcher.compile() |> merge_builtin(opts)
+
+  defp merge_builtin(matcher, opts) do
+    case Keyword.fetch(opts, :adapter) do
+      {:ok, %Adapter{} = adapter} ->
+        Matcher.merge_builtin(
+          matcher,
+          Adapter.builtin_schema_denies(adapter),
+          Adapter.builtin_denies(adapter)
+        )
+
+      {:ok, nil} ->
+        Matcher.merge_builtin(matcher, Adapter.builtin_schema_denies(), Adapter.builtin_denies())
+
+      :error ->
+        Matcher.merge_builtin(
+          matcher,
+          Keyword.get(opts, :builtin_schema_denies, []),
+          Keyword.get(opts, :builtin_table_denies, [])
+        )
+    end
+  end
+
+  @doc """
+  Returns the compiled matcher for a source, from the configured resolver.
+
+  A resolver that exports `c:Lotus.Visibility.Resolver.matcher_for/2`
+  answers directly. Otherwise its three rule callbacks are compiled here,
+  with the built-in denies of the source's adapter merged in.
+
+  Call this once per result or per discovery call and pass the matcher to
+  the checks below, instead of passing the source name to every check.
+  """
+  @spec matcher_for(String.t(), term()) :: Matcher.t()
+  def matcher_for(source_name, scope \\ nil) when is_binary(source_name) do
+    resolver = visibility_resolver()
+
+    if Code.ensure_loaded?(resolver) and function_exported?(resolver, :matcher_for, 2) do
+      resolver.matcher_for(source_name, scope)
+    else
+      compile(
+        %{
+          schema: resolver.schema_rules_for(source_name, scope),
+          table: resolver.table_rules_for(source_name, scope),
+          column: resolver.column_rules_for(source_name, scope)
+        },
+        adapter: source_adapter(source_name)
+      )
+    end
+  end
+
+  @doc false
+  @spec source_adapter(String.t()) :: Adapter.t() | nil
+  def source_adapter(source_name) do
+    case Config.source_resolver().resolve(source_name, nil) do
+      {:ok, %Adapter{} = adapter} -> adapter
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Checks if a schema is visible for the given source.
+
+  `source` is a source name, a compiled matcher or a raw rule set (see
+  `t:source/0`).
 
   Returns:
   - `true` if the schema is allowed
   - `false` if the schema is denied
   """
-  @spec allowed_schema?(String.t(), String.t() | nil, term()) :: boolean()
-  def allowed_schema?(repo_name, schema, scope \\ nil) do
-    rules = visibility_resolver().schema_rules_for(repo_name, scope)
-    builtin = builtin_schema_denies(repo_name)
-
-    builtin_denied = schema_deny_hit?(builtin, schema)
-
-    allowed = schema_allow_pass?(rules[:allow], schema)
-    user_denied = schema_deny_hit?(rules[:deny], schema)
-
-    # Schema is visible if:
-    # - It passes allow rules (or no allow rules exist) AND
-    # - It's not denied by builtin or user rules
-    (allowed || rules[:allow] in [nil, [], :all]) and not (builtin_denied or user_denied)
+  @spec allowed_schema?(source(), String.t() | nil, term()) :: boolean()
+  def allowed_schema?(source, schema, scope \\ nil) do
+    Matcher.allowed_schema?(matcher(source, scope), schema)
   end
 
   @doc """
-  Checks if a relation (schema, table) is allowed for the given data repo.
+  Checks if a relation (schema, table) is allowed for the given source.
 
-  This now checks schema visibility first, then table visibility.
+  Schema visibility is checked first, then table visibility. `source` is a
+  source name, a compiled matcher or a raw rule set (see `t:source/0`).
   """
-  @spec allowed_relation?(String.t(), {String.t() | nil, String.t()}, term()) :: boolean()
-  def allowed_relation?(repo_name, {schema, table}, scope \\ nil) do
-    if allowed_schema?(repo_name, schema, scope) do
-      table_rules = visibility_resolver().table_rules_for(repo_name, scope)
-      builtin = builtin_table_denies(repo_name)
-
-      builtin_denied = deny_hit?(builtin, schema, table)
-      allowed = allow_pass?(table_rules[:allow], schema, table)
-      user_denied = deny_hit?(table_rules[:deny], schema, table)
-
-      (allowed || table_rules[:allow] in [nil, []]) and not (builtin_denied or user_denied)
-    else
-      false
-    end
+  @spec allowed_relation?(source(), {String.t() | nil, String.t()}, term()) :: boolean()
+  def allowed_relation?(source, {_schema, _table} = relation, scope \\ nil) do
+    Matcher.allowed_relation?(matcher(source, scope), relation)
   end
 
   @doc """
   Filters a list of schemas to only those that are visible.
   """
-  @spec filter_schemas([String.t()], String.t(), term()) :: [String.t()]
-  def filter_schemas(schemas, repo_name, scope \\ nil) do
-    Enum.filter(schemas, &allowed_schema?(repo_name, &1, scope))
+  @spec filter_schemas([String.t()], source(), term()) :: [String.t()]
+  def filter_schemas(schemas, source, scope \\ nil) do
+    matcher = matcher(source, scope)
+    Enum.filter(schemas, &Matcher.allowed_schema?(matcher, &1))
   end
 
   @doc """
   Filters a list of relations to only those that are visible.
   """
-  @spec filter_relations([{String.t() | nil, String.t()}], String.t(), term()) ::
+  @spec filter_relations([{String.t() | nil, String.t()}], source(), term()) ::
           [{String.t() | nil, String.t()}]
-  def filter_relations(relations, repo_name, scope \\ nil) do
-    Enum.filter(relations, &allowed_relation?(repo_name, &1, scope))
+  def filter_relations(relations, source, scope \\ nil) do
+    matcher = matcher(source, scope)
+    Enum.filter(relations, &Matcher.allowed_relation?(matcher, &1))
   end
 
   @doc """
@@ -267,10 +348,11 @@ defmodule Lotus.Visibility do
   - `:ok` if all schemas are visible
   - `{:error, :schema_not_visible, denied: [schemas]}` if any are denied
   """
-  @spec validate_schemas([String.t()], String.t(), term()) ::
+  @spec validate_schemas([String.t()], source(), term()) ::
           :ok | {:error, :schema_not_visible, denied: [String.t()]}
-  def validate_schemas(schemas, repo_name, scope \\ nil) do
-    denied = Enum.reject(schemas, &allowed_schema?(repo_name, &1, scope))
+  def validate_schemas(schemas, source, scope \\ nil) do
+    matcher = matcher(source, scope)
+    denied = Enum.reject(schemas, &Matcher.allowed_schema?(matcher, &1))
 
     if denied == [] do
       :ok
@@ -279,189 +361,25 @@ defmodule Lotus.Visibility do
     end
   end
 
-  defp builtin_schema_denies(repo_name) do
-    case resolve_adapter(repo_name) do
-      nil -> Adapter.builtin_schema_denies()
-      adapter -> Adapter.builtin_schema_denies(adapter)
-    end
-  end
-
-  defp schema_allow_pass?(nil, _schema), do: true
-  defp schema_allow_pass?([], _schema), do: true
-  defp schema_allow_pass?(:all, _schema), do: true
-
-  defp schema_allow_pass?(rules, schema) do
-    Enum.any?(rules, fn
-      %Regex{} = rx -> schema_pattern_match?(rx, schema)
-      str when is_binary(str) -> str == schema
-      _ -> false
-    end)
-  end
-
-  defp schema_deny_hit?(nil, _schema), do: false
-  defp schema_deny_hit?([], _schema), do: false
-
-  defp schema_deny_hit?(rules, schema) do
-    Enum.any?(rules, fn
-      %Regex{} = rx -> schema_pattern_match?(rx, schema)
-      str when is_binary(str) -> str == schema
-      _ -> false
-    end)
-  end
-
-  defp schema_pattern_match?(%Regex{} = rx, val) when is_binary(val), do: Regex.match?(rx, val)
-  defp schema_pattern_match?(%Regex{}, nil), do: false
-  defp schema_pattern_match?(_, _), do: false
-
-  # Table-level helpers (existing code)
-
-  defp builtin_table_denies(repo_name) do
-    case resolve_adapter(repo_name) do
-      nil -> Adapter.builtin_denies()
-      adapter -> Adapter.builtin_denies(adapter)
-    end
-  end
-
-  defp resolve_adapter(repo_name) do
-    case Config.source_resolver().resolve(repo_name, nil) do
-      {:ok, %Adapter{} = adapter} -> adapter
-      _ -> nil
-    end
-  end
-
-  defp allow_pass?(nil, _s, _t), do: true
-  defp allow_pass?([], _s, _t), do: true
-
-  defp allow_pass?(rules, s, t) do
-    schema_specific_rules =
-      Enum.filter(rules, fn
-        {rule_schema, _} when is_binary(rule_schema) or is_nil(rule_schema) ->
-          pattern_match?(rule_schema, s)
-
-        {%Regex{} = rule_schema, _} ->
-          pattern_match?(rule_schema, s)
-
-        _bare_string ->
-          true
-      end)
-
-    if schema_specific_rules == [] do
-      true
-    else
-      any_match?(schema_specific_rules, s, t)
-    end
-  end
-
-  defp deny_hit?(nil, _s, _t), do: false
-  defp deny_hit?([], _s, _t), do: false
-  defp deny_hit?(rules, s, t), do: any_match?(rules, s, t)
-
-  defp any_match?(rules, s, t) do
-    Enum.any?(rules, fn
-      {schema_pat, table_pat} ->
-        pattern_match?(schema_pat, s) and pattern_match?(table_pat, t)
-
-      tbl when is_binary(tbl) ->
-        # Bare string matches table name regardless of schema
-        # This makes "api_keys" match both {nil, "api_keys"} and {"public", "api_keys"}
-        pattern_match?(tbl, t)
-
-      # All 2-tuple and bare-string rules are handled above, so anything
-      # reaching here is a malformed rule that can never match a relation.
-      _other ->
-        false
-    end)
-  end
-
-  # IMPORTANT: only treat `nil` schema pattern as a match when the relation's schema is nil/""
-  # (prevents SQLite-intended rules from matching Postgres relations)
-  defp pattern_match?(%Regex{} = rx, val) when is_binary(val), do: Regex.match?(rx, val)
-  defp pattern_match?(%Regex{}, nil), do: false
-  defp pattern_match?(str, val) when is_binary(str) and is_binary(val), do: str == val
-  defp pattern_match?(nil, s) when s in [nil, ""], do: true
-  defp pattern_match?(nil, _), do: false
-  defp pattern_match?(_, _), do: false
-
   @doc """
   Resolves the column policy for a given result column name in the context of
-  accessed relations and repo.
+  accessed relations and source.
 
-  Rules are taken from `Lotus.Config.column_rules_for_source_name/1` and support patterns
-  on schema, table, and column names. Returns a normalized policy map or nil.
+  `source` is a source name, a compiled matcher or a raw rule set (see
+  `t:source/0`). Rules support patterns on schema, table, and column names.
+  Returns a normalized policy map or nil.
   """
-  @spec column_policy_for(String.t(), [{String.t() | nil, String.t()}], String.t(), term()) ::
+  @spec column_policy_for(source(), [{String.t() | nil, String.t()}] | nil, String.t(), term()) ::
           nil | %{action: atom(), mask: any(), show_in_schema?: boolean()}
-  def column_policy_for(repo_name, relations, result_column_name, scope \\ nil) do
-    rules = visibility_resolver().column_rules_for(repo_name, scope)
-    rels = relations || []
-
-    find_schema_table_column_match(rules, rels, result_column_name) ||
-      find_table_column_match(rules, rels, result_column_name) ||
-      find_column_only_match(rules, result_column_name)
+  def column_policy_for(source, relations, result_column_name, scope \\ nil) do
+    Matcher.column_policy(matcher(source, scope), relations, result_column_name)
   end
 
-  defp find_schema_table_column_match(rules, rels, result_column_name) do
-    Enum.find_value(rules, fn
-      {schema_pat, table_pat, col_pat, policy} ->
-        if rels != [] and
-             schema_table_column_matches?(
-               rels,
-               schema_pat,
-               table_pat,
-               col_pat,
-               result_column_name
-             ) do
-          normalize_policy(policy)
-        end
+  defp matcher(%Matcher{} = matcher, _scope), do: matcher
+  defp matcher(%{} = rules, _scope), do: compile(rules)
 
-      _ ->
-        nil
-    end)
-  end
-
-  defp find_table_column_match(rules, rels, result_column_name) do
-    Enum.find_value(rules, fn
-      {table_pat, col_pat, policy} ->
-        if rels != [] and table_column_matches?(rels, table_pat, col_pat, result_column_name) do
-          normalize_policy(policy)
-        end
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp find_column_only_match(rules, result_column_name) do
-    Enum.find_value(rules, fn
-      {col_pat, policy} ->
-        if cv_match?(col_pat, result_column_name), do: normalize_policy(policy)
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp schema_table_column_matches?(rels, schema_pat, table_pat, col_pat, result_column_name) do
-    Enum.any?(rels, fn {s, t} ->
-      cv_match?(schema_pat, s) and cv_match?(table_pat, t) and
-        cv_match?(col_pat, result_column_name)
-    end)
-  end
-
-  defp table_column_matches?(rels, table_pat, col_pat, result_column_name) do
-    Enum.any?(rels, fn {_s, t} ->
-      cv_match?(table_pat, t) and cv_match?(col_pat, result_column_name)
-    end)
-  end
-
-  defp cv_match?(%Regex{} = rx, val) when is_binary(val), do: Regex.match?(rx, val)
-  defp cv_match?(%Regex{}, _), do: false
-  defp cv_match?("*", _), do: true
-  defp cv_match?(str, val) when is_binary(str) and is_binary(val), do: str == val
-  defp cv_match?(nil, s) when s in [nil, ""], do: true
-  defp cv_match?(_, _), do: false
-
-  defp normalize_policy(policy), do: Policy.normalize_column_policy(policy)
+  defp matcher(source_name, scope) when is_binary(source_name),
+    do: matcher_for(source_name, scope)
 
   defp visibility_resolver, do: Config.visibility_resolver()
 end

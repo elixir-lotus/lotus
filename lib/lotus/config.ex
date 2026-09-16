@@ -90,7 +90,19 @@ defmodule Lotus.Config do
           trusted_source_adapters: [module()],
           source_resolver: module(),
           visibility_resolver: module(),
-          middleware: %{atom() => [{module(), term()}]}
+          middleware: %{atom() => [{module(), term()}]},
+          compiled_visibility: compiled_visibility()
+        }
+
+  @typedoc """
+  The visibility rules compiled at validation: one matcher per source key
+  named in any of the visibility maps, and the `:default` matcher for every
+  other source. Built-in denies are not included; the static resolver adds
+  them for the source's adapter.
+  """
+  @type compiled_visibility :: %{
+          default: Lotus.Visibility.Matcher.t(),
+          sources: %{String.t() => Lotus.Visibility.Matcher.t()}
         }
 
   @type cache_config :: %{
@@ -324,9 +336,37 @@ defmodule Lotus.Config do
 
   defp validate!(opts) do
     case NimbleOptions.validate(opts, @schema) do
-      {:ok, conf} -> validate_default_source!(conf)
+      {:ok, conf} -> conf |> validate_default_source!() |> precompile_visibility()
       {:error, e} -> raise ArgumentError, "Invalid :lotus config: #{Exception.message(e)}"
     end
+  end
+
+  @visibility_levels [
+    schema: :schema_visibility,
+    table: :table_visibility,
+    column: :column_visibility
+  ]
+
+  defp precompile_visibility(conf) do
+    names =
+      for {_level, key} <- @visibility_levels,
+          {source_key, _rules} <- conf[key] || %{},
+          source_key != :default,
+          uniq: true,
+          do: to_string(source_key)
+
+    compiled = %{
+      default: compile_visibility(conf, nil),
+      sources: Map.new(names, &{&1, compile_visibility(conf, &1)})
+    }
+
+    Keyword.put(conf, :compiled_visibility, compiled)
+  end
+
+  defp compile_visibility(conf, source_name) do
+    @visibility_levels
+    |> Map.new(fn {level, key} -> {level, lookup_rules(conf[key], source_name)} end)
+    |> Lotus.Visibility.compile()
   end
 
   # Cross-validation NimbleOptions can't express: :default_source must be a
@@ -575,12 +615,30 @@ defmodule Lotus.Config do
   def column_rules_for_source_name(source_name),
     do: visibility_rules_for(:column_visibility, source_name)
 
+  @doc """
+  Returns the visibility rules of a source compiled once at validation.
+
+  The result is a `Lotus.Visibility.Matcher` without built-in denies;
+  `Lotus.Visibility.Resolvers.Static.matcher_for/2` merges those for the
+  source's adapter. A source named in none of the visibility maps gets the
+  `:default` matcher. `reload!/0` rebuilds the compiled rules.
+  """
+  @spec visibility_for_source_name(String.t()) :: Lotus.Visibility.Matcher.t()
+  def visibility_for_source_name(source_name) do
+    %{default: default, sources: sources} = load!()[:compiled_visibility]
+    Map.get(sources, source_name, default)
+  end
+
   # Shared lookup for source-keyed visibility maps. Matches the source name
   # string against map keys via `to_string/1`, then falls back to the
   # `:default` entry, then to an empty list.
-  defp visibility_rules_for(key, source_name) do
-    visibility_config = load!()[key] || %{}
-    source_key = Enum.find(Map.keys(visibility_config), &(to_string(&1) == source_name))
+  defp visibility_rules_for(key, source_name), do: lookup_rules(load!()[key], source_name)
+
+  defp lookup_rules(visibility_config, source_name) do
+    visibility_config = visibility_config || %{}
+
+    source_key =
+      source_name && Enum.find(Map.keys(visibility_config), &(to_string(&1) == source_name))
 
     (source_key && visibility_config[source_key]) || visibility_config[:default] || []
   end

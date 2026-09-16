@@ -165,7 +165,7 @@ defmodule Lotus.PreflightPostgresTest do
         ]
       ]
 
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> config end)
+      Lotus.Config |> stub(:visibility_for_source_name, fn _repo_name -> %{table: config} end)
       :ok
     end
 
@@ -212,7 +212,7 @@ defmodule Lotus.PreflightPostgresTest do
         deny: []
       ]
 
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> config end)
+      Lotus.Config |> stub(:visibility_for_source_name, fn _repo_name -> %{table: config} end)
       :ok
     end
 
@@ -247,7 +247,7 @@ defmodule Lotus.PreflightPostgresTest do
         ]
       ]
 
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> config end)
+      Lotus.Config |> stub(:visibility_for_source_name, fn _repo_name -> %{table: config} end)
       :ok
     end
 

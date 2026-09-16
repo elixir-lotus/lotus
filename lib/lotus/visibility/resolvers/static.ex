@@ -35,9 +35,15 @@ defmodule Lotus.Visibility.Resolvers.Static do
 
   When no source-specific rules are configured, the resolver falls back to
   `:default` rules, providing a sensible baseline for all sources.
+
+  `matcher_for/2` returns the rules compiled once by `Lotus.Config` when the
+  configuration was validated, merged with the built-in denies of the
+  source's adapter. `Lotus.Config.reload!/0` rebuilds the compiled rules.
   """
 
   @behaviour Lotus.Visibility.Resolver
+
+  alias Lotus.Visibility
 
   @impl true
   def schema_rules_for(source_name, _scope) do
@@ -52,5 +58,12 @@ defmodule Lotus.Visibility.Resolvers.Static do
   @impl true
   def column_rules_for(source_name, _scope) do
     Lotus.Config.column_rules_for_source_name(source_name)
+  end
+
+  @impl true
+  def matcher_for(source_name, _scope) do
+    source_name
+    |> Lotus.Config.visibility_for_source_name()
+    |> Visibility.compile(adapter: Visibility.source_adapter(source_name))
   end
 end

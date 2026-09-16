@@ -83,9 +83,11 @@ defmodule Lotus.Preflight do
     end
   end
 
+  defp check_relations_visibility([], _source_name, _scope), do: {:ok, []}
+
   defp check_relations_visibility(rels, source_name, scope) do
-    {allowed, blocked} =
-      Enum.split_with(rels, &Visibility.allowed_relation?(source_name, &1, scope))
+    matcher = Visibility.matcher_for(source_name, scope)
+    {allowed, blocked} = Enum.split_with(rels, &Visibility.allowed_relation?(matcher, &1))
 
     if blocked == [] do
       {:ok, allowed}
