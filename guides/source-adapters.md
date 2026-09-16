@@ -854,11 +854,15 @@ Required fields:
 
 Optional fields:
 
-- `dialect_spec` — SQL tokenizer options, forwarded verbatim (camelCased) to
-  CodeMirror 6's `SQLDialect.define()`, so an external SQL adapter reaches
-  tokenization parity with the built-in grammars. Only meaningful for SQL
-  languages; an adapter that sits on a built-in CM6 dialect (Postgres, MySQL,
-  SQLite, MSSQL, MariaSQL, Cassandra, PLSQL) omits it and gets that grammar.
+- `dialect_spec` — lexical rules of the SQL dialect. Forwarded verbatim
+  (camelCased) to CodeMirror 6's `SQLDialect.define()`, so an external SQL
+  adapter reaches tokenization parity with the built-in grammars, and read by
+  `Lotus.Source.Adapter.lexical_profile/1`, so the server recognizes `{{var}}`
+  and `[[...]]` template syntax with the same quoting and comment rules. An
+  adapter that omits it gets the profile of its `query_language/1` on the
+  server. Only meaningful for SQL languages; an adapter that sits on a
+  built-in CM6 dialect (Postgres, MySQL, SQLite, MSSQL, MariaSQL, Cassandra,
+  PLSQL) omits it and gets that grammar.
   Keys mirror `@codemirror/lang-sql`'s `SQLDialectSpec` — see
   `t:Lotus.Source.Adapter.dialect_spec/0`.
 

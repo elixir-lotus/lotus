@@ -1169,4 +1169,29 @@ defmodule Lotus.Storage.QueryTest do
       refute sql =~ "CAST"
     end
   end
+
+  describe "compile/2 with comments" do
+    test "does not require a placeholder that only appears in a comment" do
+      q = %Query{
+        statement: "-- {{note}}\nSELECT * FROM users WHERE id = {{id}}",
+        variables: [],
+        data_source: "postgres"
+      }
+
+      assert {:ok,
+              %Statement{body: "-- {{note}}\nSELECT * FROM users WHERE id = $1", params: [1]}} =
+               Query.compile(q, %{"id" => 1})
+    end
+
+    test "keeps brackets inside a string literal" do
+      q = %Query{
+        statement: "SELECT '[[x]]' AS s FROM users [[WHERE id = {{id}}]]",
+        variables: [],
+        data_source: "postgres"
+      }
+
+      assert {:ok, %Statement{body: "SELECT '[[x]]' AS s FROM users ", params: []}} =
+               Query.compile(q, %{})
+    end
+  end
 end

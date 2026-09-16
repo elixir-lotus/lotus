@@ -10,6 +10,13 @@ defmodule Lotus.Query.OptionalClause do
   on SQL, JSON DSLs, Cypher, or any other textual query format. Adapters that
   work on AST representations should apply this before serialization.
 
+  Blocks are found with `Lotus.Query.Tokenizer`, so `[[` inside a string
+  literal or a comment is plain text, and a `{{var}}` inside a comment does
+  not make a block conditional. Blocks nest: an inner block is resolved on
+  its own, and the outer block only depends on the variables directly inside
+  it. Every function takes an optional `Lotus.Query.Tokenizer.Profile`; the
+  default is ANSI SQL.
+
   ## Example (SQL)
 
       SELECT * FROM users
@@ -21,7 +28,8 @@ defmodule Lotus.Query.OptionalClause do
   If `status` has a value, the second block becomes `AND "status" = {{status}}`.
   """
 
-  @optional_clause_regex ~r/\[\[(.*?)\]\]/s
+  alias Lotus.Query.Tokenizer
+  alias Lotus.Query.Tokenizer.Profile
 
   @doc """
   Processes optional clauses in SQL. Removes `[[...]]` blocks where any
@@ -31,32 +39,51 @@ defmodule Lotus.Query.OptionalClause do
   A variable is considered to have "no value" when it is missing from
   `supplied_vars`, is `nil`, or is `""`.
   """
-  @spec process(String.t(), map()) :: String.t()
-  def process(sql, supplied_vars) do
-    Regex.replace(@optional_clause_regex, sql, fn _full, content ->
-      vars_in_block =
-        content
-        |> Lotus.Variables.extract_names()
-        |> Enum.uniq()
+  @spec process(String.t(), map(), Profile.t()) :: String.t()
+  def process(sql, supplied_vars, %Profile{} = profile \\ Profile.for_language("sql")) do
+    sql
+    |> Tokenizer.tokenize(profile)
+    |> process_tokens(supplied_vars)
+    |> IO.iodata_to_binary()
+  end
 
-      if Enum.all?(vars_in_block, &has_value?(supplied_vars, &1)) do
-        content
-      else
-        ""
-      end
+  defp process_tokens(tokens, supplied_vars) do
+    Enum.map(tokens, fn
+      {:block, inner} ->
+        if Enum.all?(direct_variables(inner), &has_value?(supplied_vars, &1)) do
+          process_tokens(inner, supplied_vars)
+        else
+          ""
+        end
+
+      token ->
+        Tokenizer.to_iodata([token])
     end)
+  end
+
+  defp direct_variables(tokens) do
+    tokens
+    |> Enum.reject(&match?({:block, _}, &1))
+    |> Tokenizer.variables()
+    |> Enum.uniq()
   end
 
   @doc """
   Returns a `MapSet` of variable names that appear inside `[[...]]` blocks.
   """
-  @spec extract_optional_variable_names(String.t()) :: MapSet.t()
-  def extract_optional_variable_names(sql) do
-    Regex.scan(@optional_clause_regex, sql)
-    |> Enum.flat_map(fn [_, content] ->
-      Lotus.Variables.extract_names(content)
-    end)
+  @spec extract_optional_variable_names(String.t(), Profile.t()) :: MapSet.t()
+  def extract_optional_variable_names(sql, %Profile{} = profile \\ Profile.for_language("sql")) do
+    sql
+    |> Tokenizer.tokenize(profile)
+    |> block_variables()
     |> MapSet.new()
+  end
+
+  defp block_variables(tokens) do
+    Enum.flat_map(tokens, fn
+      {:block, inner} -> Tokenizer.variables(inner)
+      _token -> []
+    end)
   end
 
   @doc """
@@ -71,9 +98,19 @@ defmodule Lotus.Query.OptionalClause do
       iex> Lotus.Query.OptionalClause.strip_brackets("WHERE 1=1 [[AND status = 'active']]")
       "WHERE 1=1 AND status = 'active'"
   """
-  @spec strip_brackets(String.t()) :: String.t()
-  def strip_brackets(content) do
-    Regex.replace(@optional_clause_regex, content, "\\1")
+  @spec strip_brackets(String.t(), Profile.t()) :: String.t()
+  def strip_brackets(content, %Profile{} = profile \\ Profile.for_language("sql")) do
+    content
+    |> Tokenizer.tokenize(profile)
+    |> unwrap_blocks()
+    |> IO.iodata_to_binary()
+  end
+
+  defp unwrap_blocks(tokens) do
+    Enum.map(tokens, fn
+      {:block, inner} -> unwrap_blocks(inner)
+      token -> Tokenizer.to_iodata([token])
+    end)
   end
 
   defp has_value?(supplied_vars, name) do

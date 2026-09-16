@@ -133,4 +133,47 @@ defmodule Lotus.Query.OptionalClauseTest do
       assert OptionalClause.strip_brackets(sql) == "WHERE 1=1\nAND a = 1\nAND b = 2"
     end
   end
+
+  describe "token-aware processing" do
+    alias Lotus.Query.Tokenizer.Profile
+
+    test "process/2 keeps brackets inside a string literal" do
+      sql = "SELECT '[[literal]]' FROM t [[WHERE a = {{a}}]]"
+      assert OptionalClause.process(sql, %{}) == "SELECT '[[literal]]' FROM t "
+    end
+
+    test "process/2 ignores a placeholder inside a comment within the block" do
+      sql = "WHERE 1=1 [[-- {{note}}\nAND a = {{a}}]]"
+      assert OptionalClause.process(sql, %{"a" => "1"}) == "WHERE 1=1 -- {{note}}\nAND a = {{a}}"
+    end
+
+    test "process/2 resolves nested blocks independently" do
+      sql = "WHERE 1=1 [[AND a = {{a}} [[AND b = {{b}}]]]]"
+      assert OptionalClause.process(sql, %{"a" => "1"}) == "WHERE 1=1 AND a = {{a}} "
+
+      assert OptionalClause.process(sql, %{"a" => "1", "b" => "2"}) ==
+               "WHERE 1=1 AND a = {{a}} AND b = {{b}}"
+
+      assert OptionalClause.process(sql, %{"b" => "2"}) == "WHERE 1=1 "
+    end
+
+    test "process/3 uses the given profile" do
+      mysql = Profile.for_language("sql:mysql")
+      sql = "SELECT 1 # [[not a block]]\n[[AND a = {{a}}]]"
+      assert OptionalClause.process(sql, %{}, mysql) == "SELECT 1 # [[not a block]]\n"
+    end
+
+    test "extract_optional_variable_names/1 ignores placeholders inside comments and strings outside blocks" do
+      sql = "-- [[{{c}}]]\nSELECT '[[{{s}}]]' [[{{a}} [[{{b}}]]]]"
+      assert OptionalClause.extract_optional_variable_names(sql) == MapSet.new(["a", "b"])
+    end
+
+    test "strip_brackets/1 keeps brackets inside a string literal" do
+      assert OptionalClause.strip_brackets("SELECT '[[x]]' [[AND a]]") == "SELECT '[[x]]' AND a"
+    end
+
+    test "strip_brackets/1 strips nested brackets" do
+      assert OptionalClause.strip_brackets("[[a [[b]] c]]") == "a b c"
+    end
+  end
 end

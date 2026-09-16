@@ -355,12 +355,15 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
 
   @impl true
   def transform_statement(%Statement{body: sql} = statement) do
+    alias Lotus.Query.Tokenizer.Profile
     alias Lotus.Source.Adapters.Ecto.SQL.Transformer
+
+    profile = Profile.for_language(query_language())
 
     new_sql =
       sql
-      |> Transformer.transform_wildcards(:pipe)
-      |> Transformer.strip_quoted_variables()
+      |> Transformer.transform_wildcards(:pipe, profile)
+      |> Transformer.strip_quoted_variables(profile)
 
     %{statement | body: new_sql}
   end

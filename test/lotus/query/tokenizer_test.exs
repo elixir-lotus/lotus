@@ -317,4 +317,84 @@ defmodule Lotus.Query.TokenizerTest do
       end
     end
   end
+
+  describe "variables/1" do
+    test "returns names of variable tokens in document order" do
+      tokens = Tokenizer.tokenize("{{b}} x {{a}} {{b}}", sql())
+      assert Tokenizer.variables(tokens) == ["b", "a", "b"]
+    end
+
+    test "includes placeholders inside string literals" do
+      tokens = Tokenizer.tokenize("LIKE '%{{q}}%' AND id = {{id}}", sql())
+      assert Tokenizer.variables(tokens) == ["q", "id"]
+    end
+
+    test "ignores placeholders inside comments and identifiers" do
+      tokens = Tokenizer.tokenize("-- {{c}}\nSELECT \"{{i}}\", {{v}}", sql())
+      assert Tokenizer.variables(tokens) == ["v"]
+    end
+
+    test "descends into blocks" do
+      tokens = Tokenizer.tokenize("{{a}} [[{{b}} [[{{c}}]]]]", sql())
+      assert Tokenizer.variables(tokens) == ["a", "b", "c"]
+    end
+  end
+
+  describe "code/1" do
+    test "returns code fragments including those inside blocks" do
+      tokens = Tokenizer.tokenize("SELECT 'a' -- c\n[[AND x]] {{v}}", sql())
+      assert Tokenizer.code(tokens) == ["SELECT ", " ", "\n", "AND x", " "]
+    end
+  end
+
+  describe "replace_variables/2" do
+    test "replaces every placeholder in code and strings" do
+      tokens = Tokenizer.tokenize("WHERE a = {{a}} AND b LIKE '%{{b}}%' -- {{c}}", sql())
+
+      assert tokens
+             |> Tokenizer.replace_variables(fn _name -> "NULL" end)
+             |> Tokenizer.to_string() ==
+               "WHERE a = NULL AND b LIKE '%NULL%' -- {{c}}"
+    end
+
+    test "replaces placeholders inside blocks" do
+      tokens = Tokenizer.tokenize("[[AND a = {{a}}]]", sql())
+
+      assert tokens
+             |> Tokenizer.replace_variables(fn name -> "<" <> name <> ">" end)
+             |> Tokenizer.to_string() ==
+               "[[AND a = <a>]]"
+    end
+  end
+
+  describe "replace_first_variable/3" do
+    test "replaces only the first occurrence of the named placeholder" do
+      tokens = Tokenizer.tokenize("{{a}} {{b}} {{a}}", sql())
+      assert {:ok, tokens} = Tokenizer.replace_first_variable(tokens, "a", "$1")
+      assert Tokenizer.to_string(tokens) == "$1 {{b}} {{a}}"
+    end
+
+    test "skips a placeholder inside a comment" do
+      tokens = Tokenizer.tokenize("-- {{a}}\nSELECT {{a}}", sql())
+      assert {:ok, tokens} = Tokenizer.replace_first_variable(tokens, "a", "$1")
+      assert Tokenizer.to_string(tokens) == "-- {{a}}\nSELECT $1"
+    end
+
+    test "replaces inside a string literal" do
+      tokens = Tokenizer.tokenize("SELECT '{{a}}', {{a}}", sql())
+      assert {:ok, tokens} = Tokenizer.replace_first_variable(tokens, "a", "$1")
+      assert Tokenizer.to_string(tokens) == "SELECT '$1', {{a}}"
+    end
+
+    test "replaces inside a block" do
+      tokens = Tokenizer.tokenize("[[AND a = {{a}}]] {{a}}", sql())
+      assert {:ok, tokens} = Tokenizer.replace_first_variable(tokens, "a", "$1")
+      assert Tokenizer.to_string(tokens) == "[[AND a = $1]] {{a}}"
+    end
+
+    test "returns :error when the placeholder is absent" do
+      tokens = Tokenizer.tokenize("SELECT {{b}}", sql())
+      assert :error = Tokenizer.replace_first_variable(tokens, "a", "$1")
+    end
+  end
 end

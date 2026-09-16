@@ -893,4 +893,85 @@ defmodule Lotus.Source.AdapterTest do
       assert ctx.capabilities.explanation == true
     end
   end
+
+  describe "lexical_profile/1" do
+    alias Lotus.Query.Tokenizer.Profile
+
+    defmodule MysqlLikeAdapter do
+      Lotus.Source.Adapter
+
+      true
+
+      def execute_query(_state, _body, _params, _opts),
+        do: {:ok, %{columns: [], rows: [], num_rows: 0}}
+
+      true
+      def transaction(state, fun, _opts), do: {:ok, fun.(state)}
+
+      true
+      def list_tables(_state, _schemas, _opts), do: {:ok, []}
+
+      true
+      def describe_table(_state, _schema, _table), do: {:ok, []}
+
+      true
+      def builtin_denies(_state), do: []
+
+      true
+      def health_check(_state), do: :ok
+
+      true
+      def query_language(_state), do: "sql:mysql"
+    end
+
+    defmodule SpecAdapter do
+      Lotus.Source.Adapter
+
+      true
+
+      def execute_query(_state, _body, _params, _opts),
+        do: {:ok, %{columns: [], rows: [], num_rows: 0}}
+
+      true
+      def transaction(state, fun, _opts), do: {:ok, fun.(state)}
+
+      true
+      def list_tables(_state, _schemas, _opts), do: {:ok, []}
+
+      true
+      def describe_table(_state, _schema, _table), do: {:ok, []}
+
+      true
+      def builtin_denies(_state), do: []
+
+      true
+      def health_check(_state), do: :ok
+
+      true
+      def query_language(_state), do: "sql:clickhouse"
+
+      true
+
+      def editor_config(_state),
+        do: %{language: "sql", dialect_spec: %{identifier_quotes: "`", hash_comments: true}}
+    end
+
+    test "derives the base profile from the query language" do
+      adapter = %Adapter{name: "m", module: MysqlLikeAdapter, state: nil, source_type: :mysql}
+      assert Adapter.lexical_profile(adapter) == Profile.for_language("sql:mysql")
+    end
+
+    test "overlays the dialect spec from the editor config" do
+      adapter = %Adapter{name: "s", module: SpecAdapter, state: nil, source_type: :clickhouse}
+      profile = Adapter.lexical_profile(adapter)
+      assert profile.identifier_quotes == ["`"]
+      assert profile.line_comments == ["--", "#"]
+      refute profile.dollar_quotes?
+    end
+
+    test "falls back to ANSI SQL for an adapter without a query language" do
+      adapter = %Adapter{name: "min", module: MinimalAdapter, state: nil, source_type: :memory}
+      assert Adapter.lexical_profile(adapter) == Profile.for_language("sql")
+    end
+  end
 end

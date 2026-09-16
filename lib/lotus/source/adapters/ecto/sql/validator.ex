@@ -34,16 +34,17 @@ defmodule Lotus.Source.Adapters.Ecto.SQL.Validator do
   @spec validate(String.t() | module() | Adapter.t(), String.t() | module() | nil) ::
           :ok | {:error, String.t()}
   def validate(sql, data_source) do
-    neutralized =
-      sql
-      |> OptionalClause.strip_brackets()
-      |> Variables.neutralize("NULL")
-
     # Accept source names, repo modules, or already-resolved adapters via
     # Source.resolve!/2 — previous get_source!/1 only accepted name strings,
     # which meant callers with a repo module in hand had to round-trip it
     # through Source.name_from_module!/1 first.
     adapter = resolve_adapter(data_source)
+    profile = Adapter.lexical_profile(adapter)
+
+    neutralized =
+      sql
+      |> OptionalClause.strip_brackets(profile)
+      |> Variables.neutralize("NULL", profile)
 
     case Adapter.query_plan(adapter, Statement.new(neutralized), []) do
       {:ok, _plan} -> :ok

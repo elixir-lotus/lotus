@@ -70,4 +70,46 @@ defmodule Lotus.VariablesTest do
       assert Variables.neutralize(content, "NULL") == content
     end
   end
+
+  describe "extract_names/2 with a profile" do
+    alias Lotus.Query.Tokenizer.Profile
+
+    test "ignores a placeholder inside a comment" do
+      assert Variables.extract_names("-- {{note}}\nSELECT {{id}}") == ["id"]
+    end
+
+    test "ignores a placeholder inside a quoted identifier" do
+      assert Variables.extract_names(~S|SELECT "{{col}}" FROM t WHERE id = {{id}}|) == ["id"]
+    end
+
+    test "keeps a placeholder inside a string literal" do
+      assert Variables.extract_names("WHERE name LIKE '%{{q}}%'") == ["q"]
+    end
+
+    test "uses the given profile" do
+      mysql = Profile.for_language("sql:mysql")
+      assert Variables.extract_names("SELECT 1 # {{c}}\n{{v}}", mysql) == ["v"]
+      assert Variables.extract_names("SELECT 1 # {{c}}\n{{v}}") == ["c", "v"]
+    end
+  end
+
+  describe "neutralize/3 with a profile" do
+    alias Lotus.Query.Tokenizer.Profile
+
+    test "leaves a placeholder inside a comment alone" do
+      assert Variables.neutralize("-- {{note}}\nSELECT {{id}}", "NULL") ==
+               "-- {{note}}\nSELECT NULL"
+    end
+
+    test "replaces a placeholder inside a string literal" do
+      assert Variables.neutralize("LIKE '%{{q}}%'", "NULL") == "LIKE '%NULL%'"
+    end
+
+    test "uses the given profile" do
+      mysql = Profile.for_language("sql:mysql")
+
+      assert Variables.neutralize("SELECT `{{i}}`, {{v}}", "NULL", mysql) ==
+               "SELECT `{{i}}`, NULL"
+    end
+  end
 end

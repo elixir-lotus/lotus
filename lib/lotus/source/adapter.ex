@@ -84,6 +84,7 @@ defmodule Lotus.Source.Adapter do
 
   alias Lotus.Query.Filter
   alias Lotus.Query.Statement
+  alias Lotus.Query.Tokenizer.Profile
 
   @type source_type :: :postgres | :mysql | :sqlite | :other | atom()
 
@@ -852,11 +853,13 @@ defmodule Lotus.Source.Adapter do
 
   Optional fields:
 
-    * `:dialect_spec` — SQL tokenizer options, forwarded verbatim to
-      CodeMirror's `SQLDialect.define()`. Only meaningful for SQL
-      languages; adapters on a built-in CM6 dialect (Postgres, MySQL,
-      SQLite, MSSQL, MariaSQL, Cassandra, PLSQL) can omit this and
-      get the built-in grammar.
+    * `:dialect_spec` — lexical rules of the SQL dialect. Forwarded verbatim to
+      CodeMirror's `SQLDialect.define()`, and read by `lexical_profile/1` so
+      the server tokenizes `{{var}}` and `[[...]]` template syntax with the
+      same quoting and comment rules. Only meaningful for SQL languages;
+      adapters on a built-in CM6 dialect (Postgres, MySQL, SQLite, MSSQL,
+      MariaSQL, Cassandra, PLSQL) can omit this and get the built-in grammar
+      in the editor and the profile of their `query_language/1` on the server.
     * `:context_schema` — JSON DSL structural completion schema. Drives
       parent-aware autocomplete (e.g., Elasticsearch's `bool` →
       `must`/`should`/`filter`). Omit for SQL adapters; for JSON DSL
@@ -1324,6 +1327,24 @@ defmodule Lotus.Source.Adapter do
     if function_exported?(mod, :query_language, 1),
       do: mod.query_language(state),
       else: "sql"
+  end
+
+  @doc """
+  Return the lexical profile the template layer tokenizes this adapter's
+  statements with.
+
+  The base profile comes from `query_language/1`, so a `"sql:mysql"` adapter
+  gets backticks and `#` comments and a `"json:elasticsearch"` adapter gets
+  JSON strings and no comments. The `:dialect_spec` of `editor_config/1`,
+  when present, refines it, so the declaration that drives the editor's
+  highlighter also drives server-side tokenization. An adapter with neither
+  gets ANSI SQL.
+  """
+  @spec lexical_profile(t()) :: Profile.t()
+  def lexical_profile(%__MODULE__{} = adapter) do
+    base = Profile.for_language(query_language(adapter))
+    spec = adapter |> editor_config() |> Map.get(:dialect_spec)
+    Profile.from_dialect_spec(base, spec)
   end
 
   # Hard limits on the free-form AI context fields. Adapters that return

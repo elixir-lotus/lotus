@@ -4,6 +4,15 @@
 
 ### Added
 
+- **`Lotus.Source.Adapter.lexical_profile/1` gives the tokenizer profile of a source.**
+  The base profile comes from the adapter's `query_language/1`, and the
+  `dialect_spec` an adapter already declares in `editor_config/1` refines it,
+  so the declaration that drives the editor's highlighter also drives
+  server-side tokenization. Adapters without either get ANSI SQL, which is
+  what every adapter got before. `Lotus.Query.Tokenizer` gained
+  `variables/1`, `code/1`, `replace_variables/2` and
+  `replace_first_variable/3` for passes that work on tokens.
+
 - **`Lotus.Query.Tokenizer` splits a statement into template-level regions.**
   The template layer ran regex over raw statement text and could not tell
   code from a comment, a string literal or a quoted identifier, so a
@@ -19,6 +28,24 @@
   clause, transformer and deny-list passes follow.
 
 ### Changed
+
+- **The template passes read comments and quotes the way the engine does.**
+  `Lotus.Variables`, `Lotus.Query.OptionalClause`, the Ecto SQL transformer,
+  the Ecto deny list and variable binding ran regex over raw statement text.
+  A `{{note}}` in a comment was a required variable, a `'[[text]]'` literal
+  lost its content, a column named `"lock"` or a literal `'DELETE'` was
+  rejected as a write, and a placeholder in a comment could be the one that
+  got bound. All five now run on `Lotus.Query.Tokenizer` tokens under the
+  source's lexical profile: placeholders and blocks count in code and string
+  literals only, the deny list looks at code only, and binding skips
+  comments and quoted identifiers. Nested `[[...]]` blocks resolve inner
+  first, and the Postgres `INTERVAL` rewrite now matches a lowercase keyword.
+  `Lotus.Variables.extract_names/2`, `neutralize/3`,
+  `Lotus.Query.OptionalClause.process/3`, `strip_brackets/2`,
+  `extract_optional_variable_names/2` and the transformer functions take an
+  optional profile that defaults to ANSI SQL, so existing callers do not
+  change. `Lotus.Variables.regex/0` stays but is documented as deprecated:
+  the pipeline no longer uses it. Nothing that ran before stops running.
 
 - **The single-statement check reads comments and quotes the way the engine does.**
   The Ecto adapter had one hand-written scanner for every dialect, so MySQL
