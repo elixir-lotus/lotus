@@ -5,7 +5,12 @@ defmodule Lotus.Source.Adapters.EctoTest do
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
+  alias Lotus.Source.Adapters.MySQL
+  alias Lotus.Source.Adapters.Postgres
+  alias Lotus.Source.Adapters.SQLite3
+  alias Lotus.Test.MysqlRepo
   alias Lotus.Test.Repo
+  alias Lotus.Test.SqliteRepo
 
   describe "wrap/2" do
     test "creates an Adapter struct with correct fields" do
@@ -190,6 +195,63 @@ defmodule Lotus.Source.Adapters.EctoTest do
 
       assert {:error, "Only a single statement is allowed"} =
                Adapter.sanitize_query(adapter, Statement.new("SELECT 1; DROP TABLE users"), [])
+    end
+
+    test "postgres nests block comments when looking for a second statement" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      assert :ok =
+               Adapter.sanitize_query(
+                 adapter,
+                 Statement.new("SELECT 1 /* a /* b */ ; SELECT 2 */"),
+                 []
+               )
+    end
+
+    test "mysql ends a block comment at the first close marker" do
+      adapter = MySQL.wrap("my", MysqlRepo)
+
+      assert {:error, "Only a single statement is allowed"} =
+               Adapter.sanitize_query(
+                 adapter,
+                 Statement.new("SELECT 1 /* a /* b */ ; SELECT 2 */"),
+                 []
+               )
+    end
+
+    test "sqlite ends a block comment at the first close marker" do
+      adapter = SQLite3.wrap("lite", SqliteRepo)
+
+      assert {:error, "Only a single statement is allowed"} =
+               Adapter.sanitize_query(
+                 adapter,
+                 Statement.new("SELECT 1 /* a /* b */ ; SELECT 2 */"),
+                 []
+               )
+    end
+
+    test "mysql allows a semicolon inside a hash comment" do
+      adapter = MySQL.wrap("my", MysqlRepo)
+
+      assert :ok =
+               Adapter.sanitize_query(adapter, Statement.new("SELECT 1 # ; not a statement"), [])
+    end
+
+    test "mysql allows a semicolon after a backslash-escaped quote inside a literal" do
+      adapter = MySQL.wrap("my", MysqlRepo)
+
+      assert :ok =
+               Adapter.sanitize_query(
+                 adapter,
+                 Statement.new(~S|SELECT 'it\'s; fine' AS s|),
+                 []
+               )
+    end
+
+    test "mysql allows a semicolon inside a backtick identifier" do
+      adapter = MySQL.wrap("my", MysqlRepo)
+
+      assert :ok = Adapter.sanitize_query(adapter, Statement.new("SELECT `a;b` FROM t"), [])
     end
 
     test "blocks DML when read_only is true" do

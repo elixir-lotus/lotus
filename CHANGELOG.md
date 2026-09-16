@@ -1,5 +1,35 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`Lotus.Query.Tokenizer` splits a statement into template-level regions.**
+  The template layer ran regex over raw statement text and could not tell
+  code from a comment, a string literal or a quoted identifier, so a
+  `{{var}}` inside a comment counted as a required variable and a `[[...]]`
+  inside a literal lost its content. `Lotus.Query.Tokenizer.tokenize/2` takes
+  the text and a `Lotus.Query.Tokenizer.Profile` and returns code, comment,
+  string, identifier, variable and block tokens whose raw text concatenates
+  back to the input. `Profile.for_language/1` gives the rules for
+  `"sql"`, `"sql:postgres"`, `"sql:mysql"`, `"sql:sqlite"` and `"json:*"`, and
+  `Profile.from_dialect_spec/2` refines a base profile with the `dialect_spec`
+  an adapter already declares for the editor. This release only adds the
+  module and moves the single-statement check onto it; the variable, optional
+  clause, transformer and deny-list passes follow.
+
+### Changed
+
+- **The single-statement check reads comments and quotes the way the engine does.**
+  The Ecto adapter had one hand-written scanner for every dialect, so MySQL
+  and SQLite got Postgres-style nested block comments that those engines do
+  not have, and MySQL `#` comments, backtick identifiers and backslash-escaped
+  quotes were not understood. The check now tokenizes with the dialect's
+  profile. Postgres behaviour does not change. On MySQL and SQLite a block
+  comment ends at the first `*/`, and on MySQL a `;` inside a `#` comment, a
+  backtick identifier or after `\'` in a literal no longer rejects the
+  statement.
+
 ## [1.1.0] - 2026-09-15
 
 The dashboard features a UI needs to run cards the way core does, and the
