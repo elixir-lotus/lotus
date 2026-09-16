@@ -37,6 +37,8 @@ defmodule Lotus.Source.Adapters.Ecto do
   alias Lotus.Query.Filter
   alias Lotus.Query.OptionalClause
   alias Lotus.Query.Statement
+  alias Lotus.Query.Tokenizer
+  alias Lotus.Query.Tokenizer.Profile
   alias Lotus.Source.Adapter
   alias Lotus.Source.Adapters.Ecto.Dialects
   alias Lotus.Source.Adapters.Ecto.SQL.Identifier
@@ -239,7 +241,7 @@ defmodule Lotus.Source.Adapters.Ecto do
     quote do
       @impl true
       def sanitize_query(_repo, statement, opts),
-        do: EctoAdapter.do_sanitize_query(statement, opts)
+        do: EctoAdapter.do_sanitize_query(@dialect, statement, opts)
 
       @impl true
       def transform_bound_query(_repo, statement, _opts), do: statement
@@ -574,7 +576,8 @@ defmodule Lotus.Source.Adapters.Ecto do
   @deny ~r/\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|VACUUM|ANALYZE|CALL|LOCK)\b/i
 
   @impl true
-  def sanitize_query(_repo, statement, opts), do: do_sanitize_query(statement, opts)
+  def sanitize_query(_repo, statement, opts),
+    do: do_sanitize_query(@default_dialect, statement, opts)
 
   @impl true
   def transform_bound_query(_repo, statement, _opts), do: statement
@@ -714,10 +717,11 @@ defmodule Lotus.Source.Adapters.Ecto do
   end
 
   @doc false
-  def do_sanitize_query(%Statement{body: sql}, opts) do
+  def do_sanitize_query(dialect, %Statement{body: sql}, opts) do
     read_only = Keyword.get(opts, :read_only, true)
+    profile = Profile.for_language(dialect.query_language())
 
-    with :ok <- assert_single_statement(sql) do
+    with :ok <- assert_single_statement(sql, profile) do
       assert_not_denied(sql, read_only)
     end
   end
@@ -941,8 +945,8 @@ defmodule Lotus.Source.Adapters.Ecto do
   # ---------------------------------------------------------------------------
 
   # Allow a single statement with an optional trailing semicolon.
-  # Reject any additional top-level semicolons (outside strings/comments).
-  defp assert_single_statement(sql) do
+  # Reject any additional semicolon the tokenizer sees in code.
+  defp assert_single_statement(sql, profile) do
     s = String.trim(sql)
 
     s =
@@ -955,84 +959,19 @@ defmodule Lotus.Source.Adapters.Ecto do
         s
       end
 
-    if has_top_level_semicolon?(s) do
+    if s |> Tokenizer.tokenize(profile) |> semicolon_in_code?() do
       {:error, "Only a single statement is allowed"}
     else
       :ok
     end
   end
 
-  defp has_top_level_semicolon?(bin), do: scan_semicolons(bin, :code)
-
-  # State machine that skips semicolons inside:
-  # - single-quoted strings
-  # - double-quoted identifiers
-  # - PostgreSQL dollar-quoted strings ($tag$ ... $tag$ or $ ... $)
-  # - line comments (-- ...\n)
-  # - block comments (/* ... */)
-  defp scan_semicolons(<<>>, _state), do: false
-
-  defp scan_semicolons(<<?;, _::binary>>, :code), do: true
-
-  defp scan_semicolons(<<"--", rest::binary>>, :code),
-    do: scan_semicolons(skip_to_eol(rest), :code)
-
-  defp scan_semicolons(<<"/*", rest::binary>>, :code),
-    do: scan_semicolons(skip_block_comment(rest), :code)
-
-  defp scan_semicolons(<<"'", rest::binary>>, :code),
-    do: scan_semicolons(skip_single_quoted(rest), :code)
-
-  defp scan_semicolons(<<"\"", rest::binary>>, :code),
-    do: scan_semicolons(skip_double_quoted(rest), :code)
-
-  defp scan_semicolons(<<"$", rest::binary>>, :code) do
-    case take_dollar_tag(rest, "") do
-      {:tag, tag, after_tag} -> scan_semicolons(skip_dollar_quoted(after_tag, tag), :code)
-      :no_tag -> scan_semicolons(rest, :code)
-    end
-  end
-
-  defp scan_semicolons(<<_::utf8, rest::binary>>, :code),
-    do: scan_semicolons(rest, :code)
-
-  defp skip_to_eol(<<>>), do: <<>>
-  defp skip_to_eol(<<"\n", rest::binary>>), do: rest
-  defp skip_to_eol(<<_::utf8, rest::binary>>), do: skip_to_eol(rest)
-
-  defp skip_block_comment(rest), do: skip_block_comment(rest, 1)
-
-  defp skip_block_comment(<<>>, _depth), do: <<>>
-  defp skip_block_comment(<<"*/", rest::binary>>, 1), do: rest
-  defp skip_block_comment(<<"*/", rest::binary>>, depth), do: skip_block_comment(rest, depth - 1)
-  defp skip_block_comment(<<"/*", rest::binary>>, depth), do: skip_block_comment(rest, depth + 1)
-  defp skip_block_comment(<<_::utf8, rest::binary>>, depth), do: skip_block_comment(rest, depth)
-
-  defp skip_single_quoted(<<>>), do: <<>>
-  defp skip_single_quoted(<<"''", rest::binary>>), do: skip_single_quoted(rest)
-  defp skip_single_quoted(<<"'", rest::binary>>), do: rest
-  defp skip_single_quoted(<<_::utf8, rest::binary>>), do: skip_single_quoted(rest)
-
-  defp skip_double_quoted(<<>>), do: <<>>
-  defp skip_double_quoted(<<"\"\"", rest::binary>>), do: skip_double_quoted(rest)
-  defp skip_double_quoted(<<"\"", rest::binary>>), do: rest
-  defp skip_double_quoted(<<_::utf8, rest::binary>>), do: skip_double_quoted(rest)
-
-  defp take_dollar_tag(<<"$", rest::binary>>, acc), do: {:tag, acc, rest}
-
-  defp take_dollar_tag(<<c, rest::binary>>, acc)
-       when c in ?A..?Z or c in ?a..?z or c in ?0..?9 or c == ?_,
-       do: take_dollar_tag(rest, <<acc::binary, c>>)
-
-  defp take_dollar_tag(_, _), do: :no_tag
-
-  defp skip_dollar_quoted(bin, tag) do
-    closer = "$" <> tag <> "$"
-
-    case :binary.match(bin, closer) do
-      :nomatch -> <<>>
-      {pos, len} -> :binary.part(bin, pos + len, byte_size(bin) - pos - len)
-    end
+  defp semicolon_in_code?(tokens) do
+    Enum.any?(tokens, fn
+      {:code, code} -> String.contains?(code, ";")
+      {:block, inner} -> semicolon_in_code?(inner)
+      _ -> false
+    end)
   end
 
   defp assert_not_denied(_sql, false = _read_only), do: :ok
