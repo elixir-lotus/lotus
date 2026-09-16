@@ -31,4 +31,16 @@ defmodule Lotus.Source.Resolver do
   @callback list_source_names() :: [String.t()]
 
   @callback default_source() :: {String.t(), Lotus.Source.Adapter.t()}
+
+  @doc """
+  Drop whatever the resolver holds for `name`.
+
+  Optional. A resolver that keeps wrapped adapters in a registry or a cache
+  implements this so the next resolution rebuilds the adapter. Core calls it
+  through `Lotus.Source.invalidate/1` and never caches an adapter itself,
+  so the static resolver does not implement it.
+  """
+  @callback invalidate(name :: String.t()) :: :ok
+
+  @optional_callbacks invalidate: 1
 end

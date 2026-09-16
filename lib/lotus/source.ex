@@ -61,6 +61,25 @@ defmodule Lotus.Source do
     adapter
   end
 
+  @doc """
+  Tells the configured resolver to drop what it holds for `name`.
+
+  Call this after a source is edited, paused or removed at runtime, so the
+  next `resolve!/2` rebuilds its adapter. A resolver that does not implement
+  `c:Lotus.Source.Resolver.invalidate/1` has nothing to drop and this is a
+  no-op.
+  """
+  @spec invalidate(String.t()) :: :ok
+  def invalidate(name) when is_binary(name) do
+    resolver = resolver()
+
+    if function_exported?(resolver, :invalidate, 1) do
+      resolver.invalidate(name)
+    end
+
+    :ok
+  end
+
   @doc false
   @spec name_from_module!(module()) :: String.t()
   def name_from_module!(mod) do

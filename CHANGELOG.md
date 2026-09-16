@@ -29,20 +29,21 @@
 
 ### Changed
 
-- **A query run resolves its data source once, and the static resolver memoizes wrapped adapters.**
+- **A query run resolves its data source once.**
   `Lotus.run_query/2` resolved the source in `Lotus.Storage.Query.compile/2`
   and again before execution, and the static resolver rebuilt the
-  `%Lotus.Source.Adapter{}` on every resolution, probing `can_handle?/1`
-  over every registered adapter for entries that do not name theirs. The
-  run now resolves once, checks the query language against the source, and
-  passes the adapter to `compile/3` through the new `:adapter` option;
-  `compile!/3` takes the same option. `Lotus.Source.Resolvers.Static` keeps
-  each wrapped adapter in `:persistent_term` under the source name and its
-  entry, so a later lookup is one term read. `Lotus.Config.reload!/0`
-  clears the memo. Custom `:source_resolver` modules keep their own
-  semantics and `Lotus.Source.resolve!/2` does not change for callers.
-  A stored language that does not match the source is now reported before
-  the statement is compiled.
+  `%Lotus.Source.Adapter{}` each time, probing `can_handle?/1` over every
+  registered adapter for entries that do not name theirs. The run now
+  resolves once, checks the query language against the source, and passes
+  the adapter to `compile/3` through the new `:adapter` option;
+  `compile!/3` takes the same option. Core caches no adapter: a resolver
+  that serves sources changed at runtime keeps its own registry, and the
+  `Lotus.Source.Resolver` behaviour gains an optional `invalidate/1`
+  callback that `Lotus.Source.invalidate/1` calls so such a resolver drops
+  an entry after a source is edited, paused or removed. The static resolver
+  and `Lotus.Source.resolve!/2` do not change for callers. A stored
+  language that does not match the source is now reported before the
+  statement is compiled.
 
 - **The template passes read comments and quotes the way the engine does.**
   `Lotus.Variables`, `Lotus.Query.OptionalClause`, the Ecto SQL transformer,

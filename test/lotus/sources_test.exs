@@ -1,5 +1,8 @@
 defmodule Lotus.SourcesTest do
   use Lotus.Case, async: true
+  use Mimic
+
+  alias Lotus.Config
 
   alias Lotus.Query.Statement
   alias Lotus.Source
@@ -107,6 +110,40 @@ defmodule Lotus.SourcesTest do
       assert_raise ArgumentError, ~r/not configured/, fn ->
         Source.resolve!(123, :"Elixir.Nonexistent.Module")
       end
+    end
+  end
+
+  describe "invalidate/1" do
+    defmodule InvalidatingResolver do
+      @moduledoc false
+      @behaviour Lotus.Source.Resolver
+
+      alias Lotus.Source.Resolvers.Static
+
+      defdelegate resolve(source_opt, fallback), to: Static
+      defdelegate list_sources(), to: Static
+      defdelegate get_source!(name), to: Static
+      defdelegate list_source_names(), to: Static
+      defdelegate default_source(), to: Static
+
+      @impl true
+      def invalidate(name) do
+        send(self(), {:invalidated, name})
+        :ok
+      end
+    end
+
+    test "calls the resolver's invalidate/1 when it exports one" do
+      stub(Config, :source_resolver, fn -> InvalidatingResolver end)
+
+      assert :ok = Source.invalidate("acme")
+      assert_received {:invalidated, "acme"}
+    end
+
+    test "is a no-op for a resolver without invalidate/1" do
+      stub(Config, :source_resolver, fn -> Lotus.Source.Resolvers.Static end)
+
+      assert :ok = Source.invalidate("acme")
     end
   end
 

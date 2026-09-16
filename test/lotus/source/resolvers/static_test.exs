@@ -267,67 +267,6 @@ defmodule Lotus.Source.Resolvers.StaticTest do
     end
   end
 
-  describe "memoized adapters" do
-    defmodule CountingAdapter do
-      @moduledoc false
-
-      def wrap(name, %{owner: owner} = entry) do
-        send(owner, {:wrapped, name})
-
-        %Lotus.Source.Adapter{
-          name: name,
-          module: __MODULE__,
-          state: entry,
-          source_type: :other
-        }
-      end
-    end
-
-    defp counted_entry, do: %{adapter: CountingAdapter, owner: self(), ref: make_ref()}
-
-    test "wraps an entry once and serves later resolutions from the memo" do
-      entry = counted_entry()
-
-      Config
-      |> stub(:data_sources, fn -> %{"counted" => entry} end)
-      |> stub(:get_data_source!, fn "counted" -> entry end)
-
-      assert {:ok, first} = Static.resolve("counted", nil)
-      assert_received {:wrapped, "counted"}
-
-      assert {:ok, ^first} = Static.resolve("counted", nil)
-      assert [^first] = Static.list_sources()
-      assert ^first = Static.get_source!("counted")
-      refute_received {:wrapped, "counted"}
-    end
-
-    test "Config.reload!/0 clears the memo" do
-      entry = counted_entry()
-      stub(Config, :data_sources, fn -> %{"counted" => entry} end)
-
-      assert {:ok, _} = Static.resolve("counted", nil)
-      assert_received {:wrapped, "counted"}
-
-      Config.reload!()
-
-      assert {:ok, _} = Static.resolve("counted", nil)
-      assert_received {:wrapped, "counted"}
-    end
-
-    test "a changed entry under the same name is wrapped again" do
-      first_entry = counted_entry()
-      second_entry = counted_entry()
-
-      stub(Config, :data_sources, fn -> %{"counted" => first_entry} end)
-      assert {:ok, %{state: ^first_entry}} = Static.resolve("counted", nil)
-      assert_received {:wrapped, "counted"}
-
-      stub(Config, :data_sources, fn -> %{"counted" => second_entry} end)
-      assert {:ok, %{state: ^second_entry}} = Static.resolve("counted", nil)
-      assert_received {:wrapped, "counted"}
-    end
-  end
-
   describe "wrap_entry error handling" do
     test "raises ArgumentError with a descriptive message for an unhandled map entry" do
       # Regression: before the fix, a map entry without a matching source_adapter
