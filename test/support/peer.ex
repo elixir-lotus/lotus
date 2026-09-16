@@ -15,7 +15,7 @@ defmodule Lotus.Test.Peer do
     unless Node.alive?() do
       {_, 0} = System.cmd("epmd", ["-daemon"])
       name = :"lotus_test_#{System.pid()}@127.0.0.1"
-      {:ok, _} = Node.start(name, :longnames)
+      {:ok, _} = :net_kernel.start(name, %{name_domain: :longnames})
     end
 
     Node.set_cookie(@cookie)
