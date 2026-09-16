@@ -2,11 +2,19 @@ defmodule Lotus.Preflight.RelationsTest do
   use ExUnit.Case, async: true
   alias Lotus.Preflight.Relations
 
+  # The process-dictionary functions are deprecated. Calling them through
+  # `apply/3` keeps the compiler from warning while they are still shipped.
+  defp put(outcome), do: call(:put, [outcome])
+  defp get, do: call(:get, [])
+  defp take, do: call(:take, [])
+  defp clear, do: call(:clear, [])
+  defp call(name, args), do: apply(Relations, name, args)
+
   describe "put/1" do
     test "stores relations in process dictionary" do
       relations = [{"public", "users"}, {"public", "posts"}]
 
-      assert :ok = Relations.put(relations)
+      assert :ok = put(relations)
       assert Process.get(:lotus_preflight_relations) == relations
     end
 
@@ -14,20 +22,20 @@ defmodule Lotus.Preflight.RelationsTest do
       old_relations = [{"public", "old_table"}]
       new_relations = [{"public", "new_table"}]
 
-      Relations.put(old_relations)
+      put(old_relations)
       assert Process.get(:lotus_preflight_relations) == old_relations
 
-      Relations.put(new_relations)
+      put(new_relations)
       assert Process.get(:lotus_preflight_relations) == new_relations
     end
 
     test "accepts empty list" do
-      assert :ok = Relations.put([])
+      assert :ok = put([])
       assert Process.get(:lotus_preflight_relations) == []
     end
 
     test "stores an unrestricted outcome" do
-      assert :ok = Relations.put({:unrestricted, "adapter cannot name its tables"})
+      assert :ok = put({:unrestricted, "adapter cannot name its tables"})
 
       assert Process.get(:lotus_preflight_relations) ==
                {:unrestricted, "adapter cannot name its tables"}
@@ -50,17 +58,17 @@ defmodule Lotus.Preflight.RelationsTest do
       relations = [{"public", "users"}, {"reporting", "metrics"}]
       Process.put(:lotus_preflight_relations, relations)
 
-      assert Relations.get() == relations
+      assert get() == relations
     end
 
     test "returns empty list when no relations stored" do
       Process.delete(:lotus_preflight_relations)
-      assert Relations.get() == []
+      assert get() == []
     end
 
     test "returns empty list when process dictionary has nil" do
       Process.put(:lotus_preflight_relations, nil)
-      assert Relations.get() == []
+      assert get() == []
     end
   end
 
@@ -69,14 +77,14 @@ defmodule Lotus.Preflight.RelationsTest do
       relations = [{"public", "users"}, {"public", "posts"}]
       Process.put(:lotus_preflight_relations, relations)
 
-      assert Relations.take() == relations
+      assert take() == relations
       assert Process.get(:lotus_preflight_relations) == nil
     end
 
     test "returns empty list and clears when no relations stored" do
       Process.delete(:lotus_preflight_relations)
 
-      assert Relations.take() == []
+      assert take() == []
       assert Process.get(:lotus_preflight_relations) == nil
     end
 
@@ -84,9 +92,9 @@ defmodule Lotus.Preflight.RelationsTest do
       relations = [{"public", "users"}]
       Process.put(:lotus_preflight_relations, relations)
 
-      assert Relations.take() == relations
-      assert Relations.take() == []
-      assert Relations.take() == []
+      assert take() == relations
+      assert take() == []
+      assert take() == []
     end
   end
 
@@ -95,23 +103,23 @@ defmodule Lotus.Preflight.RelationsTest do
       relations = [{"public", "users"}]
       Process.put(:lotus_preflight_relations, relations)
 
-      assert :ok = Relations.clear()
+      assert :ok = clear()
       assert Process.get(:lotus_preflight_relations) == nil
     end
 
     test "is safe to call when no relations stored" do
       Process.delete(:lotus_preflight_relations)
 
-      assert :ok = Relations.clear()
+      assert :ok = clear()
       assert Process.get(:lotus_preflight_relations) == nil
     end
 
     test "is idempotent" do
       Process.put(:lotus_preflight_relations, [{"public", "users"}])
 
-      assert :ok = Relations.clear()
-      assert :ok = Relations.clear()
-      assert :ok = Relations.clear()
+      assert :ok = clear()
+      assert :ok = clear()
+      assert :ok = clear()
       assert Process.get(:lotus_preflight_relations) == nil
     end
   end

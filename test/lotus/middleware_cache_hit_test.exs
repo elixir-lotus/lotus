@@ -14,7 +14,6 @@ defmodule Lotus.MiddlewareCacheHitTest do
 
   alias Lotus.Cache.{ETS, Key}
   alias Lotus.{Config, Middleware, Result}
-  alias Lotus.Preflight.Relations
   alias Lotus.Test.Schemas.User
 
   defmodule DenyUserPlug do
@@ -101,6 +100,7 @@ defmodule Lotus.MiddlewareCacheHitTest do
   end
 
   @statement "SELECT name FROM test_users ORDER BY name"
+  @preflight_key :lotus_preflight_relations
 
   setup do
     clear_cache_tables()
@@ -297,7 +297,7 @@ defmodule Lotus.MiddlewareCacheHitTest do
       assert {:ok, _} = run(nil)
       assert_received {:before_execute, _first}
 
-      Relations.put([{"public", "decoy"}])
+      Process.put(@preflight_key, [{"public", "decoy"}])
 
       assert {:ok, _} = run(nil)
       assert_received {:before_execute, second}
@@ -346,7 +346,7 @@ defmodule Lotus.MiddlewareCacheHitTest do
       assert {:ok, _} = run(nil)
       assert_received {:before_execute, %{origin: :executed}}
 
-      Relations.put([{"public", "decoy"}])
+      Process.put(@preflight_key, [{"public", "decoy"}])
 
       assert {:ok, _} = run(nil)
       assert_received {:before_execute, %{origin: :cached, relations: [{"public", "test_users"}]}}
@@ -355,7 +355,7 @@ defmodule Lotus.MiddlewareCacheHitTest do
     test "a :before_query payload carries no relations at all" do
       Middleware.compile(%{before_query: [{CapturePlug, [event: :before_query]}]})
 
-      Relations.put([{"public", "test_users"}])
+      Process.put(@preflight_key, [{"public", "test_users"}])
 
       assert {:ok, _} = run(nil)
       assert_received {:before_query, payload}
@@ -369,7 +369,7 @@ defmodule Lotus.MiddlewareCacheHitTest do
       failing = "SELECT CAST(email AS integer) AS boom FROM test_users"
 
       assert {:error, _} = Lotus.run_statement(failing, [], repo: "postgres")
-      assert Relations.get() == []
+      assert Process.get(@preflight_key) == nil
     end
   end
 

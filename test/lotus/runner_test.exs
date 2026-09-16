@@ -3,7 +3,6 @@ defmodule Lotus.RunnerTest do
   use Mimic
 
   alias Lotus.Fixtures
-  alias Lotus.Preflight.Relations
   alias Lotus.Query.Statement
   alias Lotus.Runner
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
@@ -14,6 +13,7 @@ defmodule Lotus.RunnerTest do
   @pg_adapter EctoAdapter.wrap("postgres", Repo)
   @sqlite_adapter EctoAdapter.wrap("sqlite", SqliteRepo)
   @mysql_adapter EctoAdapter.wrap("mysql", MysqlRepo)
+  @preflight_key :lotus_preflight_relations
 
   setup do
     fixtures = Fixtures.setup_test_data()
@@ -1232,7 +1232,7 @@ defmodule Lotus.RunnerTest do
     test "clears the relations of a statement that fails during execution" do
       assert {:error, _} = Runner.run_statement(@pg_adapter, Statement.new(@failing_statement))
 
-      assert Relations.get() == []
+      assert Process.get(@preflight_key) == nil
     end
 
     test "a failed statement does not lend its tables to the next statement" do
@@ -1265,7 +1265,7 @@ defmodule Lotus.RunnerTest do
       Lotus.Middleware
       |> stub(:run, fn
         :before_query, payload ->
-          Relations.put([{"public", "test_users"}])
+          Process.put(@preflight_key, [{"public", "test_users"}])
           {:cont, payload}
 
         _event, payload ->

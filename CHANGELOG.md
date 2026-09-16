@@ -124,6 +124,16 @@
 
 ### Deprecated
 
+- **`Lotus.Preflight.Relations.put/1`, `get/0`, `take/0` and `clear/0`.**
+  The four functions store a preflight outcome in the process dictionary.
+  Since the outcome travels as a value through `Lotus.Runner`, the runner
+  neither writes nor reads them, and process state is invisible to
+  supervision, leaks across queries in a reused process and cannot cross a
+  `Task` boundary. Middleware reads the outcome from the `:relations` key of
+  the `:before_execute` and `:after_query` payloads, and any other caller
+  gets it from `Lotus.Preflight.analyze/4`. Each function now carries
+  `@deprecated`; all four are removed in v2.0.
+
 - **`Lotus.Source.Adapters.Ecto.SQL.*` in favour of `Lotus.SQL.*`.** The six
   old modules delegate to the new ones and each function carries
   `@deprecated`, so a custom dialect that aliases the old names keeps

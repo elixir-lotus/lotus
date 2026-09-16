@@ -16,9 +16,14 @@ defmodule Lotus.Preflight.Relations do
   empty set.
 
   `Lotus.Preflight.analyze/4` returns the outcome as a value, and
-  `Lotus.Runner` carries it down the pipeline explicitly. The process
-  dictionary functions below are kept for callers that still store an outcome
-  themselves; the runner neither writes nor reads them.
+  `Lotus.Runner` carries it down the pipeline explicitly: middleware reads it
+  from the `:relations` key of the `:before_execute` and `:after_query`
+  payloads. The runner neither writes nor reads the process dictionary.
+
+  `put/1`, `get/0`, `take/0` and `clear/0` still store an outcome in the
+  process dictionary for callers that did so themselves. They are deprecated:
+  process state is invisible to supervision, leaks across queries in a reused
+  process and cannot cross a `Task` boundary. They are removed in v2.0.
   """
 
   @process_key :lotus_preflight_relations
@@ -29,6 +34,7 @@ defmodule Lotus.Preflight.Relations do
   @doc """
   Stores a preflight outcome in the process dictionary.
   """
+  @deprecated "Carry the outcome of Lotus.Preflight.analyze/4 as a value instead"
   @spec put(outcome()) :: :ok
   def put(relations) when is_list(relations), do: store(relations)
 
@@ -43,6 +49,7 @@ defmodule Lotus.Preflight.Relations do
   @doc """
   Retrieves the stored preflight outcome, or an empty list.
   """
+  @deprecated "Read the :relations key of the :before_execute or :after_query middleware payload, or call Lotus.Preflight.analyze/4"
   @spec get() :: outcome()
   def get do
     Process.get(@process_key) || []
@@ -51,6 +58,7 @@ defmodule Lotus.Preflight.Relations do
   @doc """
   Retrieves and clears the stored preflight outcome.
   """
+  @deprecated "Read the :relations key of the :before_execute or :after_query middleware payload, or call Lotus.Preflight.analyze/4"
   @spec take() :: outcome()
   def take do
     outcome = get()
@@ -72,6 +80,7 @@ defmodule Lotus.Preflight.Relations do
   @doc """
   Clears the stored preflight outcome.
   """
+  @deprecated "Nothing needs clearing once the outcome travels as a value"
   @spec clear() :: :ok
   def clear do
     Process.delete(@process_key)
