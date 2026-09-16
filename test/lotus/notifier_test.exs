@@ -33,12 +33,12 @@ defmodule Lotus.NotifierTest do
 
       assert_receive :listening
       :ok = Notifier.listen(topic)
+      assert listener in Notifier.listeners(topic)
 
       :ok = Notifier.notify(topic, :ping)
 
       assert_receive {:lotus_notification, ^topic, :ping}
       assert_receive {:forwarded, {:lotus_notification, ^topic, :ping}}
-      assert listener in Notifier.listeners(topic)
     end
 
     test "does not deliver to another topic", %{topic: topic} do
