@@ -66,6 +66,102 @@ defmodule Lotus.Query.Tokenizer do
     end)
   end
 
+  @variable_regex ~r/\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}/
+
+  @doc """
+  Returns the placeholder names in document order.
+
+  Names come from variable tokens and from `{{name}}` occurrences inside
+  string literals, descending into blocks. Comments and quoted identifiers
+  are skipped. Duplicates are kept.
+  """
+  @spec variables([token()]) :: [String.t()]
+  def variables(tokens) when is_list(tokens) do
+    Enum.flat_map(tokens, fn
+      {:variable, name, _raw} -> [name]
+      {:string, raw} -> string_variables(raw)
+      {:block, inner} -> variables(inner)
+      _token -> []
+    end)
+  end
+
+  @doc """
+  Returns every code fragment, including those inside blocks.
+  """
+  @spec code([token()]) :: [String.t()]
+  def code(tokens) when is_list(tokens) do
+    Enum.flat_map(tokens, fn
+      {:code, raw} -> [raw]
+      {:block, inner} -> code(inner)
+      _token -> []
+    end)
+  end
+
+  @doc """
+  Replaces every placeholder in code and string tokens with the text `fun`
+  returns for its name. Comments and quoted identifiers are left alone.
+  """
+  @spec replace_variables([token()], (String.t() -> String.t())) :: [token()]
+  def replace_variables(tokens, fun) when is_list(tokens) and is_function(fun, 1) do
+    Enum.map(tokens, fn
+      {:variable, name, _raw} ->
+        {:code, fun.(name)}
+
+      {:string, raw} ->
+        {:string, Regex.replace(@variable_regex, raw, fn _match, name -> fun.(name) end)}
+
+      {:block, inner} ->
+        {:block, replace_variables(inner, fun)}
+
+      token ->
+        token
+    end)
+  end
+
+  @doc """
+  Replaces the first placeholder named `name` in code or string tokens.
+
+  Returns `:error` when no such placeholder is in code or a string.
+  """
+  @spec replace_first_variable([token()], String.t(), String.t()) :: {:ok, [token()]} | :error
+  def replace_first_variable(tokens, name, replacement) when is_list(tokens) do
+    replace_first(tokens, name, replacement, [])
+  end
+
+  defp replace_first([], _name, _replacement, _acc), do: :error
+
+  defp replace_first([{:variable, name, _raw} | rest], name, replacement, acc) do
+    {:ok, Enum.reverse(acc, [{:code, replacement} | rest])}
+  end
+
+  defp replace_first([{:string, raw} = token | rest], name, replacement, acc) do
+    placeholder = "{{" <> name <> "}}"
+
+    if String.contains?(raw, placeholder) do
+      replaced = String.replace(raw, placeholder, replacement, global: false)
+      {:ok, Enum.reverse(acc, [{:string, replaced} | rest])}
+    else
+      replace_first(rest, name, replacement, [token | acc])
+    end
+  end
+
+  defp replace_first([{:block, inner} = token | rest], name, replacement, acc) do
+    case replace_first(inner, name, replacement, []) do
+      {:ok, inner} -> {:ok, Enum.reverse(acc, [{:block, inner} | rest])}
+      :error -> replace_first(rest, name, replacement, [token | acc])
+    end
+  end
+
+  defp replace_first([token | rest], name, replacement, acc) do
+    replace_first(rest, name, replacement, [token | acc])
+  end
+
+  defp string_variables(raw) do
+    @variable_regex
+    |> Regex.scan(raw, capture: :all_but_first)
+    |> List.flatten()
+  end
+
   # ---------------------------------------------------------------------------
   # Scanner
   #

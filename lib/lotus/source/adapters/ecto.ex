@@ -291,7 +291,7 @@ defmodule Lotus.Source.Adapters.Ecto do
 
       @impl true
       def prepare_for_analysis(_repo, statement),
-        do: EctoAdapter.do_prepare_for_analysis(statement)
+        do: EctoAdapter.do_prepare_for_analysis(@dialect, statement)
     end
   end
 
@@ -621,7 +621,8 @@ defmodule Lotus.Source.Adapters.Ecto do
   def ai_context(_repo), do: do_ai_context(@default_dialect)
 
   @impl true
-  def prepare_for_analysis(_repo, statement), do: do_prepare_for_analysis(statement)
+  def prepare_for_analysis(_repo, statement),
+    do: do_prepare_for_analysis(@default_dialect, statement)
 
   # ---------------------------------------------------------------------------
   # Callbacks — Source Identity
@@ -719,11 +720,25 @@ defmodule Lotus.Source.Adapters.Ecto do
   @doc false
   def do_sanitize_query(dialect, %Statement{body: sql}, opts) do
     read_only = Keyword.get(opts, :read_only, true)
-    profile = Profile.for_language(dialect.query_language())
 
-    with :ok <- assert_single_statement(sql, profile) do
-      assert_not_denied(sql, read_only)
+    tokens =
+      sql
+      |> Sanitizer.strip_trailing_semicolon()
+      |> Tokenizer.tokenize(lexical_profile(dialect))
+
+    with :ok <- assert_single_statement(tokens) do
+      assert_not_denied(tokens, read_only)
     end
+  end
+
+  defp lexical_profile(dialect), do: Profile.for_language(dialect.query_language())
+
+  defp neutralize_template(sql, dialect) do
+    profile = lexical_profile(dialect)
+
+    sql
+    |> OptionalClause.strip_brackets(profile)
+    |> Variables.neutralize("NULL", profile)
   end
 
   @doc false
@@ -826,7 +841,7 @@ defmodule Lotus.Source.Adapters.Ecto do
       when is_binary(sql) do
     idx = length(params) + 1
     placeholder = dialect.param_placeholder(idx, var_name, type)
-    new_sql = String.replace(sql, "{{#{var_name}}}", placeholder, global: false)
+    new_sql = bind_first_placeholder(sql, dialect, var_name, placeholder)
     {:ok, %{statement | body: new_sql, params: params ++ [value]}}
   end
 
@@ -849,8 +864,20 @@ defmodule Lotus.Source.Adapters.Ecto do
       |> Enum.with_index(start_idx)
       |> Enum.map_join(", ", fn {_value, i} -> dialect.param_placeholder(i, var_name, type) end)
 
-    new_sql = String.replace(sql, "{{#{var_name}}}", placeholders, global: false)
+    new_sql = bind_first_placeholder(sql, dialect, var_name, placeholders)
     {:ok, %{statement | body: new_sql, params: params ++ values}}
+  end
+
+  # Replaces the first `{{var_name}}` the engine would see (code or a string
+  # literal, never a comment or a quoted identifier). Leaves the text alone
+  # when there is none, as the params are appended either way.
+  defp bind_first_placeholder(sql, dialect, var_name, replacement) do
+    tokens = Tokenizer.tokenize(sql, lexical_profile(dialect))
+
+    case Tokenizer.replace_first_variable(tokens, var_name, replacement) do
+      {:ok, tokens} -> Tokenizer.to_string(tokens)
+      :error -> sql
+    end
   end
 
   # Ecto adapters validate statements by running EXPLAIN (via query_plan)
@@ -865,10 +892,7 @@ defmodule Lotus.Source.Adapters.Ecto do
         _opts
       )
       when is_binary(sql) do
-    neutralized =
-      sql
-      |> OptionalClause.strip_brackets()
-      |> Variables.neutralize("NULL")
+    neutralized = neutralize_template(sql, dialect)
 
     case dialect.query_plan(repo, %{statement | body: neutralized}, []) do
       {:ok, _plan} -> :ok
@@ -922,16 +946,11 @@ defmodule Lotus.Source.Adapters.Ecto do
   # `{{var}}` placeholders; `[[...]]` optional blocks are kept (inner
   # content retained so all clauses are visible to the planner).
   @doc false
-  def do_prepare_for_analysis(%Statement{body: sql} = statement) when is_binary(sql) do
-    prepared =
-      sql
-      |> OptionalClause.strip_brackets()
-      |> Variables.neutralize("NULL")
-
-    {:ok, %{statement | body: prepared, params: []}}
+  def do_prepare_for_analysis(dialect, %Statement{body: sql} = statement) when is_binary(sql) do
+    {:ok, %{statement | body: neutralize_template(sql, dialect), params: []}}
   end
 
-  def do_prepare_for_analysis(_statement), do: {:error, :non_text_statement}
+  def do_prepare_for_analysis(_dialect, _statement), do: {:error, :non_text_statement}
 
   # ---------------------------------------------------------------------------
   # Private helpers
@@ -944,40 +963,22 @@ defmodule Lotus.Source.Adapters.Ecto do
   # Sanitization helpers
   # ---------------------------------------------------------------------------
 
-  # Allow a single statement with an optional trailing semicolon.
-  # Reject any additional semicolon the tokenizer sees in code.
-  defp assert_single_statement(sql, profile) do
-    s = String.trim(sql)
-
-    s =
-      if String.ends_with?(s, ";") do
-        s
-        |> String.trim_trailing()
-        |> String.trim_trailing(";")
-        |> String.trim_trailing()
-      else
-        s
-      end
-
-    if s |> Tokenizer.tokenize(profile) |> semicolon_in_code?() do
+  # Allow a single statement with an optional trailing semicolon (already
+  # stripped by the caller). Reject any semicolon the tokenizer sees in code.
+  defp assert_single_statement(tokens) do
+    if tokens |> Tokenizer.code() |> Enum.any?(&String.contains?(&1, ";")) do
       {:error, "Only a single statement is allowed"}
     else
       :ok
     end
   end
 
-  defp semicolon_in_code?(tokens) do
-    Enum.any?(tokens, fn
-      {:code, code} -> String.contains?(code, ";")
-      {:block, inner} -> semicolon_in_code?(inner)
-      _ -> false
-    end)
-  end
+  defp assert_not_denied(_tokens, false = _read_only), do: :ok
 
-  defp assert_not_denied(_sql, false = _read_only), do: :ok
-
-  defp assert_not_denied(sql, _read_only) do
-    if Regex.match?(@deny, sql), do: {:error, "Only read-only queries are allowed"}, else: :ok
+  defp assert_not_denied(tokens, _read_only) do
+    if tokens |> Tokenizer.code() |> Enum.any?(&Regex.match?(@deny, &1)),
+      do: {:error, "Only read-only queries are allowed"},
+      else: :ok
   end
 
   # ---------------------------------------------------------------------------

@@ -132,8 +132,10 @@ defmodule Lotus.Storage.Query do
         ArgumentError -> Source.resolve!(nil, nil)
       end
 
+    profile = Adapter.lexical_profile(adapter)
+
     # Process optional clauses before transformation
-    processed_body = OptionalClause.process(raw_body, supplied_vars)
+    processed_body = OptionalClause.process(raw_body, supplied_vars, profile)
 
     # Rewrite the raw statement before variables are bound (dialect or
     # adapter-specific preprocessing — e.g., wildcard rewriting).
@@ -141,7 +143,7 @@ defmodule Lotus.Storage.Query do
     %Statement{body: transformed_body} = Adapter.transform_statement(adapter, transform_input)
 
     # Extract the variables in the order they appear in the statement body
-    vars_in_order = Lotus.Variables.extract_names(transformed_body)
+    vars_in_order = Lotus.Variables.extract_names(transformed_body, profile)
 
     variable_bindings = VariableResolver.resolve_variables(transformed_body)
 

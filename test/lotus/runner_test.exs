@@ -275,16 +275,23 @@ defmodule Lotus.RunnerTest do
   end
 
   describe "deny list validation" do
-    test "detects dangerous keywords in string literals" do
+    test "allows dangerous keywords inside string literals" do
       result =
         Runner.run_statement(@pg_adapter, Statement.new("SELECT 'DROP TABLE users' as msg"))
 
-      assert {:error, "Only read-only queries are allowed"} = result
+      assert {:ok, %{columns: ["msg"], rows: [["DROP TABLE users"]]}} = result
+    end
+
+    test "allows dangerous keywords inside comments" do
+      result =
+        Runner.run_statement(@pg_adapter, Statement.new("-- DROP TABLE users\nSELECT 1 as n"))
+
+      assert {:ok, %{columns: ["n"], rows: [[1]]}} = result
     end
 
     test "detects dangerous keywords case-insensitively" do
       result =
-        Runner.run_statement(@pg_adapter, Statement.new("SELECT 'InSeRt INTO users' as msg"))
+        Runner.run_statement(@pg_adapter, Statement.new("iNsErT INTO users (id) VALUES (1)"))
 
       assert {:error, "Only read-only queries are allowed"} = result
     end

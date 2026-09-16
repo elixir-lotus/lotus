@@ -580,4 +580,87 @@ defmodule Lotus.Source.Adapters.EctoTest do
       assert {:ok, _plan} = Adapter.query_plan(adapter, prepared, [])
     end
   end
+
+  describe "sanitize_query/3 deny list on code tokens" do
+    test "allows a column named after a denied keyword" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      assert :ok =
+               Adapter.sanitize_query(adapter, Statement.new(~s|SELECT "lock" FROM doors|), [])
+    end
+
+    test "allows a denied keyword inside a string literal" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      assert :ok =
+               Adapter.sanitize_query(
+                 adapter,
+                 Statement.new("SELECT * FROM audit WHERE action = 'DELETE'"),
+                 []
+               )
+    end
+
+    test "allows a denied keyword inside a comment" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      assert :ok =
+               Adapter.sanitize_query(
+                 adapter,
+                 Statement.new("-- last UPDATE by cron\nSELECT 1 /* DROP */"),
+                 []
+               )
+    end
+
+    test "still rejects a write statement" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      assert {:error, "Only read-only queries are allowed"} =
+               Adapter.sanitize_query(adapter, Statement.new("DELETE FROM users"), [])
+    end
+
+    test "rejects a write hidden inside an optional block" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      assert {:error, "Only read-only queries are allowed"} =
+               Adapter.sanitize_query(
+                 adapter,
+                 Statement.new(
+                   "SELECT * FROM t [[WHERE id IN (DELETE FROM users RETURNING id)]]"
+                 ),
+                 []
+               )
+    end
+  end
+
+  describe "substitute_variable/5 on tokens" do
+    test "binds the placeholder in code, not the one in a comment" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      assert {:ok, %Statement{body: body, params: [7]}} =
+               Adapter.substitute_variable(
+                 adapter,
+                 Statement.new("-- {{id}}\nSELECT {{id}}"),
+                 "id",
+                 7,
+                 :integer
+               )
+
+      assert body == "-- {{id}}\nSELECT $1::integer"
+    end
+
+    test "binds a list placeholder in code, not the one in a comment" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      assert {:ok, %Statement{body: body, params: [1, 2]}} =
+               Adapter.substitute_list_variable(
+                 adapter,
+                 Statement.new("-- {{ids}}\nWHERE id IN ({{ids}})"),
+                 "ids",
+                 [1, 2],
+                 :integer
+               )
+
+      assert body == "-- {{ids}}\nWHERE id IN ($1::integer, $2::integer)"
+    end
+  end
 end

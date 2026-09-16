@@ -4,14 +4,26 @@ defmodule Lotus.Variables do
 
   Variables use the `{{name}}` placeholder format and can appear in SQL
   queries, templates, or any other Lotus content type.
+
+  Placeholders are found with `Lotus.Query.Tokenizer`, so a `{{name}}`
+  inside a comment or a quoted identifier is not a variable. A placeholder
+  inside a string literal is, because the dialect transformer rewrites
+  literals such as `'%{{q}}%'` before binding. Every function takes an
+  optional `Lotus.Query.Tokenizer.Profile`; the default is ANSI SQL.
   """
+
+  alias Lotus.Query.Tokenizer
+  alias Lotus.Query.Tokenizer.Profile
 
   @variable_regex ~r/\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}/
 
+  @doc deprecated:
+         "The pipeline tokenizes with Lotus.Query.Tokenizer; this regex is kept for callers that match raw text."
   @doc """
   Returns the compiled regex for matching `{{variable}}` placeholders.
 
-  Captures the variable name (without braces) in group 1.
+  Captures the variable name (without braces) in group 1. The regex is not
+  aware of comments or literals; prefer `extract_names/2`.
 
   ## Examples
 
@@ -33,11 +45,13 @@ defmodule Lotus.Variables do
 
       iex> Lotus.Variables.extract_names("no variables here")
       []
+
+      iex> Lotus.Variables.extract_names("-- {{note}}\\nSELECT {{id}}")
+      ["id"]
   """
-  @spec extract_names(String.t()) :: [String.t()]
-  def extract_names(content) do
-    Regex.scan(@variable_regex, content)
-    |> Enum.map(fn [_, name] -> name end)
+  @spec extract_names(String.t(), Profile.t()) :: [String.t()]
+  def extract_names(content, %Profile{} = profile \\ Profile.for_language("sql")) do
+    content |> Tokenizer.tokenize(profile) |> Tokenizer.variables()
   end
 
   @doc """
@@ -55,8 +69,11 @@ defmodule Lotus.Variables do
       iex> Lotus.Variables.neutralize("Hello {{name}}", "")
       "Hello "
   """
-  @spec neutralize(String.t(), String.t()) :: String.t()
-  def neutralize(content, replacement) do
-    Regex.replace(@variable_regex, content, replacement)
+  @spec neutralize(String.t(), String.t(), Profile.t()) :: String.t()
+  def neutralize(content, replacement, %Profile{} = profile \\ Profile.for_language("sql")) do
+    content
+    |> Tokenizer.tokenize(profile)
+    |> Tokenizer.replace_variables(fn _name -> replacement end)
+    |> Tokenizer.to_string()
   end
 end
