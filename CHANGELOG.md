@@ -4,6 +4,20 @@
 
 ### Added
 
+- **Ecto sources can point at a repo started at runtime.**
+  `Lotus.Source.Adapters.Ecto.wrap/2` and the per-dialect adapters accept
+  `%{repo: MyApp.Repo, dynamic: target}` next to the bare repo module, where
+  `target` is what `Ecto.Repo.put_dynamic_repo/1` takes, a pid or an atom,
+  or a `{:via, _, _}` or `{:global, _}` name resolved on every call. Every
+  callback that touches the repo routes through the new
+  `Lotus.Source.Adapters.Ecto.with_repo/2`, which sets the dynamic repo for
+  the duration of the call and restores the one the calling process had.
+  `can_handle?/1` claims the map form for the adapter that owns the repo
+  module's Ecto adapter, so the map also works as a `data_sources` entry.
+  Hosts with static repos are unchanged. The source adapters guide shows a
+  per-source repo started through the source lifecycle without overriding a
+  single query callback.
+
 - **The cache contract says what reaches the other nodes, and invalidations
   now do.** `Lotus.Cache.Adapter` documents the reach of every callback and
   gains an optional `scope/1` callback that says, for `delete/1` and for
