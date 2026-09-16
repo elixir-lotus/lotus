@@ -46,3 +46,37 @@ apps that go through `Lotus.Source.Adapter` callbacks (`apply_filters/3`,
 ```
 
 The delegates are removed in v2.0.
+
+---
+
+## 2. `Lotus.Preflight.Relations` no longer stores state in the process dictionary
+
+`Lotus.Preflight.Relations.put/1`, `get/0`, `take/0` and `clear/0` are
+deprecated and removed in v2.0. They kept a preflight outcome in the process
+dictionary, which is invisible to supervision, leaks across queries in a
+reused process and cannot cross a `Task` boundary. `Lotus.Runner` carries
+the outcome as a value and has not touched the process dictionary since the
+outcome started travelling through the pipeline.
+
+Who is affected: a host or middleware that stored an outcome itself and read
+it back later. Nothing in `lotus_web` does.
+
+Where to get the outcome instead:
+
+- **In middleware**, read the `:relations` key of the `:before_execute` or
+  `:after_query` payload. Both carry the same value: a `{schema, table}`
+  list, `{:unrestricted, reason}` or `{:skipped, reason}`.
+- **Anywhere else**, call `Lotus.Preflight.analyze/4` with the adapter and
+  the statement and keep the result in your own state.
+
+```diff
+   def call(:before_execute, payload, _opts) do
+-    relations = Lotus.Preflight.Relations.get()
++    relations = payload.relations
+     gate(relations, payload)
+   end
+```
+
+`Lotus.Preflight.Relations.to_list/1` and the `relation/0` and `outcome/0`
+types stay.
+
