@@ -107,11 +107,23 @@ defmodule Lotus.Cache do
     end
   end
 
+  @doc """
+  Removes one entry.
+
+  When the adapter's delete is node-local the call is relayed to the other
+  nodes of the cluster. See `scope/1`.
+  """
   @spec delete(key) :: :ok | {:error, term}
   def delete(key) do
     case adapter() do
-      {:ok, adapter} -> adapter.delete(ns(key))
-      _ -> :ok
+      {:ok, adapter} ->
+        namespaced = ns(key)
+        result = adapter.delete(namespaced)
+        relay(adapter, {:delete, namespaced})
+        result
+
+      _ ->
+        :ok
     end
   end
 
@@ -134,14 +146,77 @@ defmodule Lotus.Cache do
     invalidate_tags(["scope:#{KeyBuilder.scope_digest(scope)}"])
   end
 
+  @doc """
+  Invalidates every entry that carries one of `tags`.
+
+  When the adapter's tag bookkeeping is node-local the call is relayed to
+  the other nodes of the cluster. See `scope/1`.
+  """
   @spec invalidate_tags([binary()]) :: :ok | {:error, term}
   def invalidate_tags(tags) when is_list(tags) do
     with {:ok, adapter} <- adapter(),
          true <- function_exported?(adapter, :invalidate_tags, 1) do
-      adapter.invalidate_tags(tags)
+      result = adapter.invalidate_tags(tags)
+      relay(adapter, {:invalidate_tags, tags})
+      result
     else
       _ -> :ok
     end
+  end
+
+  @doc """
+  How far one `delete/1` or `invalidate_tags/1` on the configured adapter
+  reaches.
+
+  `:node` means the call only touches the calling node, so it is relayed
+  to the other nodes over `Lotus.Notifier` and applied there by
+  `Lotus.Cache.Relay`. `:cluster` means one call already reaches every
+  node and nothing is relayed. An adapter that does not implement
+  `c:Lotus.Cache.Adapter.scope/1` counts as `:node` for both. Without a
+  configured adapter the answer is `:cluster`, because there is nothing
+  to relay.
+  """
+  @spec scope(Lotus.Cache.Adapter.relayed_operation()) :: :node | :cluster
+  def scope(operation) when operation in [:delete, :invalidate_tags] do
+    case adapter() do
+      {:ok, adapter} -> adapter_scope(adapter, operation)
+      _ -> :cluster
+    end
+  end
+
+  @doc false
+  @spec apply_relayed(term()) :: :ok
+  def apply_relayed(payload) do
+    case adapter() do
+      {:ok, adapter} -> apply_relayed(adapter, payload)
+      _ -> :ok
+    end
+  end
+
+  defp apply_relayed(adapter, {:delete, key}) do
+    _ = adapter.delete(key)
+    :ok
+  end
+
+  defp apply_relayed(adapter, {:invalidate_tags, tags}) do
+    if function_exported?(adapter, :invalidate_tags, 1), do: adapter.invalidate_tags(tags)
+    :ok
+  end
+
+  defp apply_relayed(_adapter, _payload), do: :ok
+
+  defp relay(adapter, {operation, _argument} = payload) do
+    if adapter_scope(adapter, operation) == :node do
+      Lotus.Notifier.notify(:cache, payload, except: [node()])
+    end
+
+    :ok
+  end
+
+  defp adapter_scope(adapter, operation) do
+    if Code.ensure_loaded?(adapter) and function_exported?(adapter, :scope, 1),
+      do: adapter.scope(operation),
+      else: :node
   end
 
   defp ns(key), do: "#{namespace()}:#{key}"

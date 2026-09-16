@@ -4,6 +4,25 @@
 
 ### Added
 
+- **The cache contract says what reaches the other nodes, and invalidations
+  now do.** `Lotus.Cache.Adapter` documents the reach of every callback and
+  gains an optional `scope/1` callback that says, for `delete/1` and for
+  `invalidate_tags/1` separately, whether one call reaches the calling
+  node only (`:node`) or every node (`:cluster`). `Lotus.Notifier` relays
+  notifications between nodes over OTP process groups (`:pg` in the
+  `kernel` application), starts first under `Lotus.Supervisor`, and offers
+  `listen/1`, `unlisten/1`, `notify/3` and `listeners/1`. When an operation
+  is node-local, `Lotus.Cache.delete/1` and `Lotus.Cache.invalidate_tags/1`
+  apply locally and notify the `:cache` topic, and `Lotus.Cache.Relay`
+  applies the same call on every other node in its own task, so `Lotus.invalidate_scope/1`
+  and `Lotus.Storage.SchemaCache.invalidate/3` no longer leave stale entries
+  on the nodes that did not run them. Values are never relayed.
+  `Lotus.Source.reconcile/0` and `Lotus.Source.invalidate/1` relay on the
+  `:sources` topic the same way, so a source added, edited or removed on
+  one node starts or stops its processes everywhere. A host listens on
+  its own topics for the state it keeps per node. The new deployment guide
+  lists what is shared, what is per node and what is relayed.
+
 - **Adapters can own supervised processes per source and per module.**
   `Lotus.Source.Adapter` gained four optional callbacks: `shared_children/0`
   for what an adapter needs once (a Finch instance), `source_children/2`
@@ -141,6 +160,26 @@
   removed in v2.0; the upgrade guide for v2.0 lists the renames.
 
 ### Fixed
+
+- **Lotus boots with the Cachex adapter, and tagged writes work under a
+  router.** `Lotus.Supervisor` always started `Lotus.Cache.ETS`, whose
+  tables carry the same names as the Cachex caches, so configuring
+  `adapter: Lotus.Cache.Cachex` failed at boot with an `Eternal` already
+  started error. ETS now starts only when no adapter is configured. Under
+  `Cachex.Router.Ring`, the default, tag bookkeeping ran multi-key
+  transactions that Cachex rejects as `:cross_slot` once keys hash to
+  different nodes, and passed functions that ran on the node owning the
+  key. `Lotus.Cache.Cachex` now keeps tag bookkeeping in a cache that is
+  always local to the writing node, records each key once with its expiry,
+  prunes expired keys, lets a tag's record expire with its longest-lived
+  entry, drops the record when it is used, and deletes each tagged key
+  with its own routed call. The ETS adapter's janitor now sweeps expired
+  tag rows along with expired entries, so tag bookkeeping in both adapters
+  stops growing for the life of the node. A cache map without an
+  `:adapter` key no longer crashes `Lotus.Supervisor` at boot. `get/1` and `put/4` return a miss or an error instead of
+  raising when a routed call fails. `cachex_opts` that leave out the
+  router silently fell back to a node-local cache; the adapter docs now
+  say so and show how to keep the ring.
 
 - **Variable bindings resolve qualified, quoted and CTE names.**
   `Lotus.Storage.VariableResolver` guesses which column a `{{var}}` is

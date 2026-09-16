@@ -585,6 +585,7 @@ The same pattern works for visibility resolvers — swap `:source_resolver` for 
 - **Preserve resolver contracts.** The defaults raise on unconfigured sources via `get_source!/1` and `default_source/0`; follow the same convention so callers do not need to special-case errors per resolver.
 - **Reuse the default Ecto adapter where possible.** `Lotus.Source.Adapters.Ecto.wrap/2` turns an `Ecto.Repo` module into an `%Adapter{}` — use it inside your custom resolver instead of hand-rolling a new adapter. Only write a fully custom `Lotus.Source.Adapter` implementation when your source is not backed by Ecto.
 - **Remember to call `Lotus.Config.reload!/0` after changing resolvers at runtime.** The validated configuration is cached in `:persistent_term`, so changes to `:source_resolver` or `:visibility_resolver` only take effect after a reload. This is usually only relevant in tests.
+- **Tell the other nodes when a resolver's state changes.** A resolver that keeps sources or rules in memory on each node holds them on the node that wrote them. `Lotus.Source.invalidate/1` and `Lotus.Source.reconcile/0` already relay to the other nodes over `Lotus.Notifier`. A visibility resolver that caches compiled matchers listens on a topic of its own and the code that writes the rules notifies it; the [Deployment guide](deployment.md) has the example.
 
 ## See Also
 

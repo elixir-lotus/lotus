@@ -95,4 +95,8 @@ jobs:
         env:
           MYSQL_URL: mysql://root:mysql@localhost:${{job.services.mysql.ports[3306]}}/lotus_test
 
+      - run: epmd -daemon && mix test --only cluster
+        env:
+          MYSQL_URL: mysql://root:mysql@localhost:${{job.services.mysql.ports[3306]}}/lotus_test
+
       - run: mix dialyzer

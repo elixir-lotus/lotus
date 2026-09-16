@@ -4,7 +4,22 @@ defmodule Lotus.Cache.ETS do
 
   This is the default cache adapter if none is specified.
 
-  If you want a distributed cache, consider using `Lotus.Cache.Cachex`.
+  ## In a cluster
+
+  Every node keeps its own entries and its own tag bookkeeping. `scope/1`
+  returns `:node` for both relayed operations, so `Lotus.Cache` relays each
+  `delete/1` and `invalidate_tags/1` to the other nodes over
+  `Lotus.Notifier`, and each node drops its own copies. Values are not
+  shared: two nodes that run the same query each fill their own entry. Use
+  `Lotus.Cache.Cachex` with a router when one entry should serve the whole
+  cluster.
+
+  ## Tag bookkeeping
+
+  Each tag row carries the expiry of the entry it points at. The janitor
+  that sweeps expired entries every 30 seconds sweeps expired tag rows the
+  same way, so a tag that is never invalidated does not grow for the life
+  of the node.
   """
 
   use GenServer
@@ -41,7 +56,9 @@ defmodule Lotus.Cache.ETS do
   @impl GenServer
   def handle_info(:run_janitor, state) do
     now = now_ms()
-    :ets.select_delete(@table, [{{:"$1", :"$2", :"$3"}, [{:"=<", :"$3", now}], [true]}])
+    expired = [{{:"$1", :"$2", :"$3"}, [{:"=<", :"$3", now}], [true]}]
+    :ets.select_delete(@table, expired)
+    :ets.select_delete(@tag_table, expired)
     schedule_janitor()
     {:noreply, state}
   end
@@ -56,6 +73,9 @@ defmodule Lotus.Cache.ETS do
   def spec_config do
     [{Lotus.Cache.ETS, []}]
   end
+
+  @impl Lotus.Cache.Adapter
+  def scope(_operation), do: :node
 
   @impl Lotus.Cache.Adapter
   def get(key) do
@@ -85,7 +105,7 @@ defmodule Lotus.Cache.ETS do
   defp do_put(key, bin, ttl_ms, opts) do
     expires_at = now_ms() + ttl_ms
     :ets.insert(@table, {key, bin, expires_at})
-    for t <- Keyword.get(opts, :tags, []), do: :ets.insert(@tag_table, {t, key})
+    for t <- Keyword.get(opts, :tags, []), do: :ets.insert(@tag_table, {t, key, expires_at})
     :ok
   end
 
@@ -99,7 +119,9 @@ defmodule Lotus.Cache.ETS do
   def touch(key, ttl_ms) do
     case :ets.lookup(@table, key) do
       [{^key, v, _old}] ->
-        :ets.insert(@table, {key, v, now_ms() + ttl_ms})
+        expires_at = now_ms() + ttl_ms
+        :ets.insert(@table, {key, v, expires_at})
+        extend_tag_rows(key, expires_at)
         :ok
 
       _ ->
@@ -142,10 +164,19 @@ defmodule Lotus.Cache.ETS do
   @impl Lotus.Cache.Adapter
   def invalidate_tags(tags) do
     for tag <- tags do
-      for {^tag, key} <- :ets.lookup(@tag_table, tag) do
+      for {^tag, key, _expires_at} = row <- :ets.lookup(@tag_table, tag) do
         :ets.delete(@table, key)
-        :ets.delete_object(@tag_table, {tag, key})
+        :ets.delete_object(@tag_table, row)
       end
+    end
+
+    :ok
+  end
+
+  defp extend_tag_rows(key, expires_at) do
+    for {tag, ^key, _old} = row <- :ets.select(@tag_table, [{{:"$1", key, :"$3"}, [], [:"$_"]}]) do
+      :ets.delete_object(@tag_table, row)
+      :ets.insert(@tag_table, {tag, key, expires_at})
     end
 
     :ok

@@ -129,7 +129,7 @@ defmodule Lotus.MixProject do
         Telemetry: [Lotus.Telemetry],
         Caching: [Lotus.Cache, ~r/Lotus\.Cache\..+/],
         "Database Migrations": [Lotus.Migration, Lotus.Migrations, ~r/Lotus\.Migrations\..+/],
-        "OTP Application": [Lotus.Application, Lotus.Supervisor],
+        "OTP Application": [Lotus.Application, Lotus.Supervisor, Lotus.Notifier],
         AI: [
           Lotus.AI,
           Lotus.AI.QueryGenerator,
@@ -163,6 +163,7 @@ defmodule Lotus.MixProject do
       "guides/source-adapters.md",
       "guides/custom-resolvers.md",
       "guides/caching.md",
+      "guides/deployment.md",
       "guides/telemetry.md",
       "guides/upgrading-to-v1.md",
       "guides/upgrading-to-v2.md",

@@ -49,7 +49,7 @@ config :lotus,
 
 Lotus is an OTP application: as long as `:lotus` is in your `mix.exs` dependencies, its supervisor starts automatically with your app and boots the cache backend declared under `config :lotus, :cache`. No supervision-tree wiring is required on your end.
 
-The `Lotus.Cache.ETS` GenServer is always started by the supervisor to ensure cache tables are available. If you configure a different cache adapter (e.g. `Lotus.Cache.Cachex`), it is started in addition to the ETS tables.
+With no adapter configured, the supervisor still starts the `Lotus.Cache.ETS` GenServer so its tables exist. With an adapter configured, only that adapter's processes start: `Lotus.Cache.Cachex` names its tables the same as ETS, so the two never run side by side.
 
 > **Note:** If you accidentally include `Lotus` as a child in your own supervision tree, the double-start is handled gracefully — `Lotus.Supervisor` returns `{:ok, pid}` for an already-running instance.
 
@@ -71,7 +71,7 @@ Once configured and started, caching works automatically:
 
 Lotus ships with two cache adapters:
 
-1. `Lotus.Cache.ETS` — local-only in-memory caching using ETS, implemented as a GenServer with automatic expiration cleanup
+1. `Lotus.Cache.ETS` — per-node in-memory caching using ETS, implemented as a GenServer with automatic expiration cleanup; invalidations are relayed to the other nodes of a cluster
 2. `Lotus.Cache.Cachex` — distributed caching using [Cachex](https://hexdocs.pm/cachex)
 
 #### ETS Adapter
@@ -114,6 +114,12 @@ config :lotus,
 ```elixir
 [router: router(module: Cachex.Router.Ring, options: [monitor: true])]
 ```
+
+Any `cachex_opts` you pass replace that default entirely. A host that sets `limit:` alone gets Cachex's own default router, `Cachex.Router.Local`, and a node-local cache. Add the router back to keep distributed mode; the [Deployment guide](deployment.md) has the full example and explains how tags and invalidation behave under a router.
+
+### Caching in a cluster
+
+`Lotus.Cache.ETS` keeps entries per node. `Lotus.Cache.Cachex` with a router spreads them over the nodes. In both cases, `Lotus.Cache.invalidate_tags/1`, `Lotus.invalidate_scope/1`, `Lotus.Cache.delete/1` and `Lotus.Storage.SchemaCache.invalidate/3` take effect on every node: the calling node applies the change and relays it over `Lotus.Notifier`, and `Lotus.Cache.Relay` applies it on the others. Values are never relayed. `Lotus.Cache.scope/1` tells you, per operation, whether the configured adapter needs that relay (`:node`) or reaches every node by itself (`:cluster`). Tag bookkeeping in both adapters drops a key once its entry has expired, so tags do not grow without bound. See the [Deployment guide](deployment.md) for what else is per node.
 
 ### Cache Profiles
 

@@ -22,8 +22,10 @@ defmodule Lotus.Source.Supervisor do
       of that module and stop with the last one.
 
   Boot runs the first reconcile. A resolver that changes its sources at
-  runtime calls `Lotus.Source.reconcile/0` after every change. The call is
-  node-local: in a cluster, every node reconciles on its own.
+  runtime calls `Lotus.Source.reconcile/0` after every change. That call
+  reconciles the local node and notifies the other nodes over
+  `Lotus.Notifier`, so each of them reconciles against its own view of the
+  resolver. `reconcile/0` on this module is the node-local half.
 
   A resolver that is not ready at boot, because it reads a database whose
   repo starts after `:lotus`, makes the boot reconcile log a warning and
@@ -35,7 +37,8 @@ defmodule Lotus.Source.Supervisor do
   reconciles while the source stays listed by the resolver. `resume/1`
   starts them again. This is how an idle policy stops a source it still
   knows about without removing it. A suspended name that disappears from the
-  resolver is forgotten.
+  resolver is forgotten. Both calls are node-local and are not relayed:
+  whether a source is idle is a per-node fact.
 
   ## Failures
 

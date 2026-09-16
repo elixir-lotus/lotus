@@ -1045,8 +1045,10 @@ resolver and diffs it against what is running: it starts what is new, stops
 what is gone, and restarts a source whose adapter module or state changed.
 Boot runs the first reconcile, so boot and runtime are the same code path.
 A resolver that changes its sources at runtime calls `Lotus.Source.reconcile/0`
-after every change, right after `Lotus.Source.invalidate/1`. The call is
-node-local: in a cluster, every node runs it. A source whose children fail
+after every change, right after `Lotus.Source.invalidate/1`. Both calls apply
+to the node they run on and are relayed over `Lotus.Notifier` to the other
+nodes of a cluster, each of which reads the resolver on its own; see the
+[Deployment guide](deployment.md). A source whose children fail
 to start is logged, reported under `:failed`, and tried again on the next
 reconcile; the other sources are unaffected.
 

@@ -22,6 +22,13 @@ defmodule Lotus.Supervisor do
   In both cases, opts passed directly to `start_link/1` take precedence over
   application environment config; the `Application.start/2` path simply does
   not pass any opts through.
+
+  ## Children
+
+  In start order: `Lotus.Notifier`, the task supervisor, the cache adapter's
+  children (`Lotus.Cache.ETS` when no adapter is configured),
+  `Lotus.Cache.Relay`, and `Lotus.Source.Supervisor`. The notifier
+  starts first because the relay and the source reconciler listen on it.
   """
 
   use Supervisor
@@ -48,27 +55,28 @@ defmodule Lotus.Supervisor do
     cache_children =
       case cache_conf do
         %{adapter: adapter} -> adapter.spec_config()
-        nil -> []
+        _no_adapter -> []
       end
 
     instance_name = Keyword.get(opts, :name) || Keyword.get(opts, :supervisor_name, Lotus)
     task_sup_name = task_supervisor_name(instance_name)
 
-    # Always start ETS so cache tables exist regardless of boot order.
-    # Skip if the configured cache adapter already includes it.
-    ets_child =
-      if Enum.any?(cache_children, fn child ->
-           Supervisor.child_spec(child, []).id == Lotus.Cache.ETS
-         end),
-         do: [],
-         else: [{Lotus.Cache.ETS, []}]
-
     children =
-      [{Task.Supervisor, name: task_sup_name}] ++
-        ets_child ++ cache_children ++ [Lotus.Source.Supervisor]
+      [Lotus.Notifier, {Task.Supervisor, name: task_sup_name}] ++
+        default_ets_child(cache_conf) ++
+        cache_children ++
+        [{Lotus.Cache.Relay, task_supervisor: task_sup_name}, Lotus.Source.Supervisor]
 
     Supervisor.init(children, strategy: :one_for_one)
   end
+
+  # With no adapter configured the ETS tables still start, so a host that
+  # points `Lotus.Config.cache_adapter/0` at ETS later, or a test that stubs
+  # it, finds them. A configured adapter starts what it needs itself, and
+  # `Lotus.Cache.Cachex` names its tables the same as ETS, so ETS must not
+  # start next to it.
+  defp default_ets_child(%{adapter: _adapter}), do: []
+  defp default_ets_child(_no_adapter), do: [{Lotus.Cache.ETS, []}]
 
   @doc false
   def child_spec(opts) do

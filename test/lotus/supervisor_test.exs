@@ -37,9 +37,66 @@ defmodule Lotus.SupervisorTest do
 
       child_ids = Enum.map(children, fn child -> Supervisor.child_spec(child, []).id end)
 
-      assert Lotus.Cache.ETS in child_ids
       assert {Cachex, :lotus_cache} in child_ids
       assert {Cachex, :lotus_cache_tags} in child_ids
+    end
+
+    test "does not start ETS next to the Cachex adapter, which owns the same table names" do
+      opts = [
+        supervisor_name: :"lotus_sup_cachex_only_#{System.unique_integer([:positive])}",
+        cache: %{
+          adapter: Lotus.Cache.Cachex,
+          cachex_opts: [router: router(module: Cachex.Router.Local)]
+        }
+      ]
+
+      {:ok, {_flags, children}} = Lotus.Supervisor.init(opts)
+
+      child_ids = Enum.map(children, fn child -> Supervisor.child_spec(child, []).id end)
+
+      refute Lotus.Cache.ETS in child_ids
+    end
+
+    test "starts the cluster channel first and the relay after the cache" do
+      opts = [
+        supervisor_name: :"lotus_sup_cluster_#{System.unique_integer([:positive])}",
+        cache: %{adapter: Lotus.Cache.ETS}
+      ]
+
+      {:ok, {_flags, children}} = Lotus.Supervisor.init(opts)
+
+      child_ids = Enum.map(children, fn child -> Supervisor.child_spec(child, []).id end)
+
+      assert List.first(child_ids) == Lotus.Notifier
+
+      cache_index = Enum.find_index(child_ids, &(&1 == Lotus.Cache.ETS))
+      relay_index = Enum.find_index(child_ids, &(&1 == Lotus.Cache.Relay))
+
+      assert relay_index > cache_index
+    end
+
+    test "starts ETS for a cache map without an adapter instead of crashing" do
+      opts = [
+        supervisor_name: :"lotus_sup_noadapter_#{System.unique_integer([:positive])}",
+        cache: %{namespace: "x"}
+      ]
+
+      {:ok, {_flags, children}} = Lotus.Supervisor.init(opts)
+
+      child_ids = Enum.map(children, fn child -> Supervisor.child_spec(child, []).id end)
+
+      assert Lotus.Cache.ETS in child_ids
+    end
+
+    test "hands the relay the instance's task supervisor" do
+      name = :"lotus_sup_relay_#{System.unique_integer([:positive])}"
+
+      {:ok, {_flags, children}} = Lotus.Supervisor.init(supervisor_name: name, cache: nil)
+
+      relay = Enum.find(children, &(Supervisor.child_spec(&1, []).id == Lotus.Cache.Relay))
+
+      task_sup = Lotus.Supervisor.task_supervisor_name(name)
+      assert %{start: {Lotus.Cache.Relay, :start_link, [[task_supervisor: ^task_sup]]}} = relay
     end
 
     test "starts ETS when no cache config is provided" do

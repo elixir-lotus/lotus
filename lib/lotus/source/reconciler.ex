@@ -43,6 +43,7 @@ defmodule Lotus.Source.Reconciler do
 
   @impl true
   def init(_opts) do
+    Lotus.Notifier.listen(:sources)
     {:ok, %__MODULE__{}, {:continue, :boot}}
   end
 
@@ -81,6 +82,30 @@ defmodule Lotus.Source.Reconciler do
   def handle_call({:running?, name}, _from, state) do
     {:reply, Map.has_key?(state.running, name), state}
   end
+
+  @impl true
+  def handle_info({:lotus_notification, :sources, :reconcile}, state) do
+    case do_reconcile(state) do
+      {{:ok, report}, state} ->
+        Logger.debug("Lotus reconciled its sources on a cluster notification: #{inspect(report)}")
+
+        {:noreply, state}
+
+      {{:error, reason}, state} ->
+        Logger.warning(
+          "Lotus could not reconcile its sources on a cluster notification: #{inspect(reason)}"
+        )
+
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:lotus_notification, :sources, {:invalidate, name}}, state) do
+    Lotus.Source.invalidate_locally(name)
+    {:noreply, state}
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
 
   defp do_reconcile(state) do
     case list_sources() do

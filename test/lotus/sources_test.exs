@@ -145,6 +145,24 @@ defmodule Lotus.SourcesTest do
 
       assert :ok = Source.invalidate("acme")
     end
+
+    test "does not notify listeners on this node, which already applied the drop" do
+      stub(Config, :source_resolver, fn -> InvalidatingResolver end)
+      :ok = Lotus.Notifier.listen(:sources)
+      on_exit(fn -> Lotus.Notifier.unlisten(:sources) end)
+
+      assert :ok = Source.invalidate("acme")
+
+      assert_received {:invalidated, "acme"}
+      refute_receive {:lotus_notification, :sources, {:invalidate, "acme"}}
+    end
+
+    test "invalidate_locally/1 drops without notifying anyone" do
+      stub(Config, :source_resolver, fn -> InvalidatingResolver end)
+
+      assert :ok = Source.invalidate_locally("acme")
+      assert_received {:invalidated, "acme"}
+    end
   end
 
   describe "name_from_module!/1" do

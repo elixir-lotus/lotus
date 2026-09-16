@@ -33,4 +33,4 @@ Mimic.copy(Lotus.Source.Adapter)
 Mimic.copy(Lotus.Visibility)
 Mimic.copy(ReqLLM)
 
-ExUnit.start(assert_receive_timeout: 500, refute_receive_timeout: 50, exclude: [:skip])
+ExUnit.start(assert_receive_timeout: 500, refute_receive_timeout: 50, exclude: [:skip, :cluster])
