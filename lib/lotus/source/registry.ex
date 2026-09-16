@@ -43,6 +43,10 @@ defmodule Lotus.Source.Registry do
   @doc """
   Returns the pid registered through `via/2`, or `nil` when the process is
   not running.
+
+  `Registry` removes a key a moment after its owner exits, so a lookup right
+  after a stop can still hold the dead pid. This function checks the pid is
+  alive and returns `nil` otherwise.
   """
   @spec whereis(module(), String.t()) :: pid() | nil
   def whereis(module, name) when is_atom(module), do: lookup({module, name})
@@ -56,7 +60,7 @@ defmodule Lotus.Source.Registry do
 
   defp lookup(key) do
     case Registry.lookup(@registry, key) do
-      [{pid, _value}] -> pid
+      [{pid, _value}] -> if Process.alive?(pid), do: pid, else: nil
       [] -> nil
     end
   end

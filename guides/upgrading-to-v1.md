@@ -367,6 +367,12 @@ If you were reaching into these directly, two options:
 2. Update to the new module paths if you specifically want the Ecto-internal
    helpers.
 
+Later 1.x releases moved the helpers back to `Lotus.SQL.*`, because none of
+them depends on Ecto. The Ecto paths in the table remain as deprecated
+delegates until v2.0. If you upgrade straight to a release that has
+`Lotus.SQL.*`, alias those names and skip the Ecto paths; see [Upgrading to
+Lotus v2.0](upgrading-to-v2.md).
+
 One elevation in the other direction:
 `Lotus.SQL.OptionalClause` → `Lotus.Query.OptionalClause`. The `[[ ... ]]` /
 `{{var}}` template syntax is language-agnostic and sits in the universal

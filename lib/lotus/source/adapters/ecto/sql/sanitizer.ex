@@ -1,16 +1,13 @@
 defmodule Lotus.Source.Adapters.Ecto.SQL.Sanitizer do
+  @moduledoc deprecated: "Use `Lotus.SQL.Sanitizer` instead."
   @moduledoc """
-  Shared helpers for cleaning SQL strings before further processing.
+  Deprecated location of `Lotus.SQL.Sanitizer`.
+
+  The helper does not depend on Ecto, so it moved to the neutral `Lotus.SQL`
+  namespace where any SQL engine can reuse it. This module delegates to the
+  new one and will be removed in v2.0.
   """
 
-  @doc """
-  Strips a trailing semicolon (and surrounding whitespace) from a SQL string.
-
-  This is used by injectors that wrap queries in CTEs, where an embedded
-  trailing semicolon would be misdetected as a multi-statement query.
-  """
-  @spec strip_trailing_semicolon(String.t()) :: String.t()
-  def strip_trailing_semicolon(sql) do
-    sql |> String.trim_trailing() |> String.trim_trailing(";") |> String.trim_trailing()
-  end
+  @deprecated "Use Lotus.SQL.Sanitizer.strip_trailing_semicolon/1 instead"
+  defdelegate strip_trailing_semicolon(sql), to: Lotus.SQL.Sanitizer
 end

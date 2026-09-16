@@ -41,8 +41,8 @@ defmodule Lotus.Source.Adapters.Ecto do
   alias Lotus.Query.Tokenizer.Profile
   alias Lotus.Source.Adapter
   alias Lotus.Source.Adapters.Ecto.Dialects
-  alias Lotus.Source.Adapters.Ecto.SQL.Identifier
-  alias Lotus.Source.Adapters.Ecto.SQL.Sanitizer
+  alias Lotus.SQL.Identifier
+  alias Lotus.SQL.Sanitizer
   alias Lotus.Variables
 
   @default_dialect Dialects.Default
@@ -918,7 +918,7 @@ defmodule Lotus.Source.Adapters.Ecto do
   end
 
   # Ecto-backed adapters implement all `Lotus.Query.Filter` operators via
-  # `Lotus.Source.Adapters.Ecto.SQL.FilterInjector`. Dialects may override to declare a narrower
+  # `Lotus.SQL.FilterInjector`. Dialects may override to declare a narrower
   # set (e.g. if an engine lacks regex LIKE support).
   @doc false
   def do_supported_filter_operators, do: Filter.operators()

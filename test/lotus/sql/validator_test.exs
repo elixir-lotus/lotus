@@ -1,7 +1,7 @@
-defmodule Lotus.Source.Adapters.Ecto.SQL.ValidatorTest do
+defmodule Lotus.SQL.ValidatorTest do
   use Lotus.Case, async: false
 
-  alias Lotus.Source.Adapters.Ecto.SQL.Validator
+  alias Lotus.SQL.Validator
 
   describe "validate/2 with postgres" do
     test "accepts PostgreSQL-specific ILIKE syntax" do

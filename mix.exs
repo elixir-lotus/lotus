@@ -117,7 +117,8 @@ defmodule Lotus.MixProject do
           Lotus.Query.Statement,
           Lotus.Source.Adapters.Ecto,
           Lotus.Source.Adapters.Ecto.Dialect,
-          ~r/Lotus\.Source\.Adapters\..+/
+          ~r/Lotus\.Source\.Adapters\..+/,
+          ~r/Lotus\.SQL\..+/
         ],
         "Schema Introspection": [
           Lotus.Schema,
@@ -164,6 +165,7 @@ defmodule Lotus.MixProject do
       "guides/caching.md",
       "guides/telemetry.md",
       "guides/upgrading-to-v1.md",
+      "guides/upgrading-to-v2.md",
       "guides/contributing.md"
     ]
   end
