@@ -1,5 +1,7 @@
 if Code.ensure_loaded?(Cachex) do
   defmodule Lotus.Cache.Cachex do
+    @prune_interval_ms :timer.seconds(30)
+
     @moduledoc """
     A Cachex-based, local or distributed, in-memory cache adapter for Lotus.
 
@@ -37,11 +39,19 @@ if Code.ensure_loaded?(Cachex) do
     node that owns the key. This adapter therefore keeps its tag bookkeeping
     on the node that wrote the entry, in a second cache that always uses
     `Cachex.Router.Local`, and `invalidate_tags/1` deletes each key with its
-    own routed call. Because that bookkeeping is per node, `scope/0`
-    returns `:node` and `Lotus.Cache` relays every `delete/1` and
+    own routed call. Because that bookkeeping is per node,
+    `scope(:invalidate_tags)` is `:node` and `Lotus.Cache` relays every
     `invalidate_tags/1` to the other nodes over `Lotus.Notifier`, where each
-    node drops the keys it tagged. `get_or_store/4` runs the fetch function
-    on the caller's node and writes the result with a routed `put/4`.
+    node drops the keys it tagged. A single-key `delete/1` is routed by
+    Cachex to the node that owns the key, so `scope(:delete)` is `:cluster`
+    and it is not relayed. `get_or_store/4` runs the fetch function on the
+    caller's node and writes the result with a routed `put/4`.
+
+    A tag's record holds each key with the expiry of the entry it points
+    at. Expired keys are pruned from the record at most every
+    #{div(@prune_interval_ms, 1000)} seconds on write, and the record itself
+    expires with the longest-lived entry it holds, so a tag that is never
+    invalidated does not grow for the life of the node.
     """
 
     use Lotus.Cache.Adapter
@@ -76,7 +86,8 @@ if Code.ensure_loaded?(Cachex) do
     end
 
     @impl Lotus.Cache.Adapter
-    def scope, do: :node
+    def scope(:delete), do: :cluster
+    def scope(:invalidate_tags), do: :node
 
     @impl Lotus.Cache.Adapter
     def get(key) do
@@ -96,7 +107,7 @@ if Code.ensure_loaded?(Cachex) do
       if byte_size(encoded) <= max_bytes do
         case Cachex.put(@cache_name, key, encoded, expire: ttl_ms) do
           {:ok, true} ->
-            store_tags(Keyword.get(opts, :tags, []), key)
+            store_tags(Keyword.get(opts, :tags, []), key, ttl_ms)
             :ok
 
           {:ok, false} ->
@@ -147,22 +158,52 @@ if Code.ensure_loaded?(Cachex) do
       :ok
     end
 
-    defp store_tags(tags, key) do
+    defp store_tags(tags, key, ttl_ms) do
+      now = now_ms()
+      expires_at = now + ttl_ms
+
       for tag <- tags do
-        Cachex.get_and_update(@tag_cache_name, tag, fn
-          nil -> {:commit, MapSet.new([key])}
-          keys -> {:commit, MapSet.put(keys, key)}
+        Cachex.get_and_update(@tag_cache_name, tag, fn record ->
+          {:commit, record_key(record, key, expires_at, now)}
         end)
+
+        extend_record_expiry(tag, ttl_ms)
       end
 
       :ok
     end
 
+    defp record_key(nil, key, expires_at, now) do
+      {%{key => expires_at}, now + @prune_interval_ms}
+    end
+
+    defp record_key({keys, prune_at}, key, expires_at, now) when now < prune_at do
+      {Map.put(keys, key, expires_at), prune_at}
+    end
+
+    defp record_key({keys, _prune_at}, key, expires_at, now) do
+      live = Map.filter(keys, fn {_key, expiry} -> expiry > now end)
+      {Map.put(live, key, expires_at), now + @prune_interval_ms}
+    end
+
+    defp extend_record_expiry(tag, ttl_ms) do
+      remaining =
+        case Cachex.ttl(@tag_cache_name, tag) do
+          {:ok, ms} when is_integer(ms) -> ms
+          _ -> 0
+        end
+
+      if ttl_ms > remaining, do: Cachex.expire(@tag_cache_name, tag, ttl_ms)
+      :ok
+    end
+
     defp take_tagged_keys(tag) do
       case Cachex.take(@tag_cache_name, tag) do
-        {:ok, %MapSet{} = keys} -> keys
+        {:ok, {keys, _prune_at}} -> Map.keys(keys)
         _ -> []
       end
     end
+
+    defp now_ms, do: System.monotonic_time(:millisecond)
   end
 end

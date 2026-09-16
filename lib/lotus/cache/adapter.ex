@@ -44,12 +44,17 @@ defmodule Lotus.Cache.Adapter do
   | `delete/1` | this node's entry | the shared entry |
   | `invalidate_tags/1` | keys this node tagged | whatever the adapter's tag bookkeeping covers |
 
-  `scope/0` tells `Lotus.Cache` which of those two columns applies. For a
-  `:node` adapter the facade relays every `delete/1` and `invalidate_tags/1`
-  to the other nodes over `Lotus.Notifier`, where `Lotus.Cache.Relay` applies
-  the same call to that node's adapter. Values are never relayed: each node
-  fills its own entries on its own misses. A `:cluster` adapter is trusted to
-  reach every node by itself and nothing is relayed.
+  `scope/1` tells `Lotus.Cache` which of those two columns applies to
+  `delete/1` and to `invalidate_tags/1`, separately. For an operation the
+  adapter answers `:node`, the facade relays the call to the other nodes
+  over `Lotus.Notifier`, where `Lotus.Cache.Relay` applies the same call to
+  that node's adapter. Values are never relayed: each node fills its own
+  entries on its own misses. An operation the adapter answers `:cluster`
+  for is trusted to reach every node by itself and is not relayed.
+
+  Tag bookkeeping is bounded by the entries it describes. An adapter drops
+  a tag's record of a key once that key has expired, so a tag that is never
+  invalidated does not grow for the life of the node.
 
   """
 
@@ -121,22 +126,28 @@ defmodule Lotus.Cache.Adapter do
   """
   @callback touch(key, ttl_ms) :: :ok | {:error, term}
 
+  @typedoc "The two operations `Lotus.Cache` relays when they are node-local."
+  @type relayed_operation :: :delete | :invalidate_tags
+
   @doc """
-  How far one call on this adapter reaches.
+  How far one call of `operation` on this adapter reaches.
 
-    * `:node` — the store is local to the calling node. `delete/1` and
-      `invalidate_tags/1` only touch this node's entries, so `Lotus.Cache`
-      relays them to the other nodes through `Lotus.Notifier`.
+    * `:node` — the call only touches this node's entries, so `Lotus.Cache`
+      relays it to the other nodes through `Lotus.Notifier`.
     * `:cluster` — one call reaches every node, because the store is shared
-      or the adapter routes its own invalidations. Nothing is relayed.
+      or the adapter routes the call itself. Nothing is relayed.
 
-  Optional. An adapter that does not define it is treated as `:node`, which
-  is the safe reading: relaying to a shared store repeats an idempotent
-  call, while not relaying to a node-local store leaves stale entries.
+  The answer is per operation because an adapter can route single-key
+  deletes to a shared store while it keeps tag bookkeeping on each node.
+
+  Optional. An adapter that does not define it is treated as `:node` for
+  both operations, which is the safe reading: relaying to a shared store
+  repeats an idempotent call, while not relaying to a node-local store
+  leaves stale entries.
   """
-  @callback scope() :: :node | :cluster
+  @callback scope(relayed_operation()) :: :node | :cluster
 
-  @optional_callbacks scope: 0
+  @optional_callbacks scope: 1
 
   @doc """
   Encodes a value into a binary for storage.

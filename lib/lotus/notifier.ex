@@ -14,13 +14,17 @@ defmodule Lotus.Notifier do
   ## How it works
 
   The transport is OTP process groups, the `:pg` module of the `kernel`
-  application (it has nothing to do with PostgreSQL). `Lotus.Supervisor`
-  starts a `:pg` scope named `Lotus.Notifier` as its first child. Nothing is
-  added to the dependency list and nothing is configured: nodes connected
-  through distributed Erlang share the scope automatically. A topic is a
-  `:pg` group; `listen/1` joins the calling process to it and `notify/3`
-  sends `{:lotus_notification, topic, payload}` to every listener on every
-  node.
+  application. `Lotus.Supervisor` starts a `:pg` scope named `Lotus.Notifier`
+  as its first child. Nothing is added to the dependency list and nothing is
+  configured: nodes connected through distributed Erlang share the scope
+  automatically. A topic is a `:pg` group; `listen/1` joins the calling process
+  to it and `notify/3` sends `{:lotus_notification, topic, payload}` to every
+  listener on every node.
+
+  Before `Lotus.Supervisor` has started the scope, `notify/3` delivers to
+  nobody and returns `:ok`, and `listen/1` exits with `:noproc`. A cache
+  delete or a source invalidation made from a host's own start phase or
+  from a release task applies to that node alone.
 
   Only notifications travel, never values. A node that receives one applies
   it to its own state. Delivery is best-effort, like any Erlang message

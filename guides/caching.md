@@ -119,7 +119,7 @@ Any `cachex_opts` you pass replace that default entirely. A host that sets `limi
 
 ### Caching in a cluster
 
-`Lotus.Cache.ETS` keeps entries per node. `Lotus.Cache.Cachex` with a router spreads them over the nodes. In both cases, `Lotus.Cache.invalidate_tags/1`, `Lotus.invalidate_scope/1`, `Lotus.Cache.delete/1` and `Lotus.Storage.SchemaCache.invalidate/3` take effect on every node: the calling node applies the change and relays it over `Lotus.Notifier`, and `Lotus.Cache.Relay` applies it on the others. Values are never relayed. `Lotus.Cache.scope/0` tells you whether the configured adapter needs that relay (`:node`) or reaches every node by itself (`:cluster`). See the [Deployment guide](deployment.md) for what else is per node.
+`Lotus.Cache.ETS` keeps entries per node. `Lotus.Cache.Cachex` with a router spreads them over the nodes. In both cases, `Lotus.Cache.invalidate_tags/1`, `Lotus.invalidate_scope/1`, `Lotus.Cache.delete/1` and `Lotus.Storage.SchemaCache.invalidate/3` take effect on every node: the calling node applies the change and relays it over `Lotus.Notifier`, and `Lotus.Cache.Relay` applies it on the others. Values are never relayed. `Lotus.Cache.scope/1` tells you, per operation, whether the configured adapter needs that relay (`:node`) or reaches every node by itself (`:cluster`). Tag bookkeeping in both adapters drops a key once its entry has expired, so tags do not grow without bound. See the [Deployment guide](deployment.md) for what else is per node.
 
 ### Cache Profiles
 

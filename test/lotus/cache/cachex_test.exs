@@ -163,9 +163,13 @@ defmodule Lotus.Cache.CachexTest do
     end
   end
 
-  describe "scope/0" do
-    test "is :node because tag bookkeeping stays on the writing node" do
-      assert Cache.Cachex.scope() == :node
+  describe "scope/1" do
+    test "tag invalidation is node-local because bookkeeping stays on the writing node" do
+      assert Cache.Cachex.scope(:invalidate_tags) == :node
+    end
+
+    test "a single-key delete is routed by Cachex and reaches the whole cluster" do
+      assert Cache.Cachex.scope(:delete) == :cluster
     end
   end
 
@@ -201,7 +205,7 @@ defmodule Lotus.Cache.CachexTest do
   describe "invalidate_tags/1" do
     test "drops the tag's bookkeeping once it is used" do
       Cache.Cachex.put("key1", "value1", @default_ttl_ms, tags: ["tag1"])
-      assert {:ok, %MapSet{}} = Cachex.get(:lotus_cache_tags, "tag1")
+      assert {:ok, {%{"key1" => _expiry}, _prune_at}} = Cachex.get(:lotus_cache_tags, "tag1")
 
       assert Cache.Cachex.invalidate_tags(["tag1"]) == :ok
 
@@ -212,8 +216,36 @@ defmodule Lotus.Cache.CachexTest do
       Cache.Cachex.put("key1", "value1", @default_ttl_ms, tags: ["tag1"])
       Cache.Cachex.put("key1", "value2", @default_ttl_ms, tags: ["tag1"])
 
-      assert {:ok, keys} = Cachex.get(:lotus_cache_tags, "tag1")
-      assert MapSet.to_list(keys) == ["key1"]
+      assert {:ok, {keys, _prune_at}} = Cachex.get(:lotus_cache_tags, "tag1")
+      assert Map.keys(keys) == ["key1"]
+    end
+
+    test "the tag's record expires with its longest-lived entry" do
+      Cache.Cachex.put("short", "value", 1_000, tags: ["tag1"])
+      assert {:ok, short_ttl} = Cachex.ttl(:lotus_cache_tags, "tag1")
+      assert short_ttl <= 1_000
+
+      Cache.Cachex.put("long", "value", @default_ttl_ms, tags: ["tag1"])
+      assert {:ok, long_ttl} = Cachex.ttl(:lotus_cache_tags, "tag1")
+      assert long_ttl > 1_000
+
+      Cache.Cachex.put("short-again", "value", 1_000, tags: ["tag1"])
+      assert {:ok, kept_ttl} = Cachex.ttl(:lotus_cache_tags, "tag1")
+      assert kept_ttl > 1_000
+    end
+
+    test "prunes expired keys from the record once the prune interval has passed" do
+      Cache.Cachex.put("expired", "value", 1, tags: ["tag1"])
+      {:ok, {keys, _prune_at}} = Cachex.get(:lotus_cache_tags, "tag1")
+      due = System.monotonic_time(:millisecond) - 1
+      Cachex.put(:lotus_cache_tags, "tag1", {keys, due})
+      Process.sleep(5)
+
+      Cache.Cachex.put("fresh", "value", @default_ttl_ms, tags: ["tag1"])
+
+      assert {:ok, {pruned, prune_at}} = Cachex.get(:lotus_cache_tags, "tag1")
+      assert Map.keys(pruned) == ["fresh"]
+      assert prune_at > due
     end
 
     test "deletes all keys with matching tags" do

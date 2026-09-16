@@ -206,6 +206,33 @@ defmodule Lotus.Cache.ETSTest do
     end
   end
 
+  describe "tag bookkeeping" do
+    test "the janitor sweeps tag rows whose entry expired" do
+      ETS.put("gone", "value", 1, tags: ["tag:sweep"])
+      ETS.put("kept", "value", 60_000, tags: ["tag:sweep"])
+      Process.sleep(5)
+
+      send(ETS, :run_janitor)
+      :sys.get_state(ETS)
+
+      assert [{"tag:sweep", "kept", _expires_at}] = :ets.lookup(:lotus_cache_tags, "tag:sweep")
+      assert ETS.get("gone") == :miss
+    end
+
+    test "touch/2 extends the tag rows of the entry" do
+      ETS.put("touched", "value", 1, tags: ["tag:touch"])
+      assert ETS.touch("touched", 60_000) == :ok
+      Process.sleep(5)
+
+      send(ETS, :run_janitor)
+      :sys.get_state(ETS)
+
+      assert [{"tag:touch", "touched", _expires_at}] = :ets.lookup(:lotus_cache_tags, "tag:touch")
+      assert ETS.invalidate_tags(["tag:touch"]) == :ok
+      assert ETS.get("touched") == :miss
+    end
+  end
+
   describe "data encoding/decoding" do
     test "handles various Elixir data types correctly" do
       test_cases = [

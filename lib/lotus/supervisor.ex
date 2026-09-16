@@ -55,7 +55,7 @@ defmodule Lotus.Supervisor do
     cache_children =
       case cache_conf do
         %{adapter: adapter} -> adapter.spec_config()
-        nil -> []
+        _no_adapter -> []
       end
 
     instance_name = Keyword.get(opts, :name) || Keyword.get(opts, :supervisor_name, Lotus)
@@ -64,7 +64,8 @@ defmodule Lotus.Supervisor do
     children =
       [Lotus.Notifier, {Task.Supervisor, name: task_sup_name}] ++
         default_ets_child(cache_conf) ++
-        cache_children ++ [Lotus.Cache.Relay, Lotus.Source.Supervisor]
+        cache_children ++
+        [{Lotus.Cache.Relay, task_supervisor: task_sup_name}, Lotus.Source.Supervisor]
 
     Supervisor.init(children, strategy: :one_for_one)
   end
@@ -74,8 +75,8 @@ defmodule Lotus.Supervisor do
   # it, finds them. A configured adapter starts what it needs itself, and
   # `Lotus.Cache.Cachex` names its tables the same as ETS, so ETS must not
   # start next to it.
-  defp default_ets_child(nil), do: [{Lotus.Cache.ETS, []}]
-  defp default_ets_child(_cache_conf), do: []
+  defp default_ets_child(%{adapter: _adapter}), do: []
+  defp default_ets_child(_no_adapter), do: [{Lotus.Cache.ETS, []}]
 
   @doc false
   def child_spec(opts) do
