@@ -27,6 +27,10 @@ defmodule Lotus.Source.Resolvers.Static do
       `can_handle?/1`. Exactly one must claim it. If several do, resolution
       raises rather than silently picking the first; name the adapter in the
       entry to settle it.
+
+  Resolution wraps the entry every time and caches nothing. A resolver that
+  serves sources changed at runtime keeps its own registry and drops entries
+  through `c:Lotus.Source.Resolver.invalidate/1`.
   """
 
   @behaviour Lotus.Source.Resolver

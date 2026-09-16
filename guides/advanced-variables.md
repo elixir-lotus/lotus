@@ -14,8 +14,9 @@ statement.body    #=> the adapter-native payload (SQL text for Ecto sources)
 statement.params  #=> the bound values
 ```
 
-`compile!/2` is the raising variant. `Lotus.run_query/2` calls `compile/2`
-for you, so you rarely call it directly.
+`compile!/2` is the raising variant. `Lotus.run_query/2` calls `compile/3`
+for you with the source it already resolved (`adapter: adapter`), so you
+rarely call it directly.
 
 The steps, in order:
 

@@ -505,14 +505,21 @@ defmodule Lotus do
   def run_query(query_or_id, opts \\ [])
 
   def run_query(%Query{} = q, opts) do
-    vars = prepare_variables(q, opts)
+    adapter = Source.resolve!(Keyword.get(opts, :repo), q.data_source)
+    adapter_language = Adapter.query_language(adapter)
 
-    case Query.compile(q, vars) do
-      {:ok, %Statement{body: body, params: params}} ->
-        execute_query(q, body, params, vars, opts)
+    if language_compatible?(q.query_language, adapter_language) do
+      vars = prepare_variables(q, opts)
 
-      {:error, _} = err ->
-        err
+      case Query.compile(q, vars, adapter: adapter) do
+        {:ok, %Statement{body: body, params: params}} ->
+          execute_query(q, adapter, body, params, vars, opts)
+
+        {:error, _} = err ->
+          err
+      end
+    else
+      {:error, language_mismatch_message(q.query_language, adapter.name, adapter_language)}
     end
   end
 
@@ -532,18 +539,11 @@ defmodule Lotus do
     Map.merge(defaults, supplied_vars)
   end
 
-  defp execute_query(q, body, params, vars, opts) do
-    adapter = Source.resolve!(Keyword.get(opts, :repo), q.data_source)
-    adapter_language = Adapter.query_language(adapter)
+  defp execute_query(q, adapter, body, params, vars, opts) do
+    search_path = Keyword.get(opts, :search_path) || q.search_path
+    runner_opts = opts |> prepare_final_opts(search_path) |> Keyword.put(:vars, vars)
 
-    if language_compatible?(q.query_language, adapter_language) do
-      search_path = Keyword.get(opts, :search_path) || q.search_path
-      runner_opts = opts |> prepare_final_opts(search_path) |> Keyword.put(:vars, vars)
-
-      execute_with_options(adapter, body, params, opts, runner_opts, vars, q.id)
-    else
-      {:error, language_mismatch_message(q.query_language, adapter.name, adapter_language)}
-    end
+    execute_with_options(adapter, body, params, opts, runner_opts, vars, q.id)
   end
 
   # A stored query without a recorded language predates the column, or was

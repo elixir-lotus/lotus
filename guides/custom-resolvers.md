@@ -66,6 +66,9 @@ A source resolver turns query options (`source_opt`, `fallback`) into `%Lotus.So
 @callback list_source_names() :: [String.t()]
 
 @callback default_source() :: {String.t(), Lotus.Source.Adapter.t()}
+
+# Optional
+@callback invalidate(name :: String.t()) :: :ok
 ```
 
 | Callback | Returns | Used By |
@@ -75,6 +78,12 @@ A source resolver turns query options (`source_opt`, `fallback`) into `%Lotus.So
 | `get_source!/1` | `%Adapter{}` (raises on missing) | Ad-hoc lookups |
 | `list_source_names/0` | `[String.t()]` | Error messages, admin UIs |
 | `default_source/0` | `{name, %Adapter{}}` | Fallback when no repo is specified |
+| `invalidate/1` (optional) | `:ok` | `Lotus.Source.invalidate/1`, after a source is edited, paused or removed |
+
+Core resolves a source once per query run and caches no adapter. A resolver
+that keeps wrapped adapters in a registry or a cache implements
+`invalidate/1` to drop the entry for a name, and the code that changes the
+source calls `Lotus.Source.invalidate/1` so the next resolution rebuilds it.
 
 > ### Return `{:error, :not_found}` on failure {: .warning}
 >

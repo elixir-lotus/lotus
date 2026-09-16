@@ -1,7 +1,10 @@
 defmodule Lotus.Storage.QueryTest do
   use Lotus.Case, async: true
+  use Mimic
 
   alias Lotus.Query.Statement
+  alias Lotus.Source
+  alias Lotus.Source.Resolvers.Static
   alias Lotus.Storage.Query
 
   describe "new/1" do
@@ -181,6 +184,24 @@ defmodule Lotus.Storage.QueryTest do
 
       refute changeset.valid?
       assert %{statement: ["can't be blank"]} = errors_on(changeset)
+    end
+  end
+
+  describe "compile/3 with a resolved adapter" do
+    @tag :sqlite
+    test "compiles for the supplied adapter instead of resolving the stored data source" do
+      reject(&Source.resolve!/2)
+
+      q = %Query{
+        statement: "SELECT * FROM users WHERE id = {{id}}",
+        variables: [],
+        data_source: "postgres"
+      }
+
+      sqlite = Static.get_source!("sqlite")
+
+      assert {:ok, %Statement{body: "SELECT * FROM users WHERE id = ?", params: [1]}} =
+               Query.compile(q, %{"id" => 1}, adapter: sqlite)
     end
   end
 
