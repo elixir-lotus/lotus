@@ -27,12 +27,22 @@ defmodule Lotus.Source.Resolvers.Static do
       `can_handle?/1`. Exactly one must claim it. If several do, resolution
       raises rather than silently picking the first; name the adapter in the
       entry to settle it.
+
+  ## Memoization
+
+  Wrapping an entry probes adapters and builds an `%Adapter{}`, and every
+  query run resolves its source, so the wrapped adapter is memoized in
+  `:persistent_term` under the source name and its entry. A lookup after the
+  first is a single term read. `Lotus.Config.reload!/0` clears the memo, and
+  an entry that changes under the same name is wrapped again.
   """
 
   @behaviour Lotus.Source.Resolver
 
   alias Lotus.Config
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
+
+  @memo_tag {__MODULE__, :adapter}
 
   # ---------------------------------------------------------------------------
   # Callbacks
@@ -91,6 +101,16 @@ defmodule Lotus.Source.Resolvers.Static do
     {name, wrap_entry(name, mod)}
   end
 
+  @doc false
+  @spec clear_memoized_adapters() :: :ok
+  def clear_memoized_adapters do
+    for {{@memo_tag, _name, _entry} = key, _adapter} <- :persistent_term.get() do
+      :persistent_term.erase(key)
+    end
+
+    :ok
+  end
+
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
@@ -109,10 +129,24 @@ defmodule Lotus.Source.Resolvers.Static do
     end
   end
 
+  defp wrap_entry(name, entry) do
+    key = {@memo_tag, name, entry}
+
+    case :persistent_term.get(key, nil) do
+      nil ->
+        adapter = build_adapter(name, entry)
+        :persistent_term.put(key, adapter)
+        adapter
+
+      adapter ->
+        adapter
+    end
+  end
+
   # An entry may name its adapter outright — `%{adapter: MyAdapter, ...}` —
   # which is the canonical form: no `can_handle?/1` probing, no ambiguity,
   # and the whole entry is handed to the adapter as its state.
-  defp wrap_entry(name, %{adapter: adapter_mod} = entry) when is_atom(adapter_mod) do
+  defp build_adapter(name, %{adapter: adapter_mod} = entry) when is_atom(adapter_mod) do
     if module_name?(adapter_mod) do
       wrap_named_adapter(name, adapter_mod, entry)
     else
@@ -120,7 +154,7 @@ defmodule Lotus.Source.Resolvers.Static do
     end
   end
 
-  defp wrap_entry(name, entry), do: wrap_by_probing(name, entry)
+  defp build_adapter(name, entry), do: wrap_by_probing(name, entry)
 
   defp wrap_named_adapter(name, adapter_mod, entry) do
     unless Code.ensure_loaded?(adapter_mod) and function_exported?(adapter_mod, :wrap, 2) do

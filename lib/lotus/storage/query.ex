@@ -116,22 +116,23 @@ defmodule Lotus.Storage.Query do
   when a required variable is missing, a list variable is empty, or a supplied
   value fails type casting.
 
+  ## Options
+
+    * `:adapter` — an already resolved `%Lotus.Source.Adapter{}` to compile
+      for. `Lotus.run_query/2` resolves the source once and passes it here so
+      the run does not resolve it again. Without it the stored `data_source`
+      is resolved, falling back to the default source when that name is
+      stale.
+
   Use `compile!/2` if you prefer a raising variant.
   """
-  @spec compile(t(), map()) :: {:ok, Statement.t()} | {:error, String.t()}
-  def compile(%__MODULE__{statement: raw_body, variables: vars} = q, supplied_vars \\ %{}) do
-    # A stored query's `data_source` can become stale when the source is
-    # renamed or removed. Fall back to the default source so compilation
-    # still succeeds. `Lotus.run_query/2` resolves the source again before
-    # executing, and rejects the query there if the resolved source speaks a
-    # different language than the one recorded in `query_language`.
-    adapter =
-      try do
-        Source.resolve!(q.data_source, nil)
-      rescue
-        ArgumentError -> Source.resolve!(nil, nil)
-      end
-
+  @spec compile(t(), map(), keyword()) :: {:ok, Statement.t()} | {:error, String.t()}
+  def compile(
+        %__MODULE__{statement: raw_body, variables: vars} = q,
+        supplied_vars \\ %{},
+        opts \\ []
+      ) do
+    adapter = Keyword.get_lazy(opts, :adapter, fn -> resolve_stored_source(q) end)
     profile = Adapter.lexical_profile(adapter)
 
     # Process optional clauses before transformation
@@ -173,14 +174,24 @@ defmodule Lotus.Storage.Query do
   end
 
   @doc """
-  Same as `compile/2` but raises `ArgumentError` on error.
+  Same as `compile/3` but raises `ArgumentError` on error.
   """
-  @spec compile!(t(), map()) :: Statement.t()
-  def compile!(%__MODULE__{} = q, supplied_vars \\ %{}) do
-    case compile(q, supplied_vars) do
+  @spec compile!(t(), map(), keyword()) :: Statement.t()
+  def compile!(%__MODULE__{} = q, supplied_vars \\ %{}, opts \\ []) do
+    case compile(q, supplied_vars, opts) do
       {:ok, %Statement{} = statement} -> statement
       {:error, reason} -> raise ArgumentError, reason
     end
+  end
+
+  # A stored query's `data_source` can become stale when the source is
+  # renamed or removed. Fall back to the default source so compilation
+  # still succeeds; `Lotus.run_query/2` rejects such a query before it
+  # gets here.
+  defp resolve_stored_source(%__MODULE__{data_source: data_source}) do
+    Source.resolve!(data_source, nil)
+  rescue
+    ArgumentError -> Source.resolve!(nil, nil)
   end
 
   defp substitute_variable(var, vars, supplied_vars, enriched_bindings, adapter, statement) do

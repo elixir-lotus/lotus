@@ -319,6 +319,7 @@ defmodule Lotus.Config do
   def reload! do
     conf = validate!(get_lotus_config())
     :persistent_term.put(@persistent_term_key, conf)
+    Lotus.Source.Resolvers.Static.clear_memoized_adapters()
     conf
   end
 
