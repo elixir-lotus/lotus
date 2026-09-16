@@ -1190,10 +1190,9 @@ end
 ```
 
 Every callback that touches the repo needs the same `put_dynamic_repo/1`
-call, because the dynamic repo is set per calling process. Routing all the
-generated Ecto callbacks through it in one place is tracked in
-elixir-lotus/lotus#303. A health check for a source that is not started
-yet opens a one-off connection with `Postgrex.start_link/1` and closes it.
+call, because the dynamic repo is set per calling process. A health check
+for a source that is not started yet opens a one-off connection with
+`Postgrex.start_link/1` and closes it.
 
 ### Example: NimblePool for a NIF handle
 
