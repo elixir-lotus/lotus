@@ -1025,6 +1025,243 @@ Probing is a convenience, not a priority list. An adapter whose
 `can_handle?/1` is broad will collide with another one sooner or later — form
 1 is the way out.
 
+## Source Lifecycle
+
+An adapter that needs a connection pool, a gRPC channel or a token refresher
+can own those processes. `Lotus.Supervisor` starts `Lotus.Source.Supervisor`,
+which runs what four optional callbacks return and keeps it in step with the
+sources the resolver lists. Adapters that implement none of them behave
+exactly as before.
+
+| Callback | Core calls it |
+|---|---|
+| `shared_children/0` | when the first source of the module appears (start) and when the last one goes (stop) |
+| `source_children/2` | when a source appears or its state changes (start) and when it goes (stop) |
+| `source_started/2` | after the source's children are up |
+| `source_stopped/2` | before the source's children are stopped |
+
+`Lotus.Source.reconcile/0` reads `list_sources/0` from the configured
+resolver and diffs it against what is running: it starts what is new, stops
+what is gone, and restarts a source whose adapter module or state changed.
+Boot runs the first reconcile, so boot and runtime are the same code path.
+A resolver that changes its sources at runtime calls `Lotus.Source.reconcile/0`
+after every change, right after `Lotus.Source.invalidate/1`. The call is
+node-local: in a cluster, every node runs it. A source whose children fail
+to start is logged, reported under `:failed`, and tried again on the next
+reconcile; the other sources are unaffected.
+
+### Naming a per-source process
+
+Sources created in a UI must not mint an atom per name. Register the process
+through `Lotus.Source.Registry.via/2`, whose key is the `{module, name}`
+term, and find it again with `Lotus.Source.Registry.whereis/2`:
+
+```elixir
+name = Lotus.Source.Registry.via(__MODULE__, source_name)
+{MyApp.Pool, name: name}
+```
+
+Callbacks receive the adapter state, not the source name, so `wrap/2` keeps
+the name in the state when a callback has to find the process later.
+
+### Suspending a source
+
+`Lotus.Source.Supervisor.suspend/1` stops a source's children and keeps them
+stopped across reconciles while the resolver still lists the source;
+`resume/1` starts them again. An idle policy that tears down a source it
+still knows about uses these two calls instead of removing the source.
+
+### Health check before the source exists
+
+`health_check/1` must work for a source that has no processes yet, so a UI
+can test a connection before it saves the source. When
+`Lotus.Source.Registry.whereis/2` returns `nil`, make a one-off connection
+instead of going through the pool.
+
+### Which pool for which resource
+
+Core does not ship a pool. It gives adapters a supervised place to start one.
+
+| Resource | Pool | Why |
+|---|---|---|
+| Ecto repo configured by the host | none, the host repo | already supervised and pooled by DBConnection |
+| Ecto repo for a source added at runtime | the repo, started as a source child | one repo process per source, named through the registry |
+| Wire protocol driven by a process (ODBC, a custom TCP driver) | `DBConnection` | what Postgrex, MyXQL and Exqlite use: checkout, queries, transactions, timeouts |
+| HTTP (Elasticsearch, ClickHouse over HTTP, BigQuery, Trino) | `Finch` | Finch is Mint plus NimblePool for HTTP/1; do not put NimblePool under an HTTP client a second time |
+| NIF handle, port or raw socket the caller drives itself (a DuckDB connection, a long-running port) | `NimblePool` | its stated use is to "manage sockets, ports, or NIF resources" for one-off operations; supports `lazy: true` |
+| Anything that is already a process | `poolboy` or `DBConnection` | NimblePool's docs say it "may not be a good option to manage processes" |
+| HTTP/2 multiplexed connections | no pool | NimblePool's docs say to avoid pooling multiplexed resources |
+
+### Example: Finch for an HTTP source
+
+A Finch name must be an atom and its pools are keyed by URL, so an HTTP
+adapter runs one Finch for the module and adds a pool per source URL as
+sources come and go. `Finch.start_pool/3` returns `:ok` when the pool
+already exists, so the hook is safe to run on every reconcile.
+
+```elixir
+defmodule MyApp.Adapters.Search do
+  @behaviour Lotus.Source.Adapter
+
+  @finch MyApp.Adapters.Search.Finch
+
+  @impl true
+  def wrap(name, %{url: url} = config) do
+    %Lotus.Source.Adapter{
+      name: name,
+      module: __MODULE__,
+      state: %{url: url, pool_size: Map.get(config, :pool_size, 10)},
+      source_type: :search
+    }
+  end
+
+  @impl true
+  def shared_children do
+    [{Finch, name: @finch, pools: %{default: [size: 5]}}]
+  end
+
+  @impl true
+  def source_started(_name, %{url: url, pool_size: size}) do
+    Finch.start_pool(@finch, Finch.Pool.new(url), size: size, conn_max_idle_time: 60_000)
+  end
+
+  @impl true
+  def execute_query(%{url: url}, statement, _params, opts) do
+    Req.post(url <> "/_search",
+      json: statement.body,
+      finch: @finch,
+      receive_timeout: Keyword.get(opts, :timeout, 15_000)
+    )
+  end
+
+  @impl true
+  def health_check(%{url: url}) do
+    case Req.get(url, finch: @finch) do
+      {:ok, %{status: 200}} -> :ok
+      {:ok, %{status: status}} -> {:error, {:status, status}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+end
+```
+
+A removed source keeps its idle pool until Finch closes the connections,
+which is acceptable; `source_stopped/2` is not needed. The health check
+runs through the `:default` pool when the source has no pool yet.
+
+### Example: a dynamic Ecto repo per source
+
+A Postgres source added at runtime gets its own repo process, started from a
+template repo module with `name:` set to the registry via tuple. The child
+spec is what this section adds; reaching the process from the Ecto
+callbacks is `c:Ecto.Repo.put_dynamic_repo/1`, which takes a pid or an atom,
+so look the pid up through the registry.
+
+```elixir
+defmodule MyApp.Adapters.TenantPostgres do
+  use Lotus.Source.Adapters.Ecto, dialect: Lotus.Source.Adapters.Ecto.Dialects.Postgres
+
+  @impl true
+  def wrap(name, %{url: _} = config) do
+    %Lotus.Source.Adapter{
+      name: name,
+      module: __MODULE__,
+      state: %{name: name, repo: MyApp.TenantRepo, config: config},
+      source_type: :postgres
+    }
+  end
+
+  @impl true
+  def source_children(name, %{repo: repo, config: config}) do
+    [
+      {repo,
+       name: Lotus.Source.Registry.via(__MODULE__, name),
+       url: config.url,
+       pool_size: Map.get(config, :pool_size, 5)}
+    ]
+  end
+
+  @impl true
+  def execute_query(%{name: name, repo: repo}, statement, params, opts) do
+    repo.put_dynamic_repo(Lotus.Source.Registry.whereis(__MODULE__, name))
+    super(repo, statement, params, opts)
+  end
+end
+```
+
+Every callback that touches the repo needs the same `put_dynamic_repo/1`
+call, because the dynamic repo is set per calling process. A health check
+for a source that is not started yet opens a one-off connection with
+`Postgrex.start_link/1` and closes it.
+
+### Example: NimblePool for a NIF handle
+
+A resource the caller drives itself, such as a DuckDB connection, fits
+NimblePool: the pool hands the handle to the calling process for one
+operation and takes it back. `lazy: true` opens connections on first use,
+so a source that is registered but idle costs nothing.
+
+```elixir
+defmodule MyApp.Adapters.DuckDB do
+  @behaviour Lotus.Source.Adapter
+
+  @impl true
+  def wrap(name, %{path: path} = config) do
+    %Lotus.Source.Adapter{
+      name: name,
+      module: __MODULE__,
+      state: %{name: name, path: path, pool_size: Map.get(config, :pool_size, 4)},
+      source_type: :duckdb
+    }
+  end
+
+  @impl true
+  def source_children(name, %{path: path, pool_size: size}) do
+    [
+      {NimblePool,
+       worker: {MyApp.DuckDB.Worker, path},
+       pool_size: size,
+       lazy: true,
+       name: Lotus.Source.Registry.via(__MODULE__, name)}
+    ]
+  end
+
+  @impl true
+  def execute_query(%{name: name}, statement, params, opts) do
+    pool = Lotus.Source.Registry.via(__MODULE__, name)
+
+    NimblePool.checkout!(
+      pool,
+      :query,
+      fn _from, conn -> {MyApp.DuckDB.query(conn, statement.body, params), conn} end,
+      Keyword.get(opts, :timeout, 5_000)
+    )
+  end
+end
+
+defmodule MyApp.DuckDB.Worker do
+  @behaviour NimblePool
+
+  @impl true
+  def init_worker(path) do
+    {:ok, conn} = MyApp.DuckDB.open(path)
+    {:ok, conn, path}
+  end
+
+  @impl true
+  def handle_checkout(:query, _from, conn, pool_state), do: {:ok, conn, conn, pool_state}
+
+  @impl true
+  def handle_checkin(conn, _from, _old_conn, pool_state), do: {:ok, conn, pool_state}
+
+  @impl true
+  def terminate_worker(_reason, conn, pool_state) do
+    MyApp.DuckDB.close(conn)
+    {:ok, pool_state}
+  end
+end
+```
+
 ## Custom Resolvers
 
 Both extension points feeding the adapter pipeline are pluggable behaviours:

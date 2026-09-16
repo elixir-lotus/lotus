@@ -64,7 +64,8 @@ defmodule Lotus.Supervisor do
          else: [{Lotus.Cache.ETS, []}]
 
     children =
-      [{Task.Supervisor, name: task_sup_name}] ++ ets_child ++ cache_children
+      [{Task.Supervisor, name: task_sup_name}] ++
+        ets_child ++ cache_children ++ [Lotus.Source.Supervisor]
 
     Supervisor.init(children, strategy: :one_for_one)
   end

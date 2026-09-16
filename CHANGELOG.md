@@ -4,6 +4,24 @@
 
 ### Added
 
+- **Adapters can own supervised processes per source and per module.**
+  `Lotus.Source.Adapter` gained four optional callbacks: `shared_children/0`
+  for what an adapter needs once (a Finch instance), `source_children/2`
+  for what it needs per source (a dynamic Ecto repo, a DBConnection or
+  NimblePool pool), and `source_started/2` and `source_stopped/2` for
+  adapters that add a source to shared infrastructure instead. `Lotus.Supervisor`
+  now starts `Lotus.Source.Supervisor`, which runs those children and
+  reconciles them against the resolver's `list_sources/0` at boot and
+  whenever `Lotus.Source.reconcile/0` is called: new sources start, removed
+  sources stop, edited sources restart, and the shared children of a module
+  start with its first source and stop with its last. `suspend/1` and
+  `resume/1` keep a listed source stopped, for idle policies.
+  `Lotus.Source.Registry` names per-source processes through via tuples
+  keyed by `{module, name}`, so no atom is created per source. The source
+  adapters guide has a section on which pool fits which resource with
+  worked examples for Finch, a dynamic Ecto repo and NimblePool. Adapters
+  that implement none of the callbacks behave as before.
+
 - **`Lotus.Source.Adapter.lexical_profile/1` gives the tokenizer profile of a source.**
   The base profile comes from the adapter's `query_language/1`, and the
   `dialect_spec` an adapter already declares in `editor_config/1` refines it,

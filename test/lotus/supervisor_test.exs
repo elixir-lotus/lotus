@@ -54,5 +54,18 @@ defmodule Lotus.SupervisorTest do
 
       assert Lotus.Cache.ETS in child_ids
     end
+
+    test "starts the source supervisor after the cache" do
+      opts = [
+        supervisor_name: :"lotus_sup_sources_#{System.unique_integer([:positive])}",
+        cache: nil
+      ]
+
+      {:ok, {_flags, children}} = Lotus.Supervisor.init(opts)
+
+      child_ids = Enum.map(children, fn child -> Supervisor.child_spec(child, []).id end)
+
+      assert List.last(child_ids) == Lotus.Source.Supervisor
+    end
   end
 end
