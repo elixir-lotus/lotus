@@ -32,6 +32,25 @@ defmodule Lotus.Cache.Adapter do
           # adapter-specific options...
         }
 
+  ## Reach of each callback in a cluster
+
+  Every callback is called on the node that runs the query, with no attempt
+  by Lotus to route it elsewhere. What the call reaches depends on the
+  adapter's store:
+
+  | Callback | Node-local store (`Lotus.Cache.ETS`) | Shared store (Redis, Cachex with a router) |
+  |---|---|---|
+  | `get/1`, `put/4`, `touch/2`, `get_or_store/4` | this node's entries | the shared entries |
+  | `delete/1` | this node's entry | the shared entry |
+  | `invalidate_tags/1` | keys this node tagged | whatever the adapter's tag bookkeeping covers |
+
+  `scope/0` tells `Lotus.Cache` which of those two columns applies. For a
+  `:node` adapter the facade relays every `delete/1` and `invalidate_tags/1`
+  to the other nodes over `Lotus.Notifier`, where `Lotus.Cache.Relay` applies
+  the same call to that node's adapter. Values are never relayed: each node
+  fills its own entries on its own misses. A `:cluster` adapter is trusted to
+  reach every node by itself and nothing is relayed.
+
   """
 
   defmacro __using__(_opts) do
@@ -101,6 +120,23 @@ defmodule Lotus.Cache.Adapter do
   Updates the TTL of an existing cache entry without modifying its value.
   """
   @callback touch(key, ttl_ms) :: :ok | {:error, term}
+
+  @doc """
+  How far one call on this adapter reaches.
+
+    * `:node` — the store is local to the calling node. `delete/1` and
+      `invalidate_tags/1` only touch this node's entries, so `Lotus.Cache`
+      relays them to the other nodes through `Lotus.Notifier`.
+    * `:cluster` — one call reaches every node, because the store is shared
+      or the adapter routes its own invalidations. Nothing is relayed.
+
+  Optional. An adapter that does not define it is treated as `:node`, which
+  is the safe reading: relaying to a shared store repeats an idempotent
+  call, while not relaying to a node-local store leaves stale entries.
+  """
+  @callback scope() :: :node | :cluster
+
+  @optional_callbacks scope: 0
 
   @doc """
   Encodes a value into a binary for storage.

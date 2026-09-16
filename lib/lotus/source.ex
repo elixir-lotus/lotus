@@ -66,24 +66,38 @@ defmodule Lotus.Source do
   sources.
 
   Call this after a source is added, edited, paused or removed at runtime.
-  Boot runs the first reconcile. The call is node-local: in a cluster, run
-  it on every node. See `Lotus.Source.Supervisor` for what a reconcile does
-  and what it returns.
+  Boot runs the first reconcile. The call reconciles this node and returns
+  its report, then tells every other node of the cluster to reconcile too
+  through `Lotus.Notifier`; those reconciles run in the background and their
+  reports are logged. See `Lotus.Source.Supervisor` for what a reconcile
+  does and what it returns.
   """
   @spec reconcile() :: {:ok, Lotus.Source.Supervisor.report()} | {:error, term()}
-  def reconcile, do: Lotus.Source.Supervisor.reconcile()
+  def reconcile do
+    result = Lotus.Source.Supervisor.reconcile()
+    Lotus.Notifier.notify(:sources, :reconcile, except: [node()])
+    result
+  end
 
   @doc """
   Tells the configured resolver to drop what it holds for `name`.
 
   Call this after a source is edited, paused or removed at runtime, so the
   next `resolve!/2` rebuilds its adapter, then call `reconcile/0` so its
-  processes follow. A resolver that does not implement
-  `c:Lotus.Source.Resolver.invalidate/1` has nothing to drop and this is a
-  no-op.
+  processes follow. The drop is applied on this node and relayed to every
+  other node of the cluster through `Lotus.Notifier`. A resolver that does
+  not implement `c:Lotus.Source.Resolver.invalidate/1` has nothing to drop
+  and this is a no-op.
   """
   @spec invalidate(String.t()) :: :ok
   def invalidate(name) when is_binary(name) do
+    invalidate_locally(name)
+    Lotus.Notifier.notify(:sources, {:invalidate, name}, except: [node()])
+  end
+
+  @doc false
+  @spec invalidate_locally(String.t()) :: :ok
+  def invalidate_locally(name) when is_binary(name) do
     resolver = resolver()
 
     if function_exported?(resolver, :invalidate, 1) do

@@ -40,6 +40,47 @@ defmodule Lotus.Source.SupervisorTest do
 
   defp shared_pid, do: Process.whereis(LifecycleAdapter.shared_name())
 
+  describe "cluster notifications" do
+    setup do
+      :ok = Lotus.Notifier.listen(:sources)
+      on_exit(fn -> Lotus.Notifier.unlisten(:sources) end)
+      :ok
+    end
+
+    test "Lotus.Source.reconcile/0 reconciles this node without notifying its own listeners" do
+      name = uniq("local")
+      LifecycleResolver.put_sources([source(name)])
+
+      assert {:ok, %{started: [^name]}} = Lotus.Source.reconcile()
+
+      refute_receive {:lotus_notification, :sources, :reconcile}
+    end
+
+    test "a :reconcile notification from another node reconciles this node" do
+      name = uniq("remote")
+      LifecycleResolver.put_sources([source(name)])
+
+      send(Lotus.Source.Reconciler, {:lotus_notification, :sources, :reconcile})
+      :sys.get_state(Lotus.Source.Reconciler)
+
+      assert Lotus.Source.Supervisor.running?(name)
+      assert_receive {:source_started, ^name}
+    end
+
+    test "an {:invalidate, name} notification from another node reaches the resolver" do
+      send(Lotus.Source.Reconciler, {:lotus_notification, :sources, {:invalidate, "acme"}})
+      :sys.get_state(Lotus.Source.Reconciler)
+
+      assert Process.alive?(Process.whereis(Lotus.Source.Reconciler))
+    end
+
+    test "the reconciler ignores an unrelated message" do
+      send(Lotus.Source.Reconciler, :unrelated)
+
+      assert %Lotus.Source.Reconciler{} = :sys.get_state(Lotus.Source.Reconciler)
+    end
+  end
+
   describe "reconcile/0" do
     test "starts shared and per-source children and runs the started hook" do
       name = uniq("warehouse")

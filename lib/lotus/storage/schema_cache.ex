@@ -16,6 +16,8 @@ defmodule Lotus.Storage.SchemaCache do
   - **TTL-based expiration**: Default 5-minute TTL (configurable)
   - **Graceful degradation**: Falls back to direct schema query if cache unavailable
   - **Warm cache support**: Preload frequently-used tables on application startup
+  - **Cluster-wide invalidation**: `invalidate/3` goes through `Lotus.Cache.delete/1`,
+    which relays the drop to every other node when the adapter is node-local
 
   ## Usage
 

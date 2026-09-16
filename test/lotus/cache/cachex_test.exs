@@ -163,7 +163,59 @@ defmodule Lotus.Cache.CachexTest do
     end
   end
 
+  describe "scope/0" do
+    test "is :node because tag bookkeeping stays on the writing node" do
+      assert Cache.Cachex.scope() == :node
+    end
+  end
+
+  describe "spec_config/0" do
+    test "keeps the value cache on the operator's router and the tag cache local" do
+      stub(Lotus.Config, :cache_config, fn ->
+        %{cachex_opts: [limit: 10, router: router(module: Cachex.Router.Ring)]}
+      end)
+
+      [value_spec, tag_spec] = Cache.Cachex.spec_config()
+
+      assert %{start: {Cachex, :start_link, [value_opts]}} = value_spec
+      assert value_opts[:name] == :lotus_cache
+      assert %{start: {Cachex, :start_link, [tag_opts]}} = tag_spec
+      assert tag_opts[:name] == :lotus_cache_tags
+
+      assert router(module: Cachex.Router.Ring) = value_opts[:router]
+      assert router(module: Cachex.Router.Local) = tag_opts[:router]
+      assert tag_opts[:limit] == 10
+    end
+
+    test "defaults the value cache to a monitored ring router" do
+      stub(Lotus.Config, :cache_config, fn -> %{adapter: Cache.Cachex} end)
+
+      [value_spec, _tag_spec] = Cache.Cachex.spec_config()
+
+      assert %{start: {Cachex, :start_link, [value_opts]}} = value_spec
+      assert value_opts[:name] == :lotus_cache
+      assert router(module: Cachex.Router.Ring, options: [monitor: true]) = value_opts[:router]
+    end
+  end
+
   describe "invalidate_tags/1" do
+    test "drops the tag's bookkeeping once it is used" do
+      Cache.Cachex.put("key1", "value1", @default_ttl_ms, tags: ["tag1"])
+      assert {:ok, %MapSet{}} = Cachex.get(:lotus_cache_tags, "tag1")
+
+      assert Cache.Cachex.invalidate_tags(["tag1"]) == :ok
+
+      assert Cachex.get(:lotus_cache_tags, "tag1") == {:ok, nil}
+    end
+
+    test "records a key once however often it is written" do
+      Cache.Cachex.put("key1", "value1", @default_ttl_ms, tags: ["tag1"])
+      Cache.Cachex.put("key1", "value2", @default_ttl_ms, tags: ["tag1"])
+
+      assert {:ok, keys} = Cachex.get(:lotus_cache_tags, "tag1")
+      assert MapSet.to_list(keys) == ["key1"]
+    end
+
     test "deletes all keys with matching tags" do
       Cache.Cachex.put("key1", "value1", @default_ttl_ms, tags: ["tag1"])
       Cache.Cachex.put("key2", "value2", @default_ttl_ms, tags: ["tag1", "tag2"])

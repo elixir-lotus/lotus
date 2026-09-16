@@ -4,7 +4,14 @@ defmodule Lotus.Cache.ETS do
 
   This is the default cache adapter if none is specified.
 
-  If you want a distributed cache, consider using `Lotus.Cache.Cachex`.
+  ## In a cluster
+
+  Every node keeps its own entries and its own tag bookkeeping. `scope/0`
+  returns `:node`, so `Lotus.Cache` relays each `delete/1` and
+  `invalidate_tags/1` to the other nodes over `Lotus.Notifier`, and each node
+  drops its own copies. Values are not shared: two nodes that run the same
+  query each fill their own entry. Use `Lotus.Cache.Cachex` with a router
+  when one entry should serve the whole cluster.
   """
 
   use GenServer
@@ -56,6 +63,9 @@ defmodule Lotus.Cache.ETS do
   def spec_config do
     [{Lotus.Cache.ETS, []}]
   end
+
+  @impl Lotus.Cache.Adapter
+  def scope, do: :node
 
   @impl Lotus.Cache.Adapter
   def get(key) do
