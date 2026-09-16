@@ -282,7 +282,141 @@ defmodule Lotus.Storage.VariableResolverTest do
 
       result = VariableResolver.resolve_variables(sql)
 
-      assert [%{variable: "org_id", table: "active_users"}] = result
+      assert [%{variable: "org_id", table: nil, column: "org_id"}] = result
+    end
+  end
+
+  describe "resolve_variables/2 with schema-qualified tables" do
+    test "binds an implicit column to the table and carries the schema" do
+      sql = "SELECT * FROM public.users WHERE id = {{id}}"
+
+      assert [%{variable: "id", schema: "public", table: "users", column: "id"}] =
+               VariableResolver.resolve_variables(sql)
+    end
+
+    test "binds an explicit schema.table.column reference" do
+      sql = "SELECT * FROM public.users WHERE public.users.id = {{id}}"
+
+      assert [%{variable: "id", schema: "public", table: "users", column: "id"}] =
+               VariableResolver.resolve_variables(sql)
+    end
+
+    test "resolves an alias of a schema-qualified table" do
+      sql = "SELECT * FROM analytics.events e WHERE e.kind = {{kind}}"
+
+      assert [%{variable: "kind", schema: "analytics", table: "events", column: "kind"}] =
+               VariableResolver.resolve_variables(sql)
+    end
+
+    test "leaves the schema nil for an unqualified table" do
+      assert [%{schema: nil, table: "users"}] =
+               VariableResolver.resolve_variables("SELECT * FROM users WHERE id = {{id}}")
+    end
+  end
+
+  describe "resolve_variables/2 with quoted identifiers" do
+    alias Lotus.Query.Tokenizer.Profile
+
+    test "keeps the case of double-quoted identifiers" do
+      sql = ~S|SELECT * FROM "Users" WHERE "Id" = {{id}}|
+
+      assert [%{variable: "id", table: "Users", column: "Id"}] =
+               VariableResolver.resolve_variables(sql)
+    end
+
+    test "resolves a quoted alias of a quoted table" do
+      sql = ~S|SELECT * FROM "Users" AS "U" WHERE "U"."Id" = {{id}}|
+
+      assert [%{variable: "id", table: "Users", column: "Id"}] =
+               VariableResolver.resolve_variables(sql)
+    end
+
+    test "folds unquoted identifiers to lowercase" do
+      sql = "SELECT * FROM Users WHERE UserId = {{id}}"
+
+      assert [%{variable: "id", table: "users", column: "userid"}] =
+               VariableResolver.resolve_variables(sql)
+    end
+
+    test "uses the profile for backtick identifiers" do
+      sql = "SELECT * FROM `shop`.`Orders` WHERE `Total` > {{min}}"
+
+      assert [%{variable: "min", schema: "shop", table: "Orders", column: "Total"}] =
+               VariableResolver.resolve_variables(sql, Profile.for_language("sql:mysql"))
+    end
+
+    test "ignores a placeholder inside a hash comment under the mysql profile" do
+      sql = "SELECT * FROM users # {{note}}\nWHERE id = {{id}}"
+
+      assert [%{variable: "id", table: "users"}] =
+               VariableResolver.resolve_variables(sql, Profile.for_language("sql:mysql"))
+    end
+  end
+
+  describe "resolve_variables/2 with derived tables" do
+    test "returns no table for a column of a CTE" do
+      sql = "WITH recent AS (SELECT * FROM orders) SELECT * FROM recent WHERE id = {{id}}"
+
+      assert [%{variable: "id", table: nil, column: "id"}] =
+               VariableResolver.resolve_variables(sql)
+    end
+
+    test "returns no table for an alias of a CTE" do
+      sql = "WITH recent AS (SELECT * FROM orders) SELECT * FROM recent r WHERE r.id = {{id}}"
+
+      assert [%{variable: "id", table: nil, column: "id"}] =
+               VariableResolver.resolve_variables(sql)
+    end
+
+    test "recognizes every name of a WITH clause, including column lists and RECURSIVE" do
+      sql = """
+      WITH RECURSIVE tree(id, parent) AS (SELECT id, parent FROM nodes),
+           leaves AS (SELECT * FROM tree WHERE parent IS NULL)
+      SELECT * FROM leaves l JOIN users u ON u.id = l.id
+      WHERE l.id = {{leaf}} AND u.email = {{email}}
+      """
+
+      result = VariableResolver.resolve_variables(sql)
+
+      assert Enum.any?(result, &(&1.variable == "leaf" and is_nil(&1.table)))
+      assert Enum.any?(result, &(&1.variable == "email" and &1.table == "users"))
+    end
+
+    test "still binds a base table joined next to a CTE" do
+      sql = "WITH r AS (SELECT 1) SELECT * FROM users u, r WHERE u.id = {{id}}"
+
+      assert [%{variable: "id", table: "users", column: "id"}] =
+               VariableResolver.resolve_variables(sql)
+    end
+
+    test "returns no table when the FROM clause is a subquery" do
+      sql = "SELECT * FROM (SELECT * FROM orders) o WHERE id = {{id}}"
+
+      assert [%{variable: "id", table: nil, column: "id"}] =
+               VariableResolver.resolve_variables(sql)
+    end
+  end
+
+  describe "resolve_variables/2 token awareness" do
+    test "does not read an alias out of a string literal" do
+      sql = "SELECT * FROM users u WHERE u.note = 'from x y' AND u.id = {{id}}"
+
+      assert [%{variable: "id", table: "users", column: "id"}] =
+               VariableResolver.resolve_variables(sql)
+    end
+
+    test "does not treat a keyword after the table as an alias" do
+      sql = "SELECT * FROM users WHERE id = {{id}} ORDER BY id"
+
+      assert [%{variable: "id", table: "users", column: "id"}] =
+               VariableResolver.resolve_variables(sql)
+    end
+
+    test "binds inside an optional block" do
+      sql = "SELECT * FROM users WHERE 1=1 [[AND email = {{email}}]]"
+
+      assert [%{variable: "email", table: "users", column: "email"}] =
+               VariableResolver.resolve_variables(sql)
     end
   end
 end

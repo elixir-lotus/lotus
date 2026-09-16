@@ -291,22 +291,15 @@ defmodule Lotus.Storage.Query do
   end
 
   defp enrich_bindings_with_types(bindings, %Adapter{} = adapter, search_path) do
-    Enum.map(bindings, fn binding ->
-      schema = resolve_schema(binding.table, search_path)
+    Enum.map(bindings, fn
+      %{table: nil} = binding ->
+        Map.put(binding, :lotus_type, :text)
 
-      case SchemaCache.get_column_type(adapter, schema, binding.table, binding.column) do
-        {:ok, db_type} ->
-          lotus_type = Adapter.db_type_to_lotus_type(adapter, db_type)
-          Map.put(binding, :lotus_type, lotus_type)
+      %{column: nil} = binding ->
+        Map.put(binding, :lotus_type, :text)
 
-        :not_found ->
-          Logger.debug(
-            "Column type not found: #{schema}.#{binding.table}.#{binding.column}, " <>
-              "defaulting to :text"
-          )
-
-          Map.put(binding, :lotus_type, :text)
-      end
+      binding ->
+        enrich_binding_with_type(binding, adapter, search_path)
     end)
   rescue
     # Narrowly rescue only transient connection failures so type enrichment
@@ -322,20 +315,23 @@ defmodule Lotus.Storage.Query do
       Enum.map(bindings, &Map.put(&1, :lotus_type, :text))
   end
 
-  defp resolve_schema(table, search_path) when is_binary(table) do
-    # Check if table name includes schema prefix (e.g., "public.users")
-    case String.split(table, ".", parts: 2) do
-      [schema, _table_name] ->
-        # Explicit schema in table name
-        schema
+  defp enrich_binding_with_type(binding, adapter, search_path) do
+    schema = binding.schema || resolve_from_search_path(search_path)
 
-      [_table_name] ->
-        # No schema prefix - use search_path or default
-        resolve_from_search_path(search_path)
+    case SchemaCache.get_column_type(adapter, schema, binding.table, binding.column) do
+      {:ok, db_type} ->
+        lotus_type = Adapter.db_type_to_lotus_type(adapter, db_type)
+        Map.put(binding, :lotus_type, lotus_type)
+
+      :not_found ->
+        Logger.debug(
+          "Column type not found: #{schema}.#{binding.table}.#{binding.column}, " <>
+            "defaulting to :text"
+        )
+
+        Map.put(binding, :lotus_type, :text)
     end
   end
-
-  defp resolve_schema(nil, search_path), do: resolve_from_search_path(search_path)
 
   defp resolve_from_search_path(search_path) when is_binary(search_path) do
     search_path
