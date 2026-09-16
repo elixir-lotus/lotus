@@ -449,6 +449,24 @@ Lotus.Visibility.validate_schemas(["public", "pg_catalog"], "postgres")
 Each of these takes an optional trailing `scope` argument, defaulting to
 `nil`.
 
+### Checking many names at once
+
+Every check accepts a compiled `Lotus.Visibility.Matcher` or a raw rule set in
+place of the source name. Build the matcher once and reuse it when you check
+many columns or relations:
+
+```elixir
+matcher = Lotus.Visibility.matcher_for("postgres", scope)
+Enum.filter(relations, &Lotus.Visibility.allowed_relation?(matcher, &1))
+
+# Rules that do not come from config, compiled with the source's builtin denies
+adapter = Lotus.Source.get_source!("postgres")
+matcher = Lotus.Visibility.compile(%{table: [deny: ["secrets"]]}, adapter: adapter)
+```
+
+The runner, preflight and discovery do the same: one matcher per result or per
+call, then a set lookup per column or relation.
+
 ## Error Handling
 
 ```elixir

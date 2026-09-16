@@ -57,6 +57,32 @@ defmodule Lotus.Visibility.Resolvers.StaticTest do
     end
   end
 
+  describe "matcher_for/2" do
+    test "compiles the configured rules with the source's builtin denies" do
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn "postgres" -> %{table: [deny: ["secrets"]]} end)
+
+      matcher = Static.matcher_for("postgres", nil)
+
+      assert %Lotus.Visibility.Matcher{} = matcher
+      refute Lotus.Visibility.allowed_relation?(matcher, {"public", "secrets"})
+      refute Lotus.Visibility.allowed_relation?(matcher, {"pg_catalog", "pg_class"})
+      assert Lotus.Visibility.allowed_relation?(matcher, {"public", "users"})
+    end
+
+    test "ignores scope" do
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _name -> %{schema: [deny: ["legacy"]]} end)
+
+      for scope <- [nil, %{role: :admin}, {:tenant, "acme"}] do
+        matcher = Static.matcher_for("postgres", scope)
+
+        refute Lotus.Visibility.allowed_schema?(matcher, "legacy")
+        assert Lotus.Visibility.allowed_schema?(matcher, "public")
+      end
+    end
+  end
+
   describe "table_rules_for/2" do
     test "returns table rules for configured repo name" do
       table_rules = [

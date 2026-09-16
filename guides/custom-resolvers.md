@@ -263,6 +263,9 @@ A visibility resolver returns the schema, table, and column rules that Lotus app
 @callback schema_rules_for(source_name :: String.t(), scope :: term()) :: keyword()
 @callback table_rules_for(source_name :: String.t(), scope :: term()) :: keyword()
 @callback column_rules_for(source_name :: String.t(), scope :: term()) :: list()
+
+# Optional
+@callback matcher_for(source_name :: String.t(), scope :: term()) :: Lotus.Visibility.Matcher.t()
 ```
 
 | Callback | Returns | Example shape |
@@ -270,8 +273,38 @@ A visibility resolver returns the schema, table, and column rules that Lotus app
 | `schema_rules_for/2` | `keyword()` | `[allow: ["public"], deny: ["legacy"]]` |
 | `table_rules_for/2` | `keyword()` | `[allow: [{"public", ~r/^dim_/}], deny: ["api_keys"]]` |
 | `column_rules_for/2` | `list()` | `[{"public", "users", "ssn", :mask}]` |
+| `matcher_for/2` (optional) | `%Lotus.Visibility.Matcher{}` | `Lotus.Visibility.compile(rules, adapter: adapter)` |
 
 The rule formats are exactly the same as those consumed by the default static resolver — see the [Visibility Guide](visibility.md) for the full syntax.
+
+### Compile once with `matcher_for/2`
+
+Lotus asks the resolver for one matcher per result and per discovery call,
+then checks every column and relation against it. Without `matcher_for/2`
+it calls the three rule callbacks and compiles them with
+`Lotus.Visibility.compile/2` each time. A resolver that keeps rules in a
+store can compile once when a rule set is written and return the compiled
+value:
+
+```elixir
+# On write
+matcher = Lotus.Visibility.compile(rules, adapter: Lotus.Source.get_source!(name))
+:ets.insert(:my_rules, {name, matcher})
+
+# In the resolver
+@impl true
+def matcher_for(name, _scope) do
+  case :ets.lookup(:my_rules, name) do
+    [{^name, matcher}] -> matcher
+    [] -> Lotus.Visibility.Resolvers.Static.matcher_for(name, nil)
+  end
+end
+```
+
+Pass the source's adapter to `compile/2` so the matcher carries the built-in
+denies of that engine. The static resolver compiles the configured rules once
+when `Lotus.Config` validates the configuration, so it already answers
+`matcher_for/2` without walking the rules.
 
 Each callback is invoked with the source name (a string) and an opaque `scope` term so you can return different rules for different sources and scopes. The scope is `nil` when the caller doesn't pass one. Return an empty list or empty keyword list when no rules apply — Lotus treats missing allow lists as "allow all" and missing deny lists as "deny nothing".
 

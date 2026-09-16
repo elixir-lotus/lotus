@@ -59,6 +59,48 @@ defmodule Lotus.ConfigTest do
     end
   end
 
+  describe "visibility_for_source_name/1" do
+    test "returns the compiled rules for the source, falling back per level to :default" do
+      Application.put_env(:lotus, :table_visibility, %{
+        postgres: [deny: ["pg_only"]],
+        default: [deny: ["shared_secret"]]
+      })
+
+      Application.put_env(:lotus, :column_visibility, %{default: [{"ssn", :omit}]})
+      Config.reload!()
+
+      postgres = Config.visibility_for_source_name("postgres")
+
+      assert %Lotus.Visibility.Matcher{} = postgres
+      refute Lotus.Visibility.allowed_relation?(postgres, {"public", "pg_only"})
+      assert Lotus.Visibility.allowed_relation?(postgres, {"public", "shared_secret"})
+      assert %{action: :omit} = Lotus.Visibility.column_policy_for(postgres, [], "ssn")
+
+      mysql = Config.visibility_for_source_name("mysql")
+
+      refute Lotus.Visibility.allowed_relation?(mysql, {"public", "shared_secret"})
+      assert Lotus.Visibility.allowed_relation?(mysql, {"public", "pg_only"})
+    end
+
+    test "is rebuilt by reload!/0" do
+      Application.put_env(:lotus, :table_visibility, %{default: [deny: ["a"]]})
+      Config.reload!()
+
+      refute Lotus.Visibility.allowed_relation?(
+               Config.visibility_for_source_name("postgres"),
+               {"public", "a"}
+             )
+
+      Application.put_env(:lotus, :table_visibility, %{default: []})
+      Config.reload!()
+
+      assert Lotus.Visibility.allowed_relation?(
+               Config.visibility_for_source_name("postgres"),
+               {"public", "a"}
+             )
+    end
+  end
+
   describe "visibility rules lookups" do
     @variants [
       {:rules_for_source_name, :table_visibility},

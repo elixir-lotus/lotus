@@ -71,7 +71,9 @@ defmodule Lotus.VisibilityTest do
         deny: []
       ]
 
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> allow_config end)
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _repo_name -> %{table: allow_config} end)
+
       :ok
     end
 
@@ -98,7 +100,9 @@ defmodule Lotus.VisibilityTest do
         ]
       ]
 
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> deny_config end)
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _repo_name -> %{table: deny_config} end)
+
       :ok
     end
 
@@ -137,7 +141,9 @@ defmodule Lotus.VisibilityTest do
         ]
       ]
 
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> regex_config end)
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _repo_name -> %{table: regex_config} end)
+
       :ok
     end
 
@@ -176,7 +182,7 @@ defmodule Lotus.VisibilityTest do
         ]
       ]
 
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> config end)
+      Lotus.Config |> stub(:visibility_for_source_name, fn _repo_name -> %{table: config} end)
       :ok
     end
 
@@ -209,7 +215,7 @@ defmodule Lotus.VisibilityTest do
         ]
       ]
 
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> config end)
+      Lotus.Config |> stub(:visibility_for_source_name, fn _repo_name -> %{table: config} end)
       :ok
     end
 
@@ -236,7 +242,7 @@ defmodule Lotus.VisibilityTest do
 
   describe "edge cases" do
     setup do
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> [] end)
+      Lotus.Config |> stub(:visibility_for_source_name, fn _repo_name -> %{table: []} end)
       :ok
     end
 
@@ -269,7 +275,8 @@ defmodule Lotus.VisibilityTest do
         ]
       ]
 
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> precedence_config end)
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _repo_name -> %{table: precedence_config} end)
 
       refute Visibility.allowed_relation?("postgres", {"public", "special_table"})
     end
@@ -282,7 +289,8 @@ defmodule Lotus.VisibilityTest do
         deny: []
       ]
 
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> precedence_config end)
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _repo_name -> %{table: precedence_config} end)
 
       refute Visibility.allowed_relation?("postgres", {"public", "schema_migrations"})
     end
@@ -302,7 +310,8 @@ defmodule Lotus.VisibilityTest do
         ]
       ]
 
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> warehouse_config end)
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _repo_name -> %{table: warehouse_config} end)
 
       assert Visibility.allowed_relation?("postgres", {"public", "dim_customers"})
       assert Visibility.allowed_relation?("postgres", {"public", "fact_sales"})
@@ -327,7 +336,8 @@ defmodule Lotus.VisibilityTest do
         ]
       ]
 
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> business_config end)
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _repo_name -> %{table: business_config} end)
 
       assert Visibility.allowed_relation?("postgres", {"public", "users"})
       assert Visibility.allowed_relation?("postgres", {"public", "orders"})
@@ -341,7 +351,7 @@ defmodule Lotus.VisibilityTest do
 
   describe "schema visibility" do
     setup do
-      Lotus.Config |> stub(:schema_rules_for_source_name, fn _repo_name -> [] end)
+      Lotus.Config |> stub(:visibility_for_source_name, fn _repo_name -> %{schema: []} end)
       :ok
     end
 
@@ -389,7 +399,9 @@ defmodule Lotus.VisibilityTest do
         deny: ["restricted"]
       ]
 
-      Lotus.Config |> stub(:schema_rules_for_source_name, fn _repo_name -> schema_config end)
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _repo_name -> %{schema: schema_config} end)
+
       :ok
     end
 
@@ -427,8 +439,11 @@ defmodule Lotus.VisibilityTest do
         deny: []
       ]
 
-      Lotus.Config |> stub(:schema_rules_for_source_name, fn _repo_name -> schema_config end)
-      Lotus.Config |> stub(:rules_for_source_name, fn _repo_name -> table_config end)
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _repo_name ->
+        %{schema: schema_config, table: table_config}
+      end)
+
       :ok
     end
 
@@ -444,7 +459,7 @@ defmodule Lotus.VisibilityTest do
 
   describe "MySQL schema visibility" do
     setup do
-      Lotus.Config |> stub(:schema_rules_for_source_name, fn _repo_name -> [] end)
+      Lotus.Config |> stub(:visibility_for_source_name, fn _repo_name -> %{schema: []} end)
       :ok
     end
 
@@ -463,7 +478,7 @@ defmodule Lotus.VisibilityTest do
 
   describe "SQLite schema visibility" do
     setup do
-      Lotus.Config |> stub(:schema_rules_for_source_name, fn _repo_name -> [] end)
+      Lotus.Config |> stub(:visibility_for_source_name, fn _repo_name -> %{schema: []} end)
       :ok
     end
 

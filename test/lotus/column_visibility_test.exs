@@ -15,7 +15,7 @@ defmodule Lotus.ColumnVisibilityTest do
       ]
 
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _repo -> rules end)
+      |> stub(:visibility_for_source_name, fn _repo -> %{column: rules} end)
 
       :ok
     end
@@ -56,7 +56,7 @@ defmodule Lotus.ColumnVisibilityTest do
       ]
 
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _repo -> rules end)
+      |> stub(:visibility_for_source_name, fn _repo -> %{column: rules} end)
 
       :ok
     end
@@ -86,7 +86,7 @@ defmodule Lotus.ColumnVisibilityTest do
       ]
 
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _repo -> rules end)
+      |> stub(:visibility_for_source_name, fn _repo -> %{column: rules} end)
 
       Lotus.Visibility
       |> stub(:allowed_relation?, fn _, _ -> true end)

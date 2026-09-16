@@ -29,6 +29,27 @@
 
 ### Changed
 
+- **Visibility rules are compiled once and checked against a matcher.**
+  `Lotus.Runner` resolved the column policy of every result column by
+  asking the resolver for the rules and walking them, regex rules
+  included, and `Lotus.Preflight` and discovery did the same per relation.
+  A 60-column result with a dozen rules was several hundred regex matches
+  per query. `Lotus.Visibility.compile/2` now turns a rule set into a
+  `Lotus.Visibility.Matcher`: exact names in sets, regex rules in a short
+  ordered list, and the built-in denies of the source's adapter merged in.
+  `Lotus.Visibility.matcher_for/2` returns the matcher for a source, and
+  the runner, preflight and discovery ask for it once per result or per
+  call. Every check in `Lotus.Visibility` accepts a matcher or a raw rule
+  set in place of the source name. `Lotus.Config` compiles the static rules
+  when it validates the configuration and `reload!/0` rebuilds them;
+  `Lotus.Config.visibility_for_source_name/1` returns the compiled rules of
+  a source. The `Lotus.Visibility.Resolver` behaviour gains an optional
+  `matcher_for/2` callback so a resolver that stores rules can compile on
+  write and hand back the compiled value; a resolver without it keeps
+  working and is compiled once per result instead of once per column.
+  Precedence and matching do not change. `bench/visibility_matcher.exs`
+  measures the gain.
+
 - **A query run resolves its data source once.**
   `Lotus.run_query/2` resolved the source in `Lotus.Storage.Query.compile/2`
   and again before execution, and the static resolver rebuilt the

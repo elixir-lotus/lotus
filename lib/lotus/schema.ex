@@ -209,9 +209,7 @@ defmodule Lotus.Schema do
             try do
               case Adapter.list_tables(adapter, schemas, include_views: include_views?) do
                 {:ok, raw_relations} ->
-                  filtered =
-                    raw_relations
-                    |> Enum.filter(&Visibility.allowed_relation?(adapter.name, &1, scope))
+                  filtered = Visibility.filter_relations(raw_relations, adapter.name, scope)
 
                   tables =
                     if Enum.all?(filtered, fn {schema, _table} -> is_nil(schema) end) do
@@ -394,10 +392,11 @@ defmodule Lotus.Schema do
 
   defp annotate_columns_with_visibility(cols, source_name, schema, table_name, scope) do
     rels = [{schema, table_name}]
+    matcher = Visibility.matcher_for(source_name, scope)
 
     cols
     |> Enum.reduce([], fn col, acc ->
-      policy = Visibility.column_policy_for(source_name, rels, col.name, scope)
+      policy = Visibility.column_policy_for(matcher, rels, col.name)
 
       cond do
         Policy.hidden_from_schema?(policy) -> acc
@@ -593,9 +592,7 @@ defmodule Lotus.Schema do
         try do
           case Adapter.list_tables(adapter, schemas, include_views: include_views?) do
             {:ok, raw_relations} ->
-              filtered =
-                raw_relations
-                |> Enum.filter(&Visibility.allowed_relation?(adapter.name, &1, scope))
+              filtered = Visibility.filter_relations(raw_relations, adapter.name, scope)
 
               {:ok, filtered}
 

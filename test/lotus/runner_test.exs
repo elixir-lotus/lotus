@@ -1095,8 +1095,8 @@ defmodule Lotus.RunnerTest do
   describe "column masking" do
     test "partial mask hides every byte of a value that is not valid UTF-8" do
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _source ->
-        [{"blob", [mask: {:partial, keep_last: 4}]}]
+      |> stub(:visibility_for_source_name, fn _source ->
+        %{column: [{"blob", [mask: {:partial, keep_last: 4}]}]}
       end)
 
       {:ok, result} =
@@ -1110,8 +1110,8 @@ defmodule Lotus.RunnerTest do
 
     test "partial mask hides a value no longer than the kept tail" do
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _source ->
-        [{"pin", [mask: {:partial, keep_last: 4}]}]
+      |> stub(:visibility_for_source_name, fn _source ->
+        %{column: [{"pin", [mask: {:partial, keep_last: 4}]}]}
       end)
 
       {:ok, result} =
@@ -1125,8 +1125,8 @@ defmodule Lotus.RunnerTest do
 
     test "partial mask still keeps the tail of a valid UTF-8 value" do
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _source ->
-        [{"secret", [mask: {:partial, keep_last: 4}]}]
+      |> stub(:visibility_for_source_name, fn _source ->
+        %{column: [{"secret", [mask: {:partial, keep_last: 4}]}]}
       end)
 
       {:ok, result} =
@@ -1140,8 +1140,8 @@ defmodule Lotus.RunnerTest do
 
     test "partial mask renders a jsonb value instead of failing the query" do
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _source ->
-        [{"doc", [mask: {:partial, keep_last: 4}]}]
+      |> stub(:visibility_for_source_name, fn _source ->
+        %{column: [{"doc", [mask: {:partial, keep_last: 4}]}]}
       end)
 
       {:ok, result} =
@@ -1155,9 +1155,7 @@ defmodule Lotus.RunnerTest do
 
     test "sha256 mask hashes a jsonb value instead of failing the query" do
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _source ->
-        [{"doc", [mask: :sha256]}]
-      end)
+      |> stub(:visibility_for_source_name, fn _source -> %{column: [{"doc", [mask: :sha256]}]} end)
 
       {:ok, result} =
         Runner.run_statement(
@@ -1171,8 +1169,8 @@ defmodule Lotus.RunnerTest do
 
     test "sha256 mask hashes the stored bytes of a value that is not valid UTF-8" do
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _source ->
-        [{"blob", [mask: :sha256]}]
+      |> stub(:visibility_for_source_name, fn _source ->
+        %{column: [{"blob", [mask: :sha256]}]}
       end)
 
       {:ok, result} =
@@ -1188,8 +1186,8 @@ defmodule Lotus.RunnerTest do
     @tag :sqlite
     test "partial mask hides every byte of a SQLite blob" do
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _source ->
-        [{"blob", [mask: {:partial, keep_last: 4}]}]
+      |> stub(:visibility_for_source_name, fn _source ->
+        %{column: [{"blob", [mask: {:partial, keep_last: 4}]}]}
       end)
 
       {:ok, result} =
@@ -1204,8 +1202,8 @@ defmodule Lotus.RunnerTest do
     @tag :mysql
     test "partial mask hides every byte of a MySQL binary value" do
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _source ->
-        [{"payload", [mask: {:partial, keep_last: 4}]}]
+      |> stub(:visibility_for_source_name, fn _source ->
+        %{column: [{"payload", [mask: {:partial, keep_last: 4}]}]}
       end)
 
       {:ok, result} =
@@ -1243,8 +1241,8 @@ defmodule Lotus.RunnerTest do
       assert {:ok, %{rows: [[unmasked_path]]}} = Runner.run_statement(@pg_adapter, show)
 
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _source ->
-        [{"test_users", "search_path", [mask: {:fixed, "REDACTED"}]}]
+      |> stub(:visibility_for_source_name, fn _source ->
+        %{column: [{"test_users", "search_path", [mask: {:fixed, "REDACTED"}]}]}
       end)
 
       assert {:error, _} = Runner.run_statement(@pg_adapter, Statement.new(@failing_statement))
@@ -1285,8 +1283,8 @@ defmodule Lotus.RunnerTest do
       |> stub(:sanitize_query, fn _adapter, _statement, _opts -> :ok end)
 
       Lotus.Config
-      |> stub(:column_rules_for_source_name, fn _source ->
-        [{"test_users", "search_path", [mask: {:fixed, "REDACTED"}]}]
+      |> stub(:visibility_for_source_name, fn _source ->
+        %{column: [{"test_users", "search_path", [mask: {:fixed, "REDACTED"}]}]}
       end)
 
       # `SHOW` skips preflight, so the stranded value is the only candidate

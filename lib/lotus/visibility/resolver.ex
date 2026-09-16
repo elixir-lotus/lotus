@@ -38,4 +38,19 @@ defmodule Lotus.Visibility.Resolver do
   @callback schema_rules_for(source_name :: String.t(), scope :: term()) :: keyword()
   @callback table_rules_for(source_name :: String.t(), scope :: term()) :: keyword()
   @callback column_rules_for(source_name :: String.t(), scope :: term()) :: list()
+
+  @doc """
+  Return the compiled matcher for a source.
+
+  Optional. Without it, core compiles the three rule callbacks with
+  `Lotus.Visibility.compile/2` on every result and every discovery call. A
+  resolver that keeps rules in a store implements this to compile once when
+  a rule set is written and hand back the compiled value. The matcher must
+  include the built-in denies of the source's adapter: pass the adapter to
+  `Lotus.Visibility.compile/2` as `:adapter`.
+  """
+  @callback matcher_for(source_name :: String.t(), scope :: term()) ::
+              Lotus.Visibility.Matcher.t()
+
+  @optional_callbacks matcher_for: 2
 end
