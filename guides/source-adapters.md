@@ -1155,9 +1155,14 @@ runs through the `:default` pool when the source has no pool yet.
 
 A Postgres source added at runtime gets its own repo process, started from a
 template repo module with `name:` set to the registry via tuple. The child
-spec is what this section adds; reaching the process from the Ecto
-callbacks is `c:Ecto.Repo.put_dynamic_repo/1`, which takes a pid or an atom,
-so look the pid up through the registry.
+spec is what this section adds. The Ecto callbacks reach the process through
+the adapter state: `Lotus.Source.Adapters.Ecto.wrap/2` and the per-dialect
+adapters accept `%{repo: module, dynamic: target}` next to the bare repo
+module, and every callback that touches the repo then calls
+`c:Ecto.Repo.put_dynamic_repo/1` for the duration of the call and puts the
+previous dynamic repo back. `:dynamic` is a pid, an atom, or a `{:via, _, _}`
+or `{:global, _}` name that is resolved to a pid on every call, so the source
+can be wrapped before its repo is running.
 
 ```elixir
 defmodule MyApp.Adapters.TenantPostgres do
@@ -1168,7 +1173,11 @@ defmodule MyApp.Adapters.TenantPostgres do
     %Lotus.Source.Adapter{
       name: name,
       module: __MODULE__,
-      state: %{name: name, repo: MyApp.TenantRepo, config: config},
+      state: %{
+        repo: MyApp.TenantRepo,
+        dynamic: Lotus.Source.Registry.via(__MODULE__, name),
+        config: config
+      },
       source_type: :postgres
     }
   end
@@ -1182,19 +1191,25 @@ defmodule MyApp.Adapters.TenantPostgres do
        pool_size: Map.get(config, :pool_size, 5)}
     ]
   end
-
-  @impl true
-  def execute_query(%{name: name, repo: repo}, statement, params, opts) do
-    repo.put_dynamic_repo(Lotus.Source.Registry.whereis(__MODULE__, name))
-    super(repo, statement, params, opts)
-  end
 end
 ```
 
-Every callback that touches the repo needs the same `put_dynamic_repo/1`
-call, because the dynamic repo is set per calling process. A health check
-for a source that is not started yet opens a one-off connection with
-`Postgrex.start_link/1` and closes it.
+No query callback is overridden: the inherited `execute_query/4`,
+`list_schemas/1`, `health_check/1` and the rest route through
+`Lotus.Source.Adapters.Ecto.with_repo/2`, which is also there for a callback
+you do override. Extra keys in the state map, `:config` above, are kept and
+ignored by the Ecto callbacks. While the repo is not running, the callbacks
+that return a result tuple return `{:error, "dynamic repo ... is not
+running"}`, so a health check for a source that is not started yet can fall
+back to a one-off `Postgrex.start_link/1` connection.
+
+A repo started outside the lifecycle, for example by a supervisor the host
+owns, is wrapped with its pid instead:
+
+```elixir
+{:ok, pid} = MyApp.TenantRepo.start_link(name: nil, url: url)
+Lotus.Source.Adapters.Postgres.wrap("tenant", %{repo: MyApp.TenantRepo, dynamic: pid})
+```
 
 ### Example: NimblePool for a NIF handle
 

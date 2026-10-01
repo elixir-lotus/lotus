@@ -17,6 +17,24 @@ defmodule Lotus.Source.Adapters.Ecto do
   itself, since Ecto repos are statically supervised and don't require explicit
   connection management.
 
+  ## Dynamic repos
+
+  A repo started at runtime without a name (`MyApp.Repo.start_link(name: nil)`)
+  is reachable only through `c:Ecto.Repo.put_dynamic_repo/1`, which applies to
+  the calling process. Pass the state as a map to have the adapter make that
+  call around every repo operation:
+
+      adapter =
+        Lotus.Source.Adapters.Ecto.wrap("tenant", %{repo: MyApp.Repo, dynamic: pid})
+
+  `:repo` is the repo module the process was started from. `:dynamic` is
+  what `put_dynamic_repo/1` takes, a pid or an atom, or a `{:via, _, _}` or
+  `{:global, _}` name that the adapter resolves to a pid on every call, so a
+  repo started under `Lotus.Source.Registry.via/2` can be wrapped before it
+  is running. The previous dynamic repo of the calling process is restored
+  after each call. `with_repo/2` is the helper the callbacks use and is
+  available to adapters that override one of them.
+
   ## Extending with custom Ecto-backed adapters
 
   External libraries can create Ecto-backed adapters by writing a dialect
@@ -46,6 +64,22 @@ defmodule Lotus.Source.Adapters.Ecto do
   alias Lotus.Variables
 
   @default_dialect Dialects.Default
+
+  @typedoc """
+  Where a dynamic repo runs: what `c:Ecto.Repo.put_dynamic_repo/1` takes, or
+  a process name that `GenServer.whereis/1` resolves on every call.
+  """
+  @type dynamic_target :: pid() | atom() | {:global, term()} | {:via, module(), term()}
+
+  @typedoc "A repo module started at runtime, reached through `put_dynamic_repo/1`."
+  @type dynamic_state :: %{
+          :repo => module(),
+          :dynamic => dynamic_target(),
+          optional(atom()) => term()
+        }
+
+  @typedoc "The adapter state: a statically supervised repo module or a dynamic repo."
+  @type state :: module() | dynamic_state()
 
   # ---------------------------------------------------------------------------
   # __using__ macro for external Ecto-backed adapters
@@ -132,14 +166,16 @@ defmodule Lotus.Source.Adapters.Ecto do
           repo.__adapter__() == @dialect.ecto_adapter()
       end
 
+      def can_handle?(%{repo: repo, dynamic: _}), do: can_handle?(repo)
+
       def can_handle?(_), do: false
 
       @impl true
-      def wrap(name, repo_module) when is_binary(name) and is_atom(repo_module) do
+      def wrap(name, state) when is_binary(name) do
         %Adapter{
           name: name,
           module: __MODULE__,
-          state: repo_module,
+          state: EctoAdapter.validate_state!(state),
           source_type: @dialect.source_type()
         }
       end
@@ -149,13 +185,19 @@ defmodule Lotus.Source.Adapters.Ecto do
   defp execution_callbacks do
     quote do
       @impl true
-      def execute_query(repo, sql, params, opts) do
-        EctoAdapter.do_execute_query(@dialect, repo, sql, params, opts)
+      def execute_query(state, sql, params, opts) do
+        EctoAdapter.with_repo(state, fn repo ->
+          EctoAdapter.do_execute_query(@dialect, repo, sql, params, opts)
+        end)
+      rescue
+        e -> {:error, Exception.message(e)}
       end
 
       @impl true
-      def transaction(repo, fun, opts) do
-        @dialect.execute_in_transaction(repo, fn -> fun.(repo) end, opts)
+      def transaction(state, fun, opts) do
+        EctoAdapter.with_repo(state, fn repo ->
+          @dialect.execute_in_transaction(repo, fn -> fun.(repo) end, opts)
+        end)
       end
     end
   end
@@ -163,30 +205,38 @@ defmodule Lotus.Source.Adapters.Ecto do
   defp introspection_callbacks do
     quote do
       @impl true
-      def list_schemas(repo) do
-        {:ok, @dialect.list_schemas(repo)}
+      def list_schemas(state) do
+        {:ok, EctoAdapter.with_repo(state, fn repo -> @dialect.list_schemas(repo) end)}
       rescue
         e -> {:error, Exception.message(e)}
       end
 
       @impl true
-      def list_tables(repo, schemas, opts) do
+      def list_tables(state, schemas, opts) do
         include_views? = Keyword.get(opts, :include_views, false)
-        {:ok, @dialect.list_tables(repo, schemas, include_views?)}
+
+        {:ok,
+         EctoAdapter.with_repo(state, fn repo ->
+           @dialect.list_tables(repo, schemas, include_views?)
+         end)}
       rescue
         e -> {:error, Exception.message(e)}
       end
 
       @impl true
-      def describe_table(repo, schema, table) do
-        {:ok, @dialect.describe_table(repo, schema, table)}
+      def describe_table(state, schema, table) do
+        {:ok,
+         EctoAdapter.with_repo(state, fn repo -> @dialect.describe_table(repo, schema, table) end)}
       rescue
         e -> {:error, Exception.message(e)}
       end
 
       @impl true
-      def resolve_table_namespace(repo, table, schemas) do
-        {:ok, @dialect.resolve_table_namespace(repo, table, schemas)}
+      def resolve_table_namespace(state, table, schemas) do
+        {:ok,
+         EctoAdapter.with_repo(state, fn repo ->
+           @dialect.resolve_table_namespace(repo, table, schemas)
+         end)}
       rescue
         e -> {:error, Exception.message(e)}
       end
@@ -206,28 +256,36 @@ defmodule Lotus.Source.Adapters.Ecto do
       def apply_sorts(_repo, statement, sorts), do: @dialect.apply_sorts(statement, sorts)
 
       @impl true
-      def query_plan(repo, statement, opts),
-        do: @dialect.query_plan(repo, statement, opts)
+      def query_plan(state, statement, opts) do
+        EctoAdapter.with_repo(state, fn repo -> @dialect.query_plan(repo, statement, opts) end)
+      end
     end
   end
 
   defp visibility_callbacks do
     quote do
       @impl true
-      def builtin_denies(repo), do: @dialect.builtin_denies(repo)
+      def builtin_denies(state),
+        do: EctoAdapter.with_repo(state, fn repo -> @dialect.builtin_denies(repo) end)
 
       @impl true
-      def builtin_schema_denies(repo), do: @dialect.builtin_schema_denies(repo)
+      def builtin_schema_denies(state),
+        do: EctoAdapter.with_repo(state, fn repo -> @dialect.builtin_schema_denies(repo) end)
 
       @impl true
-      def default_schemas(repo), do: @dialect.default_schemas(repo)
+      def default_schemas(state),
+        do: EctoAdapter.with_repo(state, fn repo -> @dialect.default_schemas(repo) end)
     end
   end
 
   defp lifecycle_callbacks do
     quote do
       @impl true
-      def health_check(repo), do: EctoAdapter.do_health_check(repo)
+      def health_check(state) do
+        EctoAdapter.with_repo(state, &EctoAdapter.do_health_check/1)
+      rescue
+        e -> {:error, Exception.message(e)}
+      end
 
       @impl true
       def disconnect(_repo), do: :ok
@@ -247,13 +305,17 @@ defmodule Lotus.Source.Adapters.Ecto do
       def transform_bound_query(_repo, statement, _opts), do: statement
 
       @impl true
-      def extract_accessed_resources(repo, statement) do
-        EctoAdapter.do_extract_accessed_resources(@dialect, repo, statement)
+      def extract_accessed_resources(state, statement) do
+        EctoAdapter.with_repo(state, fn repo ->
+          EctoAdapter.do_extract_accessed_resources(@dialect, repo, statement)
+        end)
       end
 
       @impl true
-      def apply_pagination(repo, statement, pagination_opts) do
-        EctoAdapter.do_apply_pagination(@dialect, repo, statement, pagination_opts)
+      def apply_pagination(state, statement, pagination_opts) do
+        EctoAdapter.with_repo(state, fn repo ->
+          EctoAdapter.do_apply_pagination(@dialect, repo, statement, pagination_opts)
+        end)
       end
 
       @impl true
@@ -273,8 +335,11 @@ defmodule Lotus.Source.Adapters.Ecto do
   defp validation_callbacks do
     quote do
       @impl true
-      def validate_statement(repo, statement, opts),
-        do: EctoAdapter.do_validate_statement(@dialect, repo, statement, opts)
+      def validate_statement(state, statement, opts) do
+        EctoAdapter.with_repo(state, fn repo ->
+          EctoAdapter.do_validate_statement(@dialect, repo, statement, opts)
+        end)
+      end
 
       @impl true
       def parse_qualified_name(_repo, name), do: EctoAdapter.do_parse_qualified_name(name)
@@ -384,16 +449,24 @@ defmodule Lotus.Source.Adapters.Ecto do
   ## Parameters
 
     * `name` — a human-readable identifier (e.g. `"main"`, `"warehouse"`)
-    * `repo_module` — the Ecto.Repo module (e.g. `MyApp.Repo`)
+    * `state` — the Ecto.Repo module (e.g. `MyApp.Repo`), or
+      `%{repo: MyApp.Repo, dynamic: pid_or_name}` for a repo started at
+      runtime (see the "Dynamic repos" section)
 
   ## Examples
 
       iex> adapter = Lotus.Source.Adapters.Ecto.wrap("main", MyApp.Repo)
       %Lotus.Source.Adapter{name: "main", module: Lotus.Source.Adapters.Ecto, ...}
+
+      iex> Lotus.Source.Adapters.Ecto.wrap("tenant", %{repo: MyApp.Repo, dynamic: pid})
+      %Lotus.Source.Adapter{name: "tenant", state: %{repo: MyApp.Repo, dynamic: pid}, ...}
   """
   @impl true
-  @spec wrap(String.t(), module()) :: Adapter.t()
-  def wrap(name, repo_module) when is_binary(name) and is_atom(repo_module) do
+  @spec wrap(String.t(), state()) :: Adapter.t()
+  def wrap(name, state) when is_binary(name) do
+    state = validate_state!(state)
+    repo_module = repo_module(state)
+
     case Enum.find(@builtin_ecto_adapters, & &1.can_handle?(repo_module)) do
       nil ->
         # Guard the fallback path: `can_handle?/1` is broad (any atom), so
@@ -411,19 +484,20 @@ defmodule Lotus.Source.Adapters.Ecto do
         %Adapter{
           name: name,
           module: __MODULE__,
-          state: repo_module,
+          state: state,
           source_type: @default_dialect.source_type()
         }
 
       adapter_mod ->
-        adapter_mod.wrap(name, repo_module)
+        adapter_mod.wrap(name, state)
     end
   end
 
   @doc """
   Whether this adapter can handle the given data source entry.
 
-  Returns `true` for any module that exports `__adapter__/0`. This is
+  Returns `true` for any module that exports `__adapter__/0`, and for the
+  `%{repo: module, dynamic: _}` form when its `:repo` does. This is
   intentionally broad — it acts as a catch-all fallback for Ecto repos
   that don't match a more specific per-dialect adapter. The resolver
   checks per-dialect adapters first (via `builtin_adapters/0` and
@@ -436,7 +510,69 @@ defmodule Lotus.Source.Adapters.Ecto do
     Code.ensure_loaded?(repo) and function_exported?(repo, :__adapter__, 0)
   end
 
+  def can_handle?(%{repo: repo, dynamic: _}), do: can_handle?(repo)
+
   def can_handle?(_), do: false
+
+  @doc """
+  Runs `fun` with the repo module of `state`, routed to the dynamic repo
+  when `state` carries one.
+
+  For a repo module the function is called with the module as is. For a
+  `%{repo: module, dynamic: target}` state, the target is resolved to a pid
+  or an atom, `c:Ecto.Repo.put_dynamic_repo/1` is called on the repo module,
+  `fun` runs, and the dynamic repo the calling process had before is put
+  back, whether `fun` returns or raises. A `{:via, _, _}` or `{:global, _}`
+  target whose process is not running raises `ArgumentError`.
+
+  ## Examples
+
+      Lotus.Source.Adapters.Ecto.with_repo(MyApp.Repo, & &1.query!("SELECT 1"))
+
+      Lotus.Source.Adapters.Ecto.with_repo(%{repo: MyApp.Repo, dynamic: pid}, fn repo ->
+        repo.query!("SELECT 1")
+      end)
+  """
+  @spec with_repo(state(), (module() -> result)) :: result when result: term()
+  def with_repo(%{repo: repo, dynamic: target}, fun) when is_atom(repo) and is_function(fun, 1) do
+    previous = repo.put_dynamic_repo(resolve_dynamic_target!(target))
+
+    try do
+      fun.(repo)
+    after
+      repo.put_dynamic_repo(previous)
+    end
+  end
+
+  def with_repo(repo, fun) when is_atom(repo) and is_function(fun, 1), do: fun.(repo)
+
+  @doc """
+  Returns the repo module of an adapter state, for either shape.
+  """
+  @spec repo_module(state()) :: module()
+  def repo_module(%{repo: repo, dynamic: _}) when is_atom(repo), do: repo
+  def repo_module(repo) when is_atom(repo), do: repo
+
+  @doc false
+  @spec validate_state!(term()) :: state()
+  def validate_state!(repo) when is_atom(repo), do: repo
+
+  def validate_state!(%{repo: repo, dynamic: target} = state)
+      when is_atom(repo) and (is_pid(target) or is_atom(target) or is_tuple(target)),
+      do: state
+
+  def validate_state!(other) do
+    raise ArgumentError,
+          "an Ecto source expects an Ecto.Repo module or " <>
+            "%{repo: module, dynamic: pid | name}, got: #{inspect(other)}"
+  end
+
+  defp resolve_dynamic_target!(target) when is_pid(target) or is_atom(target), do: target
+
+  defp resolve_dynamic_target!(target) when is_tuple(target) do
+    GenServer.whereis(target) ||
+      raise ArgumentError, "dynamic repo #{inspect(target)} is not running"
+  end
 
   @doc """
   Detects the source type from a repo module's underlying Ecto adapter.
@@ -461,13 +597,17 @@ defmodule Lotus.Source.Adapters.Ecto do
   # ---------------------------------------------------------------------------
 
   @impl true
-  def execute_query(repo, sql, params, opts) do
-    do_execute_query(@default_dialect, repo, sql, params, opts)
+  def execute_query(state, sql, params, opts) do
+    with_repo(state, &do_execute_query(@default_dialect, &1, sql, params, opts))
+  rescue
+    e -> {:error, Exception.message(e)}
   end
 
   @impl true
-  def transaction(repo, fun, opts) do
-    @default_dialect.execute_in_transaction(repo, fn -> fun.(repo) end, opts)
+  def transaction(state, fun, opts) do
+    with_repo(state, fn repo ->
+      @default_dialect.execute_in_transaction(repo, fn -> fun.(repo) end, opts)
+    end)
   end
 
   # ---------------------------------------------------------------------------
@@ -475,30 +615,30 @@ defmodule Lotus.Source.Adapters.Ecto do
   # ---------------------------------------------------------------------------
 
   @impl true
-  def list_schemas(repo) do
-    {:ok, @default_dialect.list_schemas(repo)}
+  def list_schemas(state) do
+    {:ok, with_repo(state, &@default_dialect.list_schemas/1)}
   rescue
     e -> {:error, Exception.message(e)}
   end
 
   @impl true
-  def list_tables(repo, schemas, opts) do
+  def list_tables(state, schemas, opts) do
     include_views? = Keyword.get(opts, :include_views, false)
-    {:ok, @default_dialect.list_tables(repo, schemas, include_views?)}
+    {:ok, with_repo(state, &@default_dialect.list_tables(&1, schemas, include_views?))}
   rescue
     e -> {:error, Exception.message(e)}
   end
 
   @impl true
-  def describe_table(repo, schema, table) do
-    {:ok, @default_dialect.describe_table(repo, schema, table)}
+  def describe_table(state, schema, table) do
+    {:ok, with_repo(state, &@default_dialect.describe_table(&1, schema, table))}
   rescue
     e -> {:error, Exception.message(e)}
   end
 
   @impl true
-  def resolve_table_namespace(repo, table, schemas) do
-    {:ok, @default_dialect.resolve_table_namespace(repo, table, schemas)}
+  def resolve_table_namespace(state, table, schemas) do
+    {:ok, with_repo(state, &@default_dialect.resolve_table_namespace(&1, table, schemas))}
   rescue
     e -> {:error, Exception.message(e)}
   end
@@ -523,8 +663,8 @@ defmodule Lotus.Source.Adapters.Ecto do
   end
 
   @impl true
-  def query_plan(repo, statement, opts) do
-    @default_dialect.query_plan(repo, statement, opts)
+  def query_plan(state, statement, opts) do
+    with_repo(state, &@default_dialect.query_plan(&1, statement, opts))
   end
 
   # ---------------------------------------------------------------------------
@@ -532,18 +672,18 @@ defmodule Lotus.Source.Adapters.Ecto do
   # ---------------------------------------------------------------------------
 
   @impl true
-  def builtin_denies(repo) do
-    @default_dialect.builtin_denies(repo)
+  def builtin_denies(state) do
+    with_repo(state, &@default_dialect.builtin_denies/1)
   end
 
   @impl true
-  def builtin_schema_denies(repo) do
-    @default_dialect.builtin_schema_denies(repo)
+  def builtin_schema_denies(state) do
+    with_repo(state, &@default_dialect.builtin_schema_denies/1)
   end
 
   @impl true
-  def default_schemas(repo) do
-    @default_dialect.default_schemas(repo)
+  def default_schemas(state) do
+    with_repo(state, &@default_dialect.default_schemas/1)
   end
 
   # ---------------------------------------------------------------------------
@@ -551,7 +691,11 @@ defmodule Lotus.Source.Adapters.Ecto do
   # ---------------------------------------------------------------------------
 
   @impl true
-  def health_check(repo), do: do_health_check(repo)
+  def health_check(state) do
+    with_repo(state, &do_health_check/1)
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
 
   @impl true
   def disconnect(_repo) do
@@ -584,13 +728,13 @@ defmodule Lotus.Source.Adapters.Ecto do
   def transform_bound_query(_repo, statement, _opts), do: statement
 
   @impl true
-  def extract_accessed_resources(repo, statement) do
-    do_extract_accessed_resources(@default_dialect, repo, statement)
+  def extract_accessed_resources(state, statement) do
+    with_repo(state, &do_extract_accessed_resources(@default_dialect, &1, statement))
   end
 
   @impl true
-  def apply_pagination(repo, statement, pagination_opts) do
-    do_apply_pagination(@default_dialect, repo, statement, pagination_opts)
+  def apply_pagination(state, statement, pagination_opts) do
+    with_repo(state, &do_apply_pagination(@default_dialect, &1, statement, pagination_opts))
   end
 
   @impl true
@@ -606,8 +750,8 @@ defmodule Lotus.Source.Adapters.Ecto do
     do: do_substitute_list_variable(@default_dialect, statement, var_name, values, type)
 
   @impl true
-  def validate_statement(repo, statement, opts),
-    do: do_validate_statement(@default_dialect, repo, statement, opts)
+  def validate_statement(state, statement, opts),
+    do: with_repo(state, &do_validate_statement(@default_dialect, &1, statement, opts))
 
   @impl true
   def parse_qualified_name(_repo, name), do: do_parse_qualified_name(name)
