@@ -1,6 +1,7 @@
 defmodule Lotus.Source.Adapters.Ecto.DynamicRepoTest do
   use Lotus.Case, async: true
 
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
   alias Lotus.Source.Adapters.Postgres
@@ -158,7 +159,7 @@ defmodule Lotus.Source.Adapters.Ecto.DynamicRepoTest do
     end
 
     test "query_plan/3 runs on the dynamic process", %{adapter: adapter} do
-      statement = Lotus.Query.Statement.new("SELECT 1")
+      statement = Statement.new("SELECT 1")
       assert {:ok, _plan} = Adapter.query_plan(adapter, statement, [])
     end
   end
