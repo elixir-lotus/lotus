@@ -619,8 +619,8 @@ defmodule Lotus.Config do
   Returns the visibility rules of a source compiled once at validation.
 
   The result is a `Lotus.Visibility.Matcher` without built-in denies;
-  `Lotus.Visibility.Resolvers.Static.matcher_for/2` merges those for the
-  source's adapter. A source named in none of the visibility maps gets the
+  the `c:Lotus.Visibility.Resolver.matcher_for/2` implementation of
+  `Lotus.Visibility.Resolvers.Static` merges those for the source's adapter. A source named in none of the visibility maps gets the
   `:default` matcher. `reload!/0` rebuilds the compiled rules.
   """
   @spec visibility_for_source_name(String.t()) :: Lotus.Visibility.Matcher.t()
