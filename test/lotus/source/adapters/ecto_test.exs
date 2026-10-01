@@ -190,6 +190,30 @@ defmodule Lotus.Source.Adapters.EctoTest do
       assert :ok = Adapter.sanitize_query(adapter, Statement.new("SELECT 1"), [])
     end
 
+    test "allows a write keyword inside a string literal, a comment or a quoted identifier" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      for sql <- [
+            "SELECT 1 FROM events WHERE name = 'ai.call'",
+            "SELECT 'please delete me'",
+            "SELECT 1 -- delete",
+            "SELECT 1 /* drop table users */",
+            ~s(SELECT "update" FROM t)
+          ] do
+        assert :ok = Adapter.sanitize_query(adapter, Statement.new(sql), []), sql
+      end
+    end
+
+    test "rejects a write keyword in code" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      for sql <- ["DELETE FROM users", "SELECT 1 FROM t WHERE 'x' = 'x' AND CALL"] do
+        assert {:error, "Only read-only queries are allowed"} =
+                 Adapter.sanitize_query(adapter, Statement.new(sql), []),
+               sql
+      end
+    end
+
     test "rejects multiple statements" do
       adapter = EctoAdapter.wrap("main", Repo)
 
