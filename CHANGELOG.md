@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [1.2.0] - 2026-10-01
+
+Sources get supervised processes and a cache that stays correct across
+nodes, an Ecto source can be a repo started at runtime, the template layer
+reads tokens instead of raw text, and the SQL helpers move to `Lotus.SQL`.
+The old module names and the process-dictionary relations API still work,
+with deprecation warnings, until v2.0. No host code has to change.
 
 ### Added
 
@@ -174,6 +180,15 @@
   removed in v2.0; the upgrade guide for v2.0 lists the renames.
 
 ### Fixed
+
+- **The read-only check reads only code.** The check ran its deny list
+  (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `CALL` and the others) over the
+  whole statement, so a write keyword inside a string literal, a comment or
+  a quoted identifier refused a read: `WHERE name = 'ai.call'`,
+  `SELECT 'please delete me'` and `SELECT 1 -- delete` all failed with
+  "Only read-only queries are allowed". The check now looks only at the code
+  tokens of `Lotus.Query.Tokenizer`, under the source's lexical profile. A
+  write keyword in code is still refused.
 
 - **Lotus boots with the Cachex adapter, and tagged writes work under a
   router.** `Lotus.Supervisor` always started `Lotus.Cache.ETS`, whose
