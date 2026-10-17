@@ -276,7 +276,7 @@ multi-turn conversation support, and query optimization.
 
 ### MCP Server
 
-Let Claude Code (or any MCP client) work with your Lotus data as a signed-in user of your app. Add `{:sake, "~> 0.3"}`, set up Sake's authorization with your login, and mount the endpoint:
+Let Claude Code (or any MCP client) work with your Lotus data as a signed-in user of your app. Add `{:sake, "~> 0.4"}`, set up Sake's authorization with your login, and mount the endpoint:
 
 ```elixir
 sake_endpoint "/lotus/mcp", server: Lotus.MCP, auth: true
