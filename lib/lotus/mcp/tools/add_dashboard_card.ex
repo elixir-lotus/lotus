@@ -22,7 +22,13 @@ if Code.ensure_loaded?(Sake.Server) do
 
     arg :query_id, :integer, description: "query: the saved query the card shows"
     arg :title, :string, max_length: 255, description: "The card's title"
-    arg :text, :string, max_length: 10_000, description: "text: markdown; heading: the heading"
+
+    arg :text, :string,
+      max_length: 10_000,
+      description:
+        "text: GitHub Flavored Markdown (headings, lists, check lists, quotes, code, " <>
+          "tables, links); heading: plain text"
+
     arg :width, :integer, default: 6, min: 1, max: 12, description: "Columns wide, of 12"
     arg :height, :integer, default: 4, min: 1, max: 24, description: "Rows high"
 
