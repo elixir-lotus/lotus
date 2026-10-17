@@ -1,5 +1,45 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **An MCP server, `Lotus.MCP`.** With `{:sake, "~> 0.3"}` in the host's
+  deps (an optional dependency of Lotus), an MCP client such as Claude
+  Code connects to the host app, signs in through the host's own login
+  (Sake's OAuth 2.1 authorization server), and works with Lotus as that
+  person. The server has tools for each of three scopes:
+  - `lotus:read`: list data sources, schemas, tables, columns, saved
+    queries and dashboards.
+  - `lotus:query`: run read-only statements, saved queries (with
+    variables) and dashboards (with filter values), a page of rows at a
+    time, and read a column's distinct values.
+  - `lotus:write`: save and change queries, set a saved query's chart in
+    the config Lotus Web renders (checked against the query's columns),
+    create dashboards and add query, text and heading cards to them.
+
+  Saved queries and dashboards are also MCP resources. Every statement
+  runs read-only, whatever `config :lotus, read_only:` says, and goes
+  through the visibility rules and middleware with the signed-in person
+  as the actor. A statement that writes is refused when saved, too. No
+  tool deletes anything. `config :lotus, :mcp` takes:
+  - `:authorize` (required): who may use Lotus over MCP. Without it,
+    nobody may.
+  - `:actor`: maps the principal to `:context` and `:scope`.
+  - `:data_sources`: limits the sources exposed, saved queries and
+    dashboard cards included.
+  - `:max_rows`.
+
+  See the new MCP guide, which also sets out what read-only does not
+  cover: column policies match result column names, and a PostgreSQL
+  `SELECT` can still call functions with side effects.
+
+### Fixed
+
+- `Lotus.AI.Actions.GetColumnValues` runs its statement read-only, as
+  the other actions do, and returns no values for a column an `:omit`
+  policy hides instead of raising.
+
 ## [1.2.0] - 2026-10-01
 
 Sources get supervised processes and a cache that stays correct across
