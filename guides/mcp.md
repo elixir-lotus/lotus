@@ -236,6 +236,46 @@ end
 Serve `MyApp.MCP` on the endpoint and list it in the `Sake` child's
 `servers:`. The `lotus:*` scopes come with the mount.
 
+### Prompts of your own
+
+Lotus ships no MCP prompts: it doesn't know what your data means. A
+prompt is a named request a person picks in their client (Claude Code
+lists them as slash commands), so it belongs to your app, about your own
+saved queries and dashboards. Write one with `Sake.Prompt` in the server
+that mounts Lotus:
+
+```elixir
+defmodule MyApp.MCP.Prompts.WeeklyRevenue do
+  use Sake.Prompt,
+    name: "weekly_revenue",
+    description: "Summarize last week's revenue against the week before",
+    scope: "lotus:query"
+
+  arg :region, :string, description: "Only this region (optional)"
+
+  @impl true
+  def get(args, _ctx) do
+    region = if args[:region], do: " for #{args[:region]}", else: ""
+
+    {:ok,
+     [user: "Run the Revenue dashboard#{region} for last week and the week before " <>
+              "(run_dashboard), and summarize what changed and why it might have."]}
+  end
+end
+
+defmodule MyApp.MCP do
+  use Sake.Server, name: "my-app", version: "1.0.0"
+  mount Lotus.MCP, prefix: "lotus"
+  prompts [MyApp.MCP.Prompts.WeeklyRevenue]
+end
+```
+
+A prompt only writes the request; the model then works through the
+Lotus tools, so the person's scopes and `authorize:` apply as for
+anything else they ask. Lotus's `authorize:` gate covers Lotus's own
+tools and resources, not your server's components: give your prompts a
+`scope:` and, if they need it, middleware of your own.
+
 ## Locally, over stdio
 
 For a development database on your own machine, skip authorization and
