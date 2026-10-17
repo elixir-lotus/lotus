@@ -2,14 +2,18 @@ defmodule Lotus.AI.Actions.ValidateStatement do
   @moduledoc """
   Validates statement syntax against the data source without executing it.
 
-  Delegates to the adapter's `validate_statement/3`, which parses the
-  statement server-side and catches syntax errors and missing table or
-  column references before the statement is run.
+  Runs the checks execution runs first, for the actor (sanitization, the
+  source's visibility, preflight against the visibility rules, and how the
+  statement uses protected columns), then the adapter's
+  `validate_statement/3`, which parses the statement server-side and
+  catches syntax errors and missing table or column references.
   """
 
   @behaviour Lotus.AI.Action
 
+  alias Lotus.AI.Action
   alias Lotus.Query.Statement
+  alias Lotus.Runner
   alias Lotus.Source
   alias Lotus.Source.Adapter
 
@@ -36,16 +40,32 @@ defmodule Lotus.AI.Actions.ValidateStatement do
   end
 
   @impl true
-  def run(params, _context) do
+  def run(params, context) do
     adapter = Source.resolve!(params.data_source, nil)
     statement = Statement.new(params.statement)
 
-    case Adapter.validate_statement(adapter, statement, []) do
-      :ok ->
-        {:ok, %{valid: true}}
+    with :ok <- check(adapter, statement, Action.actor_opts(context)),
+         :ok <- Adapter.validate_statement(adapter, statement, []) do
+      {:ok, %{valid: true}}
+    else
+      {:error, reason} -> {:ok, %{valid: false, error: reason}}
+    end
+  end
 
-      {:error, reason} ->
-        {:ok, %{valid: false, error: reason}}
+  # The checks execution runs first, for the actor, on the statement with its
+  # template syntax resolved: a statement that touches a hidden table fails
+  # here as it would there, before the database can say whether it exists.
+  defp check(adapter, statement, actor_opts) do
+    analyzable =
+      case Adapter.prepare_for_analysis(adapter, statement) do
+        {:ok, prepared} -> prepared
+        {:error, _reason} -> statement
+      end
+
+    case Runner.check_statement(adapter, analyzable, [read_only: true] ++ actor_opts) do
+      {:ok, _relations} -> :ok
+      {:error, reason} when is_binary(reason) -> {:error, reason}
+      {:error, reason} -> {:error, inspect(reason)}
     end
   end
 end

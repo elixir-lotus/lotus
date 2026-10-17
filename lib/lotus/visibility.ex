@@ -260,10 +260,28 @@ defmodule Lotus.Visibility do
   end
 
   @doc """
+  Whether the caller in `scope` may use the source at all.
+
+  Asks the resolver's optional `c:Lotus.Visibility.Resolver.source_visible?/2`;
+  a resolver without it makes every source visible. Execution refuses a
+  source that isn't, `matcher_for/2` hides everything in it, and the AI
+  assistant and `Lotus.MCP` leave it out of their lists of data sources.
+  """
+  @spec source_visible?(String.t(), term()) :: boolean()
+  def source_visible?(source_name, scope \\ nil) when is_binary(source_name) do
+    resolver = visibility_resolver()
+
+    if Code.ensure_loaded?(resolver) and function_exported?(resolver, :source_visible?, 2),
+      do: resolver.source_visible?(source_name, scope) == true,
+      else: true
+  end
+
+  @doc """
   Returns the compiled matcher for a source, from the configured resolver.
 
-  A resolver that exports `c:Lotus.Visibility.Resolver.matcher_for/2`
-  answers directly. Otherwise its three rule callbacks are compiled here,
+  A source `source_visible?/2` hides from the scope gets a matcher that
+  allows nothing. Otherwise a resolver that exports
+  `c:Lotus.Visibility.Resolver.matcher_for/2` answers directly. Otherwise its three rule callbacks are compiled here,
   with the built-in denies of the source's adapter merged in.
 
   Call this once per result or per discovery call and pass the matcher to
@@ -273,17 +291,22 @@ defmodule Lotus.Visibility do
   def matcher_for(source_name, scope \\ nil) when is_binary(source_name) do
     resolver = visibility_resolver()
 
-    if Code.ensure_loaded?(resolver) and function_exported?(resolver, :matcher_for, 2) do
-      resolver.matcher_for(source_name, scope)
-    else
-      compile(
-        %{
-          schema: resolver.schema_rules_for(source_name, scope),
-          table: resolver.table_rules_for(source_name, scope),
-          column: resolver.column_rules_for(source_name, scope)
-        },
-        adapter: source_adapter(source_name)
-      )
+    cond do
+      not source_visible?(source_name, scope) ->
+        Matcher.deny_all()
+
+      Code.ensure_loaded?(resolver) and function_exported?(resolver, :matcher_for, 2) ->
+        resolver.matcher_for(source_name, scope)
+
+      true ->
+        compile(
+          %{
+            schema: resolver.schema_rules_for(source_name, scope),
+            table: resolver.table_rules_for(source_name, scope),
+            column: resolver.column_rules_for(source_name, scope)
+          },
+          adapter: source_adapter(source_name)
+        )
     end
   end
 

@@ -13,13 +13,16 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   @behaviour Lotus.Source.Adapters.Ecto.Dialect
 
   alias __MODULE__.EditorConfig
+  alias Lotus.Preflight.Columns
   alias Lotus.Query.Statement
+  alias Lotus.Query.Tokenizer.Profile
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
   alias Lotus.SQL.FilterInjector
   alias Lotus.SQL.Identifier
   alias Lotus.SQL.SortInjector
 
   @default_statement_timeout_ms 5_000
+  @read_only_result :lotus_read_only_result
 
   @impl true
   def source_type, do: :postgres
@@ -34,6 +37,12 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
     timeout = Keyword.get(opts, :timeout, 15_000)
     search_path = Keyword.get(opts, :search_path)
 
+    # A read-only run rolls back rather than commits, so whatever a statement
+    # changed in the session (a `set_config(..., false)`, a cursor, a LISTEN)
+    # is undone before the connection goes back to the pool. Only the
+    # outermost transaction can: rolling back a nested one fails the outer.
+    roll_back? = read_only? and not repo.in_transaction?()
+
     repo.transaction(
       fn ->
         if read_only?, do: repo.query!("SET LOCAL transaction_read_only = on")
@@ -44,10 +53,15 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
           repo.query!("SET LOCAL search_path = #{search_path}")
         end
 
-        fun.()
+        result = fun.()
+        if roll_back?, do: repo.rollback({@read_only_result, result}), else: result
       end,
       timeout: timeout
     )
+    |> case do
+      {:error, {@read_only_result, result}} -> {:ok, result}
+      other -> other
+    end
   rescue
     e -> {:error, Exception.message(e)}
   end
@@ -190,6 +204,54 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
 
   def example_query(table, _schema) do
     "SELECT value_column FROM #{table}"
+  end
+
+  # Session settings, advisory locks (released by neither rollback nor the
+  # pool), signals to other backends, server administration, files, other
+  # connections, and functions that run SQL text or read a table by name.
+  @impl true
+  def denied_functions do
+    [
+      "set_config",
+      "pg_advisory_*",
+      "pg_try_advisory_*",
+      "pg_cancel_backend",
+      "pg_terminate_backend",
+      "pg_reload_conf",
+      "pg_rotate_logfile",
+      "pg_log_backend_memory_contexts",
+      "pg_promote",
+      "pg_switch_wal",
+      "pg_create_restore_point",
+      "pg_create_*_replication_slot",
+      "pg_drop_replication_slot",
+      "pg_copy_*_replication_slot",
+      "pg_replication_slot_advance",
+      "pg_logical_*",
+      "pg_replication_origin_*",
+      "pg_stat_reset*",
+      "pg_wal_replay_*",
+      "pg_backup_*",
+      "pg_start_backup",
+      "pg_stop_backup",
+      "pg_import_system_collations",
+      "pg_file_*",
+      "pg_read_file",
+      "pg_read_binary_file",
+      "pg_ls_*",
+      "pg_stat_file",
+      "pg_notify",
+      "dblink*",
+      "lo_*",
+      "query_to_xml*",
+      "cursor_to_xml*",
+      "table_to_xml*",
+      "schema_to_xml*",
+      "database_to_xml*",
+      "ts_stat",
+      "crosstab*",
+      "connectby"
+    ]
   end
 
   @impl true
@@ -428,6 +490,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
               json
               |> parse_explain_plan()
               |> collect_relations(MapSet.new())
+              |> then(&Enum.into(named_relations(repo, sql), &1))
             rescue
               # An EXPLAIN plan with an unexpected shape should fail preflight
               # cleanly, not crash the whole caller. Known cases: missing
@@ -444,6 +507,40 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
     case result do
       {:ok, relations} -> {:ok, relations}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # The plan leaves out a table the planner proved empty (`WHERE false`, or a
+  # `{{var}}` neutralized to `= NULL`), which would still return its columns.
+  # So the tables the statement names in FROM and JOIN count too, resolved
+  # under the same search path. An unquoted name folds to lower case, so
+  # both spellings are tried; a name that resolves to nothing adds nothing.
+  defp named_relations(repo, sql) do
+    candidates =
+      sql
+      |> Columns.table_names(Profile.for_language(query_language()))
+      |> Enum.filter(&(length(&1) <= 2))
+      |> Enum.flat_map(fn path ->
+        [path, Enum.map(path, &String.downcase/1)]
+        |> Enum.uniq()
+        |> Enum.map(fn parts -> Enum.map_join(parts, ".", &quote_identifier/1) end)
+      end)
+
+    if candidates == [] do
+      []
+    else
+      %{rows: rows} =
+        repo.query!(
+          """
+          SELECT n.nspname, c.relname
+          FROM unnest($1::text[]) AS t(name)
+          JOIN pg_catalog.pg_class c ON c.oid = to_regclass(t.name)
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+          """,
+          [candidates]
+        )
+
+      Enum.map(rows, fn [schema, table] -> {schema, table} end)
     end
   end
 

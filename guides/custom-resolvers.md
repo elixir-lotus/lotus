@@ -274,6 +274,7 @@ A visibility resolver returns the schema, table, and column rules that Lotus app
 
 # Optional
 @callback matcher_for(source_name :: String.t(), scope :: term()) :: Lotus.Visibility.Matcher.t()
+@callback source_visible?(source_name :: String.t(), scope :: term()) :: boolean()
 ```
 
 | Callback | Returns | Example shape |
@@ -282,6 +283,7 @@ A visibility resolver returns the schema, table, and column rules that Lotus app
 | `table_rules_for/2` | `keyword()` | `[allow: [{"public", ~r/^dim_/}], deny: ["api_keys"]]` |
 | `column_rules_for/2` | `list()` | `[{"public", "users", "ssn", :mask}]` |
 | `matcher_for/2` (optional) | `%Lotus.Visibility.Matcher{}` | `Lotus.Visibility.compile(rules, adapter: adapter)` |
+| `source_visible?/2` (optional) | `boolean()` | `role == :finance` for `"billing"` |
 
 The rule formats are exactly the same as those consumed by the default static resolver — see the [Visibility Guide](visibility.md) for the full syntax.
 

@@ -1,0 +1,128 @@
+defmodule Lotus.Preflight.ColumnsTest do
+  use ExUnit.Case, async: true
+
+  alias Lotus.Preflight.Columns
+  alias Lotus.Query.Tokenizer.Profile
+  alias Lotus.Visibility
+
+  @matcher Visibility.compile(%{column: [{"users", "ssn", [action: :mask, mask: :sha256]}]})
+  @postgres Profile.for_language("sql:postgres")
+  @relations [{"public", "users"}]
+
+  defp check(sql, profile \\ @postgres, relations \\ @relations),
+    do: Columns.check(sql, profile, @matcher, relations)
+
+  describe "a protected column selected as is" do
+    for sql <- [
+          "SELECT ssn FROM users",
+          "SELECT ssn, name FROM users WHERE id = 1 ORDER BY name LIMIT 5",
+          "SELECT u.ssn, u.name FROM users u WHERE u.id = $1",
+          "SELECT public.users.ssn FROM public.users",
+          "SELECT ssn AS ssn FROM users",
+          "SELECT DISTINCT ssn FROM users",
+          "SELECT * FROM users",
+          "SELECT u.* FROM users u",
+          "SELECT count(*), name FROM users GROUP BY name",
+          "SELECT name AS ssn FROM users",
+          "SELECT left(name, 2) FROM users",
+          "SELECT x.ssn FROM (SELECT * FROM users) x",
+          "SELECT * FROM (SELECT ssn FROM users) AS lotus_sub LIMIT $1 OFFSET $2",
+          ~s(WITH _base AS (SELECT ssn, name FROM users\) SELECT * FROM _base WHERE "name" = $2),
+          "SELECT name FROM users WHERE note = 'ssn AS s' -- upper(ssn)"
+        ] do
+      test "passes: #{sql}" do
+        assert :ok = check(unquote(sql))
+      end
+    end
+  end
+
+  describe "a protected column renamed, transformed or read elsewhere" do
+    for sql <- [
+          "SELECT ssn AS s FROM users",
+          "SELECT ssn s FROM users",
+          ~s(SELECT ssn AS "x" FROM users),
+          ~s(SELECT "ssn" AS x FROM users),
+          "SELECT SSN AS x FROM users",
+          "SELECT upper(ssn) FROM users",
+          "SELECT ssn || '' AS x FROM users",
+          "SELECT ssn::int FROM users",
+          "SELECT CAST(ssn AS int) FROM users",
+          "SELECT name FROM users WHERE ssn = '123'",
+          "SELECT name FROM users ORDER BY ssn",
+          "SELECT ssn, count(*) FROM users GROUP BY ssn",
+          ~s(WITH _sorted AS (SELECT ssn FROM users\) SELECT * FROM _sorted ORDER BY "ssn" DESC),
+          "SELECT name FROM users UNION SELECT ssn FROM users",
+          "SELECT (SELECT ssn FROM users LIMIT 1) AS x",
+          "SELECT name FROM users WHERE EXISTS (SELECT ssn FROM users)",
+          "WITH c AS (SELECT ssn AS s FROM users) SELECT s FROM c",
+          "SELECT * FROM ((SELECT ssn FROM users)) x"
+        ] do
+      test "refused: #{sql}" do
+        assert {:error, "Query uses protected column " <> _} = check(unquote(sql))
+      end
+    end
+  end
+
+  describe "a statement over a table with protected columns" do
+    for sql <- [
+          "SELECT u FROM users u",
+          "SELECT to_json(u) FROM users u",
+          "SELECT row_to_json(users) FROM users",
+          "SELECT to_json(u.*) FROM users u",
+          "WITH c AS (SELECT * FROM users) SELECT to_json(c) FROM c"
+        ] do
+      test "refuses a whole-row reference: #{sql}" do
+        assert {:error, "Query reads whole rows of " <> _} = check(unquote(sql))
+      end
+    end
+
+    for sql <- [
+          "SELECT * FROM (SELECT * FROM users) t(a, b, c)",
+          "SELECT * FROM users AS u(a, b)",
+          "WITH c(x) AS (SELECT ssn FROM users) SELECT x FROM c"
+        ] do
+      test "refuses a column alias list: #{sql}" do
+        assert {:error, "Query renames the columns " <> _} = check(unquote(sql))
+      end
+    end
+
+    test "refuses * across a set operation" do
+      assert {:error, "Query combines * with UNION" <> _} =
+               check("SELECT name, name FROM users UNION SELECT * FROM users")
+    end
+
+    test "fails closed on the alias of a function in FROM" do
+      assert {:error, "Query reads whole rows of g" <> _} =
+               check("SELECT u.name, g FROM users u, generate_series(1, 3) g")
+
+      assert :ok = check("SELECT u.name, g.n FROM users u, generate_series(1, 3) AS g")
+    end
+  end
+
+  test "a Unicode-escaped identifier can't be compared, so it is refused" do
+    assert {:error, "Query uses a Unicode-escaped identifier" <> _} =
+             check(~S(SELECT U&"\0073sn" AS x FROM users))
+  end
+
+  test "MySQL backticks quote an identifier" do
+    mysql = Profile.for_language("sql:mysql")
+
+    assert :ok = check("SELECT `ssn` FROM users", mysql)
+    assert {:error, _} = check("SELECT `ssn` AS x FROM users", mysql)
+  end
+
+  test "a column-only rule applies whatever the relations" do
+    matcher = Visibility.compile(%{column: [{"pin", :omit}]})
+
+    assert :ok = Columns.check("SELECT '1234' AS pin", @postgres, matcher, [])
+    assert {:error, _} = Columns.check("SELECT upper(pin) FROM cards", @postgres, matcher, [])
+  end
+
+  test "without a protected column, anything passes" do
+    assert :ok =
+             check("SELECT ssn AS s, to_json(u) FROM users u", @postgres, [{"public", "posts"}])
+
+    allow = Visibility.compile(%{column: [{"users", "ssn", :allow}]})
+    assert :ok = Columns.check("SELECT upper(ssn) FROM users", @postgres, allow, @relations)
+  end
+end

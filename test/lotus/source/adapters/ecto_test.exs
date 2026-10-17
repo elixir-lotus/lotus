@@ -182,6 +182,41 @@ defmodule Lotus.Source.Adapters.EctoTest do
 
       assert %{rows: [[42]]} = result
     end
+
+    test "a postgres read-only run rolls back what it set for the session" do
+      adapter = Postgres.wrap("pg", Repo)
+      setting = "SELECT current_setting('lotus.test_setting', true)"
+
+      assert {:ok, %{rows: [["leaked"]]}} =
+               Adapter.transaction(
+                 adapter,
+                 fn repo ->
+                   repo.query!("SELECT set_config('lotus.test_setting', 'leaked', false)")
+                 end,
+                 read_only: true
+               )
+
+      assert %{rows: [[value]]} = Repo.query!(setting)
+      assert value in [nil, ""]
+
+      assert {:ok, _} =
+               Adapter.transaction(
+                 adapter,
+                 fn repo ->
+                   repo.query!("SELECT set_config('lotus.test_setting', 'kept', false)")
+                 end,
+                 read_only: false
+               )
+
+      assert %{rows: [["kept"]]} = Repo.query!(setting)
+    end
+
+    test "a postgres read-only run still returns an error as an error" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      assert {:error, "SQL error: " <> _} =
+               Adapter.execute_query(adapter, "SELECT * FROM no_such_table", [], [])
+    end
   end
 
   describe "sanitize_query/3" do
@@ -211,6 +246,96 @@ defmodule Lotus.Source.Adapters.EctoTest do
         assert {:error, "Only read-only queries are allowed"} =
                  Adapter.sanitize_query(adapter, Statement.new(sql), []),
                sql
+      end
+    end
+
+    test "rejects commands that change the session or the transaction" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      for sql <- [
+            "SET statement_timeout = 1",
+            "set search_path = other",
+            "RESET ALL",
+            "LISTEN channel",
+            "COPY test_users TO STDOUT",
+            "DO $$ BEGIN PERFORM 1; END $$",
+            "DECLARE c CURSOR WITH HOLD FOR SELECT 1",
+            "COMMIT",
+            "PREPARE p AS SELECT 1"
+          ] do
+        assert {:error, "Only read-only queries are allowed: " <> _} =
+                 Adapter.sanitize_query(adapter, Statement.new(sql), []),
+               sql
+      end
+
+      assert :ok = Adapter.sanitize_query(adapter, Statement.new("SET x = 1"), read_only: false)
+    end
+
+    test "postgres rejects functions with effects beyond the transaction" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      for sql <- [
+            "SELECT set_config('statement_timeout', '1', false)",
+            "SELECT pg_catalog.set_config('search_path', 'other', false)",
+            ~s(SELECT "set_config"('search_path', 'other', false\)),
+            "SELECT set_config /* hi */ ('search_path', 'other', false)",
+            "SELECT pg_advisory_lock(42)",
+            "SELECT pg_try_advisory_lock_shared(42)",
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity",
+            "SELECT PG_CANCEL_BACKEND(1)",
+            "SELECT dblink_exec('dbname=app', 'DELETE FROM users')",
+            "SELECT lo_export(1, '/tmp/x')",
+            "SELECT pg_read_file('/etc/passwd')",
+            "SELECT query_to_xml('SELECT * FROM secrets', true, false, '')",
+            "SELECT pg_notify('c', 'x')"
+          ] do
+        assert {:error, "Only read-only queries are allowed: " <> _} =
+                 Adapter.sanitize_query(adapter, Statement.new(sql), []),
+               sql
+      end
+
+      for sql <- [
+            "SELECT set_config FROM t",
+            "SELECT 'pg_advisory_lock(1)'",
+            "SELECT current_setting('search_path')",
+            "SELECT 1 -- set_config('a', 'b', false)"
+          ] do
+        assert :ok = Adapter.sanitize_query(adapter, Statement.new(sql), []), sql
+      end
+    end
+
+    test "mysql rejects named locks, files and OUTFILE" do
+      adapter = MySQL.wrap("my", MysqlRepo)
+
+      for sql <- [
+            "SELECT GET_LOCK('x', 10)",
+            "SELECT `load_file`('/etc/passwd')",
+            "SELECT * FROM t INTO OUTFILE '/tmp/x'",
+            "SET @@session.sql_mode = ''",
+            "USE other_db"
+          ] do
+        assert {:error, "Only read-only queries are allowed" <> _} =
+                 Adapter.sanitize_query(adapter, Statement.new(sql), []),
+               sql
+      end
+    end
+
+    test "sqlite rejects extensions and PRAGMAs that set a value" do
+      adapter = SQLite3.wrap("lite", SqliteRepo)
+
+      for sql <- [
+            "SELECT load_extension('x')",
+            "PRAGMA query_only = 0",
+            "PRAGMA main.journal_mode = DELETE",
+            "PRAGMA foreign_keys(0)"
+          ] do
+        assert {:error, "Only read-only queries are allowed" <> _} =
+                 Adapter.sanitize_query(adapter, Statement.new(sql), []),
+               sql
+      end
+
+      for sql <- ["PRAGMA table_info(users)", "PRAGMA foreign_keys"] do
+        assert :ok = Adapter.sanitize_query(adapter, Statement.new(sql), []), sql
       end
     end
 

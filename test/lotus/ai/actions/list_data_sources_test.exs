@@ -20,6 +20,22 @@ defmodule Lotus.AI.Actions.ListDataSourcesTest do
              ]
     end
 
+    test "leaves out the sources the actor's scope may not use" do
+      stub(Lotus, :list_data_source_names, fn -> ["primary", "billing"] end)
+      stub(Lotus.Source, :source_type, fn _ -> :postgres end)
+
+      stub(Lotus.Visibility, :source_visible?, fn
+        "billing", %{role: :viewer} -> false
+        _source, _scope -> true
+      end)
+
+      assert {:ok, %{data_sources: [%{name: "primary"}]}} =
+               ListDataSources.run(%{}, %{scope: %{role: :viewer}})
+
+      assert {:ok, %{data_sources: [_, _]}} =
+               ListDataSources.run(%{}, %{scope: %{role: :finance}})
+    end
+
     test "returns empty list when no data sources configured" do
       stub(Lotus, :list_data_source_names, fn -> [] end)
 

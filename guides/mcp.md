@@ -301,20 +301,24 @@ whoever runs the command may see all of the data.
 ## What read-only does not cover
 
 The guarantees above are Lotus's, and an MCP client reaches them the way
-Lotus Web does. Two limits matter more once a model writes the
-statements:
+Lotus Web does. Lotus checks the statements a model writes, but those
+checks read SQL, not the database, so two limits remain:
 
-- **Column policies match result column names.** A `:mask` or `:omit`
-  policy on `users.ssn` applies to a result column named `ssn`;
-  `SELECT ssn AS s FROM users` returns it unmasked, and a database error
-  can echo a value. Hide a sensitive column with a table rule, a view
-  without it, or a database role that cannot read it.
-- **A read-only transaction still runs functions.** On PostgreSQL, a
-  `SELECT` can call `set_config/3`, take an advisory lock or cancel
-  another backend of the same role. Point the data sources you expose
-  over MCP at a database role with only `SELECT` grants (and no
-  `pg_signal_backend`), ideally on a replica, not at the role your app
-  writes with.
+- **Column policies match result column names.** Lotus refuses a
+  statement that renames, wraps or filters on a protected column
+  (`SELECT ssn AS s`, `upper(ssn)`, `WHERE ssn = ...`; see Column-Level
+  Visibility in the visibility guide), but a view or function that
+  renames the column inside the database gets past that. For a column
+  that must never leave the database, use a table rule, a view without
+  it, or a database role that cannot read it.
+- **Functions run with the role's privileges.** A read-only run refuses
+  the commands and functions known to have effects beyond it (`SET`,
+  `set_config`, advisory locks, `pg_terminate_backend`, `dblink`, file
+  access, `GET_LOCK` on MySQL), and on PostgreSQL rolls back instead of
+  committing. A deny list is never complete, so point the data sources
+  you expose over MCP at a database role with only `SELECT` grants (and
+  no `pg_signal_backend`), ideally on a replica, not at the role your
+  app writes with.
 
 The `data_sources` setting is the simplest way to do the second: give
 MCP a source of its own on a read-only role.

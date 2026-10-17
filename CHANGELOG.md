@@ -31,8 +31,7 @@
   - `:max_rows`.
 
   See the new MCP guide, which also sets out what read-only does not
-  cover: column policies match result column names, and a PostgreSQL
-  `SELECT` can still call functions with side effects.
+  cover.
 
 - **Foreign keys and column comments in `describe_table/3`.** A column
   carries `:references` (`%{schema, table, column}`, the column a foreign
@@ -50,6 +49,14 @@
 - **`config :lotus, data_source_descriptions: %{name => description}`**,
   shown by the AI assistant's and the MCP server's `list_data_sources`;
   `Lotus.data_source_description/1` reads one.
+- **`source_visible?/2`, an optional `Lotus.Visibility.Resolver`
+  callback**, hides a whole data source from a scope: execution refuses
+  it, discovery shows nothing in it, and the AI assistant's and the MCP
+  server's `list_data_sources` leave it out.
+  `Lotus.Visibility.source_visible?/2` asks it.
+- **`denied_functions/0`, an optional Ecto dialect callback**: functions
+  a read-only statement may not call. The PostgreSQL, MySQL and SQLite
+  dialects list theirs.
 
 ### Changed
 
@@ -60,6 +67,38 @@
 
 ### Fixed
 
+- **Column policies can no longer be bypassed by renaming a column**
+  ([#321](https://github.com/elixir-lotus/lotus/issues/321)). Policies
+  apply by result column name, so a SQL statement that renames, wraps or
+  reads a protected column outside the select list (`ssn AS s`,
+  `upper(ssn)`, `ssn::int`, `WHERE ssn = ...`), reads whole rows of its
+  table, or renames its columns with an alias list or a set operation is
+  refused before it runs. Filtering or sorting on a protected column is
+  refused too. See "A protected column must keep its name" in the
+  visibility guide.
+- **A read-only run leaves nothing behind on the connection**
+  ([#322](https://github.com/elixir-lotus/lotus/issues/322)).
+  Sanitization refuses commands that change the session or the
+  transaction (`SET`, `RESET`, `LISTEN`, `PREPARE`, `DECLARE`, `COPY`,
+  `DO`, `COMMIT`, `USE`, ...), PRAGMAs that set a value, MySQL's
+  `INTO OUTFILE`, and each dialect's side-effecting functions
+  (PostgreSQL's `set_config`, advisory locks, `pg_cancel_backend`,
+  `pg_terminate_backend`, `dblink*`, `lo_*`, file functions,
+  `query_to_xml`, ...; MySQL's `GET_LOCK`, `LOAD_FILE`, `SLEEP`; SQLite's
+  `load_extension`). On PostgreSQL a read-only run rolls back instead of
+  committing, so a session setting it made is undone.
+- **The AI assistant's `ListDataSources` and `ValidateStatement` honour
+  the actor** ([#323](https://github.com/elixir-lotus/lotus/issues/323)).
+  `ListDataSources` lists only the sources `source_visible?/2` allows.
+  `ValidateStatement` runs the checks execution runs first (sanitization,
+  the source, preflight, protected columns) for the actor's scope, so a
+  statement that touches a hidden table fails as it would on execution,
+  before the database can say whether the table exists.
+- **PostgreSQL preflight sees a table the planner proved empty.** The plan
+  of `SELECT * FROM t WHERE false` (or a `{{var}}` neutralized to
+  `= NULL`) has no scan of `t`, so preflight missed it and the statement
+  returned a hidden table's columns. The tables a statement names in
+  FROM and JOIN now count too.
 - `Lotus.AI.Actions.GetColumnValues` runs its statement read-only, as
   the other actions do, and returns no values for a column an `:omit`
   policy hides instead of raising.

@@ -13,11 +13,14 @@ if Code.ensure_loaded?(Sake.Server) do
     alias Lotus.MCP.Support
 
     @impl true
-    def execute(_args, _ctx) do
+    def execute(_args, ctx) do
       {default, _} = Lotus.default_data_source()
+      scope = Keyword.get(Support.actor_opts(ctx), :scope)
 
       sources =
-        Enum.map(Support.data_source_names(), fn name ->
+        Support.data_source_names()
+        |> Enum.filter(&Lotus.Visibility.source_visible?(&1, scope))
+        |> Enum.map(fn name ->
           %{name: name, type: Lotus.Source.source_type(name), default: name == default}
           |> put_description(Lotus.data_source_description(name))
         end)

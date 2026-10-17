@@ -732,7 +732,7 @@ defmodule Lotus.Source.Adapters.Ecto do
 
   # Deny list for dangerous operations (defense-in-depth).
   # Skipped when `read_only: false` is passed in opts.
-  @deny ~r/\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|VACUUM|ANALYZE|CALL|LOCK)\b/i
+  @deny ~r/\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|VACUUM|ANALYZE|CALL|LOCK|OUTFILE|DUMPFILE)\b/i
 
   @impl true
   def sanitize_query(_repo, statement, opts),
@@ -885,8 +885,9 @@ defmodule Lotus.Source.Adapters.Ecto do
       |> Sanitizer.strip_trailing_semicolon()
       |> Tokenizer.tokenize(lexical_profile(dialect))
 
-    with :ok <- assert_single_statement(tokens) do
-      assert_not_denied(tokens, read_only)
+    with :ok <- assert_single_statement(tokens),
+         :ok <- assert_not_denied(tokens, read_only) do
+      assert_no_side_effects(dialect, tokens, read_only)
     end
   end
 
@@ -1138,6 +1139,97 @@ defmodule Lotus.Source.Adapters.Ecto do
     if tokens |> Tokenizer.code() |> Enum.any?(&Regex.match?(@deny, &1)),
       do: {:error, "Only read-only queries are allowed"},
       else: :ok
+  end
+
+  # Commands a read-only run may not start with: they change the session or
+  # the transaction rather than read (SET, LISTEN, PREPARE, DECLARE, COMMIT,
+  # USE, ...), or reach outside the database (COPY, LOAD, DO).
+  @denied_commands ~w(set reset discard listen unlisten notify prepare execute deallocate
+                      declare fetch move close copy do load begin start commit rollback end
+                      abort savepoint release checkpoint reindex cluster refresh comment
+                      security import handler flush kill install uninstall shutdown rename
+                      replace attach detach use merge)
+
+  # PRAGMAs that only read, in their function form (`PRAGMA table_info(t)`).
+  @read_pragmas ~w(table_info table_xinfo table_list index_list index_info index_xinfo
+                   foreign_key_list foreign_key_check database_list collation_list
+                   function_list module_list pragma_list compile_options integrity_check
+                   quick_check)
+
+  defp assert_no_side_effects(_dialect, _tokens, false = _read_only), do: :ok
+
+  defp assert_no_side_effects(dialect, tokens, _read_only) do
+    code = code_view(tokens)
+
+    with :ok <- assert_read_command(code) do
+      assert_no_denied_function(code, dialect)
+    end
+  end
+
+  defp assert_read_command(code) do
+    case Regex.run(~r/\A[\s(]*([A-Za-z_]+)(.*)\z/s, code) do
+      [_, command, rest] -> check_command(String.downcase(command), rest)
+      _ -> :ok
+    end
+  end
+
+  defp check_command(command, _rest) when command in @denied_commands,
+    do: {:error, "Only read-only queries are allowed: #{String.upcase(command)} is not"}
+
+  defp check_command("pragma", rest) do
+    name = ~r/\A\s*(?:\w+\s*\.\s*)?(\w+)\s*(.?)/ |> Regex.run(rest) |> pragma_form()
+
+    case name do
+      {_name, "="} -> pragma_error()
+      {name, "("} -> if String.downcase(name) in @read_pragmas, do: :ok, else: pragma_error()
+      _ -> :ok
+    end
+  end
+
+  defp check_command(_command, _rest), do: :ok
+
+  defp pragma_form([_, name, next]), do: {name, next}
+  defp pragma_form(_), do: nil
+
+  defp pragma_error, do: {:error, "Only read-only queries are allowed: this PRAGMA sets a value"}
+
+  defp assert_no_denied_function(code, dialect) do
+    names =
+      if function_exported?(dialect, :denied_functions, 0),
+        do: dialect.denied_functions(),
+        else: []
+
+    with [_ | _] <- names,
+         [_, name] <- Regex.run(denied_functions_regex(names), code) do
+      {:error, "Only read-only queries are allowed: #{String.downcase(name)}() is not"}
+    else
+      _ -> :ok
+    end
+  end
+
+  defp denied_functions_regex(names) do
+    alternatives =
+      Enum.map_join(names, "|", fn name ->
+        name |> Regex.escape() |> String.replace("\\*", "\\w*")
+      end)
+
+    Regex.compile!("(?<![\\w$])(#{alternatives})\\s*\\(", "i")
+  end
+
+  # The statement as the engine reads it, for the checks above: code as is,
+  # a quoted identifier as its bare name (`"set_config"(` calls set_config),
+  # literals and placeholders as stand-ins, comments as a space.
+  defp code_view(tokens) do
+    tokens
+    |> Enum.map(fn
+      {:code, raw} -> raw
+      {:identifier, raw} -> String.slice(raw, 1..-2//1)
+      {:string, _raw} -> " '' "
+      {:variable, _name, _raw} -> " NULL "
+      {:comment, _raw} -> " "
+      {:block, inner} -> code_view(inner)
+    end)
+    |> IO.iodata_to_binary()
   end
 
   # ---------------------------------------------------------------------------

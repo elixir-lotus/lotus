@@ -324,6 +324,23 @@ value as scope, or move the logic into middleware.
 See the [Custom Resolvers guide](custom-resolvers.md) for contracts and
 testing guidance.
 
+### Hiding a whole data source
+
+A resolver can also hide a source from a scope with the optional
+`source_visible?/2`:
+
+```elixir
+@impl true
+def source_visible?("billing", %{role: role}), do: role == :finance
+def source_visible?(_source_name, _scope), do: true
+```
+
+For a scope it returns `false` to, Lotus refuses to run statements against
+the source ("Data source \"billing\" is not available"), discovery shows
+nothing in it, and the AI assistant's and `Lotus.MCP`'s
+`list_data_sources` leave it out. Without the callback every configured
+source is visible.
+
 ### Scoped rules are enforced at execution time
 
 As of v1, scoped rules are not a discovery-only filter. Execution
@@ -777,6 +794,34 @@ column_visibility: %{
   ]
 }
 ```
+
+### A protected column must keep its name
+
+Policies apply to result columns **by name**, so they hold only while a
+protected column reaches the result under its own name. For SQL sources,
+Lotus refuses a statement that would break that before it runs, when the
+column has a policy other than `:allow`:
+
+```sql
+SELECT ssn FROM users                         -- masked
+SELECT u.ssn, name FROM users u               -- masked
+SELECT * FROM users                           -- masked
+SELECT * FROM (SELECT ssn FROM users) t       -- masked (pagination's shape)
+
+SELECT ssn AS s FROM users                    -- refused: renamed
+SELECT upper(ssn) FROM users                  -- refused: wrapped
+SELECT ssn::int FROM users                    -- refused (its error would echo the value)
+SELECT name FROM users WHERE ssn = '123'      -- refused: read outside the select list
+SELECT to_json(u) FROM users u                -- refused: a whole row
+SELECT * FROM users AS u(a, b)                -- refused: a column alias list
+SELECT name FROM a UNION SELECT * FROM users  -- refused: * across a set operation
+```
+
+Filtering or sorting on a protected column is refused too, since the
+filter reads its values. The check reads the statement's tokens and fails
+closed: whatever it can't prove keeps the name is refused. It can't see
+inside the database, so a view or function that renames a protected
+column gets past it; keep such columns from the role Lotus connects as.
 
 ### Examples
 

@@ -22,6 +22,7 @@ defmodule Lotus.Preflight do
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
   alias Lotus.Visibility
+  alias Lotus.Visibility.Matcher
 
   @doc """
   Authorizes a statement by checking all relations it would access.
@@ -52,7 +53,26 @@ defmodule Lotus.Preflight do
   """
   @spec analyze(Adapter.t(), Statement.t(), String.t() | nil, term()) ::
           {:ok, Relations.outcome()} | {:error, String.t()}
-  def analyze(%Adapter{} = adapter, %Statement{} = statement, search_path \\ nil, scope \\ nil) do
+  def analyze(%Adapter{} = adapter, %Statement{} = statement, search_path \\ nil, scope \\ nil),
+    do:
+      do_analyze(adapter, statement, search_path, fn ->
+        Visibility.matcher_for(adapter.name, scope)
+      end)
+
+  @doc false
+  # `analyze/4` with the caller's compiled matcher, so that a caller that
+  # needs it for further checks asks the resolver once.
+  @spec analyze_with(Adapter.t(), Statement.t(), String.t() | nil, Matcher.t()) ::
+          {:ok, Relations.outcome()} | {:error, String.t()}
+  def analyze_with(
+        %Adapter{} = adapter,
+        %Statement{} = statement,
+        search_path,
+        %Matcher{} = matcher
+      ),
+      do: do_analyze(adapter, statement, search_path, fn -> matcher end)
+
+  defp do_analyze(adapter, statement, search_path, matcher_fun) do
     statement =
       if search_path,
         do: %{statement | meta: Map.put(statement.meta, :search_path, search_path)},
@@ -61,7 +81,7 @@ defmodule Lotus.Preflight do
     case Adapter.extract_accessed_resources(adapter, statement) do
       {:ok, relations} ->
         rels = MapSet.to_list(relations)
-        check_relations_visibility(rels, adapter.name, scope)
+        check_relations_visibility(rels, matcher_fun)
 
       {:error, e} ->
         {:error, normalize_preflight_error(e, adapter)}
@@ -83,10 +103,10 @@ defmodule Lotus.Preflight do
     end
   end
 
-  defp check_relations_visibility([], _source_name, _scope), do: {:ok, []}
+  defp check_relations_visibility([], _matcher_fun), do: {:ok, []}
 
-  defp check_relations_visibility(rels, source_name, scope) do
-    matcher = Visibility.matcher_for(source_name, scope)
+  defp check_relations_visibility(rels, matcher_fun) do
+    matcher = matcher_fun.()
     {allowed, blocked} = Enum.split_with(rels, &Visibility.allowed_relation?(matcher, &1))
 
     if blocked == [] do
