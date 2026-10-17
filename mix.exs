@@ -49,7 +49,7 @@ defmodule Lotus.MixProject do
       {:nimble_csv, "~> 1.2"},
       {:nimble_options, "~> 1.0"},
       {:postgrex, "~> 0.20", optional: true},
-      {:sake, "~> 0.3", optional: true},
+      {:sake, "~> 0.4", optional: true},
       {:telemetry, "~> 1.0"},
 
       # AI/LLM Integration

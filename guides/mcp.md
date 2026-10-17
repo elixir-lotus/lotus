@@ -59,7 +59,7 @@ What every tool keeps to:
 
 ```elixir
 # mix.exs
-{:sake, "~> 0.3"}
+{:sake, "~> 0.4"}
 ```
 
 Add `:sake` to the `import_deps` of your `.formatter.exs` if you write

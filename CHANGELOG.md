@@ -4,7 +4,7 @@
 
 ### Added
 
-- **An MCP server, `Lotus.MCP`.** With `{:sake, "~> 0.3"}` in the host's
+- **An MCP server, `Lotus.MCP`.** With `{:sake, "~> 0.4"}` in the host's
   deps (an optional dependency of Lotus), an MCP client such as Claude
   Code connects to the host app, signs in through the host's own login
   (Sake's OAuth 2.1 authorization server), and works with Lotus as that
