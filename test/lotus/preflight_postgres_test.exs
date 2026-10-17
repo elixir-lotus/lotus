@@ -4,6 +4,7 @@ defmodule Lotus.PreflightPostgresTest do
   alias Lotus.Preflight
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
+  alias Lotus.Test.Repo
 
   @pg_adapter EctoAdapter.wrap("postgres", Lotus.Test.Repo)
 
@@ -140,6 +141,18 @@ defmodule Lotus.PreflightPostgresTest do
 
       assert msg =~ "blocked table"
       assert msg =~ "lotus_queries"
+    end
+
+    test "blocks the tables of Lotus Pro and of Sake's OAuth server" do
+      for table <- ["lotus_access_policies", "sake_oauth_tokens"] do
+        Repo.query!("CREATE TABLE public.#{table} (id integer)")
+
+        {:error, msg} =
+          Preflight.authorize(@pg_adapter, Statement.new("SELECT * FROM #{table}", []))
+
+        assert msg =~ "blocked table"
+        assert msg =~ table
+      end
     end
 
     test "blocks JOINs that include denied tables" do

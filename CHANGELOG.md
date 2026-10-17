@@ -60,6 +60,13 @@
 
 ### Changed
 
+- **Lotus Pro's tables and Sake's OAuth tables are always hidden.**
+  `lotus_access_policies`, `lotus_pro_migrations` and every
+  `sake_oauth_` table (the OAuth server of `Lotus.MCP`) are denied in
+  every source and every schema, whatever the adapter and your rules,
+  like Lotus's own storage tables: discovery leaves them out and a
+  statement that reads them is refused. Before, an MCP client or the AI
+  assistant could list them and read the token hashes and policies.
 - `describe_table/3` reports a primary key column as not nullable,
   whatever the engine says (SQLite reports an `INTEGER PRIMARY KEY` as
   nullable), and the SQLite adapter marks every column of a composite

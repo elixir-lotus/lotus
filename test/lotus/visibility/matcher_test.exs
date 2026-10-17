@@ -19,6 +19,14 @@ defmodule Lotus.Visibility.MatcherTest do
       assert Visibility.allowed_relation?(matcher, {"pg_catalog", "pg_class"})
     end
 
+    test "raw rules still deny the tables of Lotus Pro and Sake" do
+      matcher = Visibility.compile(%{})
+
+      refute Visibility.allowed_relation?(matcher, {"public", "lotus_access_policies"})
+      refute Visibility.allowed_relation?(matcher, {nil, "sake_oauth_tokens"})
+      assert Visibility.allowed_relation?(matcher, {"public", "lotus_sub"})
+    end
+
     test "the adapter option merges the adapter's builtin denies" do
       adapter = Lotus.Source.resolve!("postgres", nil)
       matcher = Visibility.compile(%{}, adapter: adapter)

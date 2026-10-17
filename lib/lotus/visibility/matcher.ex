@@ -222,9 +222,15 @@ defmodule Lotus.Visibility.Matcher do
     %{
       exact: MapSet.union(a.exact, b.exact),
       bare: MapSet.union(a.bare, b.bare),
-      patterns: a.patterns ++ b.patterns
+      # Without duplicates, so a matcher compiled again is unchanged.
+      patterns: Enum.uniq_by(a.patterns ++ b.patterns, &pattern_key/1)
     }
   end
+
+  # Two regexes with the same source are not ==, so compare them by source.
+  defp pattern_key({schema, table}), do: {pattern_key(schema), pattern_key(table)}
+  defp pattern_key(%Regex{source: source, opts: opts}), do: {Regex, source, opts}
+  defp pattern_key(other), do: other
 
   # ---------------------------------------------------------------------------
   # Matching

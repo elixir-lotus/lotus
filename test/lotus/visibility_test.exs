@@ -24,6 +24,24 @@ defmodule Lotus.VisibilityTest do
       refute Visibility.allowed_relation?("sqlite", {nil, "lotus_queries"})
     end
 
+    test "denies the tables of Lotus Pro" do
+      for table <- ["lotus_access_policies", "lotus_pro_migrations"] do
+        refute Visibility.allowed_relation?("postgres", {"public", table})
+        refute Visibility.allowed_relation?("sqlite", {nil, table})
+        refute Visibility.allowed_relation?("mysql", {nil, table})
+        refute Visibility.allowed_relation?("unconfigured_source", {nil, table})
+      end
+    end
+
+    test "denies the OAuth tables of Sake, which Lotus.MCP signs in with" do
+      for table <- ["sake_oauth_tokens", "sake_oauth_codes", "sake_oauth_device_grants"] do
+        refute Visibility.allowed_relation?("postgres", {"public", table})
+        refute Visibility.allowed_relation?("sqlite", {nil, table})
+        refute Visibility.allowed_relation?("mysql", {nil, table})
+        refute Visibility.allowed_relation?("unconfigured_source", {"public", table})
+      end
+    end
+
     test "denies SQLite system tables" do
       refute Visibility.allowed_relation?("sqlite", {nil, "sqlite_master"})
       refute Visibility.allowed_relation?("sqlite", {nil, "sqlite_sequence"})
@@ -35,6 +53,8 @@ defmodule Lotus.VisibilityTest do
       assert Visibility.allowed_relation?("postgres", {"public", "orders"})
       assert Visibility.allowed_relation?("sqlite", {nil, "products"})
       assert Visibility.allowed_relation?("sqlite", {nil, "customers"})
+      assert Visibility.allowed_relation?("postgres", {"public", "lotus"})
+      assert Visibility.allowed_relation?("postgres", {"public", "sake_orders"})
     end
 
     test "unresolvable repo name still applies the conservative fallback deny list" do

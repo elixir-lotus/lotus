@@ -1101,6 +1101,30 @@ defmodule Lotus.Source.Adapter do
     "sys"
   ]
 
+  # Tables that Lotus's companions own, in any schema or none: Lotus Pro's
+  # policies and migrations, and the OAuth tables of Sake, which Lotus.MCP signs
+  # in with. They hold policies and token hashes, never data to report on.
+  # Not a `^lotus_` pattern: Lotus's own SQL aliases a subquery `lotus_sub`, and
+  # SQLite's preflight reads that alias as a table.
+  @owned_table_denies [
+    "lotus_access_policies",
+    "lotus_pro_migrations",
+    {~r/.*/, ~r/^sake_oauth_/},
+    {nil, ~r/^sake_oauth_/}
+  ]
+
+  @doc """
+  Table-level deny rules for the tables Lotus's companions own: Lotus Pro's
+  (`lotus_access_policies`, `lotus_pro_migrations`) and every `sake_oauth_`
+  table (the OAuth server of `Lotus.MCP`), in any schema.
+
+  `Lotus.Visibility` adds them to every source, whatever its adapter and the
+  host's rules, so no adapter needs to list them. Lotus's own tables stay in
+  each adapter's `builtin_denies/1`.
+  """
+  @spec owned_table_denies() :: [String.t() | {nil | Regex.t(), Regex.t()}]
+  def owned_table_denies, do: @owned_table_denies
+
   @doc """
   Built-in table-level deny rules to apply when no adapter can be resolved.
 
