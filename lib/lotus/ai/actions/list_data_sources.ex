@@ -14,7 +14,8 @@ defmodule Lotus.AI.Actions.ListDataSources do
   @impl true
   def description,
     do:
-      "List all available data sources (database connections) that can be queried. " <>
+      "List all available data sources (database connections) that can be queried, " <>
+        "with what each holds where it is described. " <>
         "Use this to discover which databases are available for investigation."
 
   @impl true
@@ -27,7 +28,11 @@ defmodule Lotus.AI.Actions.ListDataSources do
     sources =
       Enum.map(names, fn name ->
         source_type = Lotus.Source.source_type(name)
-        %{name: name, type: source_type}
+
+        case Lotus.data_source_description(name) do
+          nil -> %{name: name, type: source_type}
+          description -> %{name: name, type: source_type, description: description}
+        end
       end)
 
     {:ok, %{data_sources: sources}}

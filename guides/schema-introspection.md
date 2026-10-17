@@ -29,6 +29,7 @@ gone.
 | `Lotus.list_relations/2` | always `{schema \| nil, table}` tuples |
 | `Lotus.describe_table/3` | column definitions for one table |
 | `Lotus.get_table_stats/3` | a stats map, at minimum `%{row_count: n}` |
+| `Lotus.table_row_estimates/2` | `%{{schema \| nil, table} => estimated_rows}` for every visible table, from the engine's statistics |
 
 Every one of them applies the configured visibility rules before
 returning. See the [Visibility guide](visibility.md).
@@ -146,7 +147,9 @@ Views are excluded by default.
 #   type: "bigint",
 #   nullable: false,
 #   default: "nextval('users_id_seq'::regclass)",
-#   primary_key: true
+#   primary_key: true,
+#   comment: nil,
+#   references: nil
 # }
 
 Enum.each(columns, fn col ->
@@ -179,8 +182,58 @@ SQLite reports the same map shape with its own type spellings:
 
 ```elixir
 {:ok, columns} = Lotus.describe_table("sqlite", "products")
-# %{name: "id", type: "INTEGER", nullable: true, default: nil, primary_key: true}
+# %{name: "id", type: "INTEGER", nullable: false, default: nil, primary_key: true, references: nil}
 ```
+
+A primary key column is always reported as not nullable, whatever the
+engine says (SQLite reports an `INTEGER PRIMARY KEY` as nullable).
+
+### Foreign keys and comments
+
+A column may carry two more keys, where the source has them:
+
+- `:references` — for a foreign key column, the column it references, as
+  `%{schema: schema | nil, table: table, column: column | nil}`. A join on
+  it is the join the database itself enforces, rather than one guessed
+  from column names. A reference to a table (or a column) the caller may
+  not see is left out (`nil`), so it reveals nothing the visibility rules
+  hide.
+- `:comment` — the column's comment in the database (`COMMENT ON COLUMN`
+  in PostgreSQL, `COMMENT '...'` in MySQL).
+
+```elixir
+{:ok, columns} = Lotus.describe_table("postgres", "posts")
+
+Enum.find(columns, &(&1.name == "user_id"))
+# %{name: "user_id", ..., references: %{schema: "public", table: "users", column: "id"},
+#   comment: "The author"}
+```
+
+PostgreSQL and MySQL report both; SQLite reports foreign keys and has no
+comments. A source adapter adds them in its `describe_table/3` (see
+the source adapters guide); one that does not leaves the keys out.
+
+## Estimating table sizes
+
+`Lotus.table_row_estimates/2` returns an estimated row count for every
+table it can see, from one cheap query against the engine's statistics:
+
+```elixir
+{:ok, estimates} = Lotus.table_row_estimates("postgres")
+# %{{"public", "users"} => 1204, {"public", "events"} => 9_800_000}
+```
+
+| Source | Estimate |
+| --- | --- |
+| PostgreSQL | `pg_class.reltuples`, kept up to date by autovacuum and `ANALYZE` |
+| MySQL | `information_schema.TABLES.TABLE_ROWS` (exact for MyISAM, InnoDB's estimate) |
+| SQLite | `sqlite_stat1`, written by `ANALYZE`; no estimates before it runs |
+
+A table without an estimate (never analyzed, say) is left out, and a
+source whose adapter has none returns an empty map. Estimates lag behind
+writes; `Lotus.get_table_stats/3` counts one table exactly. It takes
+`:schema`, `:schemas` and `:search_path` as `list_tables/2` does, and is
+cached with the `:results` profile.
 
 ### Column visibility in the result
 

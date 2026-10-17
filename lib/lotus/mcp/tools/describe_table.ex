@@ -5,8 +5,10 @@ if Code.ensure_loaded?(Sake.Server) do
       name: "describe_table",
       title: "Describe a table",
       description:
-        "Describe a table's columns: name, type, whether it is nullable and whether " <>
-          "it is part of the primary key.",
+        "Describe a table's columns: name, type, whether it is nullable, whether it is " <>
+          "part of the primary key, the column a foreign key references (references: " <>
+          "'schema.table.column': join on it rather than guess from names), and the " <>
+          "column's comment where it has one.",
       scope: "lotus:read",
       annotations: [read_only: true, idempotent: true, open_world: false]
 

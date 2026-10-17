@@ -88,12 +88,31 @@ defmodule Lotus.Source.Adapter do
 
   @type source_type :: :postgres | :mysql | :sqlite | :other | atom()
 
+  @typedoc """
+  The column a foreign key column references. `schema` is `nil` for a
+  source without schemas; `column` is `nil` when the source does not say
+  (SQLite's reference to the other table's primary key).
+  """
+  @type column_reference :: %{
+          schema: String.t() | nil,
+          table: String.t(),
+          column: String.t() | nil
+        }
+
+  @typedoc """
+  A column of `c:describe_table/3`. `:comment` (the column's comment in the
+  database) and `:references` (the column it references, for a foreign key
+  column) are optional: an adapter whose source has neither leaves them
+  out.
+  """
   @type column_def :: %{
-          name: String.t(),
-          type: String.t(),
-          nullable: boolean(),
-          default: String.t() | nil,
-          primary_key: boolean()
+          required(:name) => String.t(),
+          required(:type) => String.t(),
+          required(:nullable) => boolean(),
+          required(:default) => String.t() | nil,
+          required(:primary_key) => boolean(),
+          optional(:comment) => String.t() | nil,
+          optional(:references) => column_reference() | nil
         }
 
   @type t :: %__MODULE__{
@@ -162,7 +181,14 @@ defmodule Lotus.Source.Adapter do
   @callback list_tables(state :: term(), schemas :: [String.t()], opts :: keyword()) ::
               {:ok, [{schema :: String.t() | nil, table :: String.t()}]} | {:error, term()}
 
-  @doc "Return column definitions for a specific table."
+  @doc """
+  Return column definitions for a specific table.
+
+  Add `:comment` and `:references` to a column where the source has them:
+  a model writing queries joins on foreign keys instead of guessing them
+  from names. `Lotus.Schema.describe_table/3` drops a reference to a
+  relation the caller may not see.
+  """
   @callback describe_table(state :: term(), schema :: String.t() | nil, table :: String.t()) ::
               {:ok, [column_def()]} | {:error, term()}
 
@@ -193,6 +219,21 @@ defmodule Lotus.Source.Adapter do
   """
   @callback table_stats(state :: term(), schema :: String.t() | nil, table :: String.t()) ::
               {:ok, map()} | {:error, term()}
+
+  @doc """
+  Return an estimate of the row count of the relations in `schemas`, in
+  one cheap call: the engine's statistics, never a count of every table.
+
+  A relation the engine has no estimate for is left out. Return
+  `{:error, :unsupported}` for an engine with no such statistic.
+
+  `Lotus.Schema.table_row_estimates/2` calls it, so that a caller (a model
+  choosing a limit, say) knows which tables are large.
+
+  Default (when not implemented): `{:error, :unsupported}`.
+  """
+  @callback table_row_estimates(state :: term(), schemas :: [String.t()]) ::
+              {:ok, %{{String.t() | nil, String.t()} => non_neg_integer()}} | {:error, term()}
 
   @doc "Quote a SQL identifier (column, table, schema name) using source-specific syntax."
   @callback quote_identifier(state :: term(), String.t()) :: String.t()
@@ -988,6 +1029,7 @@ defmodule Lotus.Source.Adapter do
             }
 
   @optional_callbacks [
+    table_row_estimates: 2,
     sanitize_query: 3,
     transform_bound_query: 3,
     extract_accessed_resources: 2,
@@ -1154,6 +1196,15 @@ defmodule Lotus.Source.Adapter do
   def table_stats(%__MODULE__{module: mod, state: state}, schema, table) do
     if function_exported?(mod, :table_stats, 3),
       do: mod.table_stats(state, schema, table),
+      else: {:error, :unsupported}
+  end
+
+  @doc "Return row count estimates for the relations in `schemas` via the adapter."
+  @spec table_row_estimates(t(), [String.t()]) ::
+          {:ok, %{{String.t() | nil, String.t()} => non_neg_integer()}} | {:error, term()}
+  def table_row_estimates(%__MODULE__{module: mod, state: state}, schemas) do
+    if function_exported?(mod, :table_row_estimates, 2),
+      do: mod.table_row_estimates(state, schemas),
       else: {:error, :unsupported}
   end
 

@@ -19,7 +19,9 @@ defmodule Lotus.AI.Actions.DescribeTable do
   @impl true
   def description,
     do:
-      "Get column details for a specific table including names, types, and constraints. " <>
+      "Get column details for a specific table including names, types, and constraints: " <>
+        "a primary key, the column a foreign key references (references: " <>
+        "'schema.table.column', to join on), and the column's comment where it has one. " <>
         "Use schema-qualified names (e.g., 'reporting.customers') when tables exist in multiple schemas."
 
   @impl true
@@ -89,10 +91,23 @@ defmodule Lotus.AI.Actions.DescribeTable do
           nullable: Map.get(col, :nullable, true),
           primary_key: Map.get(col, :primary_key, false)
         }
+        |> maybe_put(:comment, col[:comment])
+        |> maybe_put(:references, reference(col[:references]))
       end)
 
     {:ok, %{table: table_name, columns: column_info}}
   end
 
   defp format_result({:error, reason}, _table_name), do: {:error, reason}
+
+  # A foreign key as the model joins on it: "schema.table.column".
+  defp reference(%{table: table} = ref) do
+    [ref[:schema], table, ref[:column]] |> Enum.reject(&is_nil/1) |> Enum.join(".")
+  end
+
+  defp reference(_ref), do: nil
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

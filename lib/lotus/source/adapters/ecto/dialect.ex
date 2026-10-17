@@ -139,6 +139,13 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
                 }
               ]
 
+  @doc """
+  Row count estimates for the relations in `schemas`, from the engine's
+  statistics (see `c:Lotus.Source.Adapter.table_row_estimates/2`).
+  """
+  @callback table_row_estimates(repo, schemas :: [String.t()]) ::
+              %{{String.t() | nil, String.t()} => non_neg_integer()}
+
   @callback resolve_table_namespace(repo, table :: String.t(), schemas :: [String.t()]) ::
               String.t() | nil
 
@@ -238,6 +245,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
   @callback ai_context() :: {:ok, Lotus.Source.Adapter.ai_context_map()} | {:error, term()}
 
   @optional_callbacks [
+    table_row_estimates: 2,
     set_statement_timeout: 2,
     set_search_path: 2,
     supports_feature?: 1,

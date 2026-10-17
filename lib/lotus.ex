@@ -121,6 +121,12 @@ defmodule Lotus do
   def list_data_source_names, do: Config.list_data_source_names()
 
   @doc """
+  Returns the description of a data source, from
+  `config :lotus, data_source_descriptions: %{name => description}`, or `nil`.
+  """
+  def data_source_description(name), do: Config.data_source_description(name)
+
+  @doc """
   Returns the default data source as a {name, module} tuple.
 
   - If there's only one data source configured, returns it
@@ -911,6 +917,18 @@ defmodule Lotus do
   """
   def get_table_stats(repo_or_name, table_name, opts \\ []),
     do: Schema.get_table_stats(repo_or_name, table_name, opts)
+
+  @doc """
+  Estimates the row count of each table a data source's schemas hold, from
+  the engine's statistics. See `Lotus.Schema.table_row_estimates/2`.
+
+  ## Examples
+
+      {:ok, estimates} = Lotus.table_row_estimates("postgres")
+      # %{{"public", "users"} => 1204, {"public", "orders"} => 88_310}
+  """
+  def table_row_estimates(repo_or_name, opts \\ []),
+    do: Schema.table_row_estimates(repo_or_name, opts)
 
   @doc """
   Lists all relations (tables with column information) in a data repository.

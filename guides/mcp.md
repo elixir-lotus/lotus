@@ -218,6 +218,14 @@ config :lotus, :mcp,
   Saved queries on other sources are not listed.
 - **`:max_rows`** — the most rows a tool returns in one page (default 500).
 
+What helps the model write good queries comes from Lotus itself, not
+this setting. Describe each source with
+`config :lotus, data_source_descriptions: %{"support" => "helpdesk tickets and agents"}`.
+`list_data_sources` shows these descriptions. `describe_table` shows
+foreign keys and column comments, and `list_tables` shows estimated row
+counts. Database comments on the columns that matter are worth writing
+(`COMMENT ON COLUMN tickets.status IS 'open, pending or solved'`).
+
 ## Mounting in your own MCP server
 
 If your app has an MCP server of its own, mount Lotus in it instead, under
@@ -235,6 +243,46 @@ end
 
 Serve `MyApp.MCP` on the endpoint and list it in the `Sake` child's
 `servers:`. The `lotus:*` scopes come with the mount.
+
+### Prompts of your own
+
+Lotus ships no MCP prompts: it doesn't know what your data means. A
+prompt is a named request a person picks in their client (Claude Code
+lists them as slash commands), so it belongs to your app, about your own
+saved queries and dashboards. Write one with `Sake.Prompt` in the server
+that mounts Lotus:
+
+```elixir
+defmodule MyApp.MCP.Prompts.WeeklyRevenue do
+  use Sake.Prompt,
+    name: "weekly_revenue",
+    description: "Summarize last week's revenue against the week before",
+    scope: "lotus:query"
+
+  arg :region, :string, description: "Only this region (optional)"
+
+  @impl true
+  def get(args, _ctx) do
+    region = if args[:region], do: " for #{args[:region]}", else: ""
+
+    {:ok,
+     [user: "Run the Revenue dashboard#{region} for last week and the week before " <>
+              "(run_dashboard), and summarize what changed and why it might have."]}
+  end
+end
+
+defmodule MyApp.MCP do
+  use Sake.Server, name: "my-app", version: "1.0.0"
+  mount Lotus.MCP, prefix: "lotus"
+  prompts [MyApp.MCP.Prompts.WeeklyRevenue]
+end
+```
+
+A prompt only writes the request; the model then works through the
+Lotus tools, so the person's scopes and `authorize:` apply as for
+anything else they ask. Lotus's `authorize:` gate covers Lotus's own
+tools and resources, not your server's components: give your prompts a
+`scope:` and, if they need it, middleware of your own.
 
 ## Locally, over stdio
 

@@ -240,6 +240,20 @@ defmodule Lotus.Source.Adapters.Ecto do
       rescue
         e -> {:error, Exception.message(e)}
       end
+
+      @impl true
+      def table_row_estimates(state, schemas) do
+        if Code.ensure_loaded?(@dialect) and function_exported?(@dialect, :table_row_estimates, 2) do
+          {:ok,
+           EctoAdapter.with_repo(state, fn repo ->
+             @dialect.table_row_estimates(repo, schemas)
+           end)}
+        else
+          {:error, :unsupported}
+        end
+      rescue
+        e -> {:error, Exception.message(e)}
+      end
     end
   end
 

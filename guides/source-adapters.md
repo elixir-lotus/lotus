@@ -525,7 +525,7 @@ optional list is for adapters that legitimately cannot support a feature.
 | `execute_query(state, body, params, opts)` | The driver boundary. Returns `{:ok, %{columns:, rows:, num_rows:}}`, optionally with `:total_count`. |
 | `transaction(state, fun, opts)` | Run `fun` (arity 1, receives `state`) inside a transaction. |
 | `list_tables(state, schemas, opts)` | `{:ok, [{schema_or_nil, table}]}`. `opts` carries `:include_views`. |
-| `describe_table(state, schema, table)` | `{:ok, [column_def]}` — `%{name, type, nullable, default, primary_key}`. |
+| `describe_table(state, schema, table)` | `{:ok, [column_def]}` — `%{name, type, nullable, default, primary_key}`, plus `:comment` and `:references` (`%{schema, table, column}`, for a foreign key column) where the source has them. |
 | `builtin_denies(state)` | Always-hidden relations, as `{schema_pattern, table_pattern}` tuples. |
 | `health_check(state)` | `:ok` or `{:error, reason}`. |
 | `disconnect(state)` | Release resources. |
@@ -554,6 +554,7 @@ mirrors `@optional_callbacks` in `Lotus.Source.Adapter`:
 | `hierarchy_label/1` | `"Tables"` | UI label for the top-level hierarchy (e.g. `"Indices"` for Elasticsearch). |
 | `example_query/3` | generic `SELECT` | Source-native example for the query editor's placeholder text. |
 | `table_stats/3` | `{:error, :unsupported}` | Relation statistics. Without it, core falls back to `SELECT COUNT(*)`, which only suits SQL sources. |
+| `table_row_estimates/2` | `{:error, :unsupported}` | Estimated row counts of every relation in the given schemas, from the engine's statistics, in one cheap call: `{:ok, %{{schema, table} => rows}}`. Leave out a relation without an estimate; never count every table. |
 | `limit_query/3` | statement unchanged | Cap a statement at a row limit for the UI's preview affordance — `%Statement{}` in, `%Statement{}` out. |
 | `list_schemas/1` | `{:ok, []}` | Sources with a namespace level. Flat sources omit it. |
 | `resolve_table_namespace/3` | `{:ok, nil}` | Resolve which namespace holds a table. |

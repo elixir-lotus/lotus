@@ -338,23 +338,62 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
       c.column_type,
       c.is_nullable,
       c.column_default,
-      IF(c.column_key = 'PRI', 1, 0) as is_primary_key
+      IF(c.column_key = 'PRI', 1, 0) as is_primary_key,
+      c.column_comment
     FROM information_schema.columns c
     WHERE c.table_schema = ? AND c.table_name = ?
     ORDER BY c.ordinal_position
     """
 
     %{rows: rows} = repo.query!(sql, [schema, table])
+    references = foreign_keys(repo, schema, table)
 
-    Enum.map(rows, fn [name, type, nullable, default, is_pk] ->
+    Enum.map(rows, fn [name, type, nullable, default, is_pk, comment] ->
       %{
         name: name,
         type: type,
         nullable: nullable == "YES",
         default: default,
-        primary_key: is_pk == 1
+        primary_key: is_pk == 1,
+        comment: if(comment in [nil, ""], do: nil, else: comment),
+        references: Map.get(references, name)
       }
     end)
+  end
+
+  defp foreign_keys(repo, schema, table) do
+    sql = """
+    SELECT k.column_name, k.referenced_table_schema, k.referenced_table_name,
+           k.referenced_column_name
+    FROM information_schema.key_column_usage k
+    WHERE k.table_schema = ? AND k.table_name = ?
+      AND k.referenced_table_name IS NOT NULL
+    ORDER BY k.constraint_name, k.ordinal_position
+    """
+
+    %{rows: rows} = repo.query!(sql, [schema, table])
+
+    Enum.reduce(rows, %{}, fn [column, ref_schema, ref_table, ref_column], acc ->
+      Map.put_new(acc, column, %{schema: ref_schema, table: ref_table, column: ref_column})
+    end)
+  end
+
+  # TABLE_ROWS: exact for MyISAM, the storage engine's estimate for InnoDB.
+  @impl true
+  def table_row_estimates(_repo, []), do: %{}
+
+  def table_row_estimates(repo, schemas) do
+    placeholders = Enum.map_join(schemas, ", ", fn _ -> "?" end)
+
+    sql = """
+    SELECT table_schema, table_name, table_rows
+    FROM information_schema.tables
+    WHERE table_type = 'BASE TABLE' AND table_schema IN (#{placeholders})
+    """
+
+    %{rows: rows} = repo.query!(sql, schemas)
+
+    for [schema, table, rows] <- rows, is_integer(rows), into: %{}, do: {{schema, table}, rows}
   end
 
   @impl true
