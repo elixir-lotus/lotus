@@ -1,6 +1,17 @@
 # Changelog
 
-## [Unreleased]
+## [1.3.0] - 2026-10-17
+
+Lotus gets an MCP server, `Lotus.MCP`, built on Sake 0.4: an MCP client such
+as Claude Code signs in through the host's own login and explores, queries,
+charts and builds dashboards as that person. Discovery now reports foreign
+keys, column comments, row estimates and source descriptions, so the AI
+assistant and MCP clients join on real keys. This release also closes several
+security gaps: column policies bypassed by renaming a column, read-only runs
+that left session state behind, cached entries served under old visibility
+rules, and Lotus Pro's and Sake's OAuth tables readable through discovery.
+Sake is optional. A statement that relied on a closed gap (renaming or
+filtering on a protected column, `SET` in a read-only run) is now refused.
 
 ### Added
 
