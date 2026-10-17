@@ -49,6 +49,7 @@ defmodule Lotus.MixProject do
       {:nimble_csv, "~> 1.2"},
       {:nimble_options, "~> 1.0"},
       {:postgrex, "~> 0.20", optional: true},
+      {:sake, "~> 0.3", optional: true},
       {:telemetry, "~> 1.0"},
 
       # AI/LLM Integration
@@ -83,7 +84,7 @@ defmodule Lotus.MixProject do
 
   defp dialyzer do
     [
-      plt_add_apps: [:mix, :ex_unit, :ecto, :ecto_sql, :postgrex, :myxql],
+      plt_add_apps: [:mix, :ex_unit, :ecto, :ecto_sql, :postgrex, :myxql, :sake, :plug],
       plt_core_path: "_build/#{Mix.env()}",
       flags: [:error_handling, :missing_return, :underspecs],
       ignore_warnings: ".dialyzer_ignore.exs"
@@ -141,6 +142,7 @@ defmodule Lotus.MixProject do
           Lotus.AI.Tool,
           ~r/Lotus\.AI\.Actions\..+/
         ],
+        MCP: [Lotus.MCP],
         Utilities: [Lotus.JSON]
       ]
     ]
@@ -156,6 +158,7 @@ defmodule Lotus.MixProject do
       "guides/dashboards.md",
       "guides/advanced-variables.md",
       "guides/ai_query_generation.md",
+      "guides/mcp.md",
       "guides/configuration.md",
       "guides/middleware.md",
       "guides/schema-introspection.md",
