@@ -95,9 +95,14 @@ defmodule Lotus.AI.Actions.GetColumnValues do
   end
 
   defp run_and_format(query, params, opts) do
-    case Lotus.run_statement(query, [], [repo: params.data_source] ++ opts) do
+    case Lotus.run_statement(query, [], [repo: params.data_source, read_only: true] ++ opts) do
       {:ok, result} ->
-        values = Enum.map(result.rows, fn [value] -> Lotus.Normalizer.normalize(value) end)
+        # A column an `:omit` policy hides comes back with no values in its rows.
+        values =
+          Enum.flat_map(result.rows, fn
+            [value] -> [Lotus.Normalizer.normalize(value)]
+            _hidden -> []
+          end)
 
         {:ok,
          %{
