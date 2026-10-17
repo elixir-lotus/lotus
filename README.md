@@ -1,6 +1,6 @@
 # Lotus
 
-![Lotus](https://raw.githubusercontent.com/elixir-lotus/lotus/main/media/banner.png)
+![Lotus — BI for Phoenix](https://raw.githubusercontent.com/elixir-lotus/lotus/main/media/banner.png)
 
 <p>
   <a href="https://hex.pm/packages/lotus">

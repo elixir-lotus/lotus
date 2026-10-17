@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="112" height="112" viewBox="0 0 112 112" role="img" aria-labelledby="title description">
+<title id="title">Lotus</title>
+<desc id="description">A lotus in Sumi ink, its centre petal cut free of the others, with a blade orange petal.</desc>
+<defs>
+  <mask id="lotus-bloom" maskUnits="userSpaceOnUse" x="0" y="0" width="112" height="112">
+    <rect width="112" height="112" fill="white"/>
+    <path d="M56 14Q82 38 80 62Q78 86 56 96Q34 86 32 62Q30 38 56 14Z" fill="none" stroke="black" stroke-width="3.5"/>
+  </mask>
+</defs>
+<g mask="url(#lotus-bloom)">
+  <path fill="#0a0a0b" d="M56 96Q16 98 12 38Q46 46 56 96Z"/>
+  <path fill="#0a0a0b" d="M56 96Q96 98 100 38Q66 46 56 96Z"/>
+  <path fill="#0a0a0b" d="M56 14Q82 38 80 62Q78 86 56 96Q34 86 32 62Q30 38 56 14Z"/>
+</g>
+</svg>
