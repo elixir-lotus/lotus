@@ -10,6 +10,7 @@ defmodule Lotus.ConfigTest do
     :column_visibility,
     :data_sources,
     :default_source,
+    :data_source_descriptions,
     :source_adapters,
     :allow_unrestricted_resources
   ]
@@ -194,6 +195,19 @@ defmodule Lotus.ConfigTest do
       sources = Config.data_sources()
       assert sources["postgres"] == Lotus.Test.Repo
       assert sources["search"] == %{adapter: :elasticsearch, url: "http://localhost:9200"}
+    end
+  end
+
+  describe "data_source_description/1" do
+    test "reads the descriptions from the application environment" do
+      Application.put_env(:lotus, :data_source_descriptions, %{
+        "postgres" => "orders and customers"
+      })
+
+      Config.reload!()
+
+      assert Config.data_source_description("postgres") == "orders and customers"
+      assert Config.data_source_description("mysql") == nil
     end
   end
 
