@@ -9,7 +9,13 @@ if Code.ensure_loaded?(Sake.Server) do
       annotations: [read_only: false, destructive: false, idempotent: false, open_world: false]
 
     arg :name, :string, required: true, max_length: 255, description: "The dashboard's name"
-    arg :description, :string, max_length: 2000, description: "What the dashboard is for"
+
+    arg :description, :string,
+      max_length: 2000,
+      description:
+        "What the dashboard is for: Markdown with inline formats only (bold, italic, " <>
+          "strikethrough, code, links), no headings, lists or blocks, which Lotus Web's " <>
+          "editor would flatten"
 
     alias Lotus.MCP.Support
 
