@@ -218,6 +218,14 @@ config :lotus, :mcp,
   Saved queries on other sources are not listed.
 - **`:max_rows`** — the most rows a tool returns in one page (default 500).
 
+What helps the model write good queries comes from Lotus itself, not
+this setting. Describe each source with
+`config :lotus, data_source_descriptions: %{"support" => "helpdesk tickets and agents"}`.
+`list_data_sources` shows these descriptions. `describe_table` shows
+foreign keys and column comments, and `list_tables` shows estimated row
+counts. Database comments on the columns that matter are worth writing
+(`COMMENT ON COLUMN tickets.status IS 'open, pending or solved'`).
+
 ## Mounting in your own MCP server
 
 If your app has an MCP server of its own, mount Lotus in it instead, under

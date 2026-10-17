@@ -34,6 +34,30 @@
   cover: column policies match result column names, and a PostgreSQL
   `SELECT` can still call functions with side effects.
 
+- **Foreign keys and column comments in `describe_table/3`.** A column
+  carries `:references` (`%{schema, table, column}`, the column a foreign
+  key references) and `:comment` where the source has them: PostgreSQL
+  and MySQL report both, SQLite foreign keys. A reference to a table or
+  column the caller may not see is left out. Source adapters add them in
+  their `describe_table/3`. The AI assistant and the MCP server's
+  `describe_table` show them, so the model joins on real foreign keys.
+- **`Lotus.table_row_estimates/2`**, with a new optional adapter callback
+  `table_row_estimates/2`: an estimated row count of every visible table
+  from the engine's statistics, in one cheap query (PostgreSQL's
+  `reltuples`, MySQL's `TABLE_ROWS`, SQLite's `sqlite_stat1` after
+  `ANALYZE`). The AI assistant's and the MCP server's `list_tables` show
+  them as `approx_rows`.
+- **`config :lotus, data_source_descriptions: %{name => description}`**,
+  shown by the AI assistant's and the MCP server's `list_data_sources`;
+  `Lotus.data_source_description/1` reads one.
+
+### Changed
+
+- `describe_table/3` reports a primary key column as not nullable,
+  whatever the engine says (SQLite reports an `INTEGER PRIMARY KEY` as
+  nullable), and the SQLite adapter marks every column of a composite
+  primary key, not only the first.
+
 ### Fixed
 
 - `Lotus.AI.Actions.GetColumnValues` runs its statement read-only, as

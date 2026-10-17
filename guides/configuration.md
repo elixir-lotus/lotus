@@ -138,6 +138,22 @@ Lotus.default_data_source()
 
 > **Note**: The `storage_repo` can also be included in `data_sources` if you want to run queries against the same database where Lotus stores its data. This is common in single-database applications.
 
+#### `data_source_descriptions`
+
+A short description of what each data source holds, by name. The AI
+assistant and the MCP server show it to the model, so that it picks the
+right source without exploring each one:
+
+```elixir
+config :lotus,
+  data_source_descriptions: %{
+    "main" => "the app's users, orders and invoices",
+    "support" => "helpdesk tickets and agents"
+  }
+```
+
+`Lotus.data_source_description/1` returns one.
+
 ### Optional Features
 
 #### `cache`
