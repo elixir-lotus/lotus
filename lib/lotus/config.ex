@@ -69,6 +69,9 @@ defmodule Lotus.Config do
 
       config :lotus,
         default_source: "primary",     # Default data source for queries
+        data_source_descriptions: %{   # Shown to the AI assistant and MCP clients
+          "primary" => "the app's users, orders and invoices"
+        },
         unique_names: false,           # Defaults to true
         read_only: false               # Defaults to true; set to false to allow writes
   """
@@ -79,6 +82,7 @@ defmodule Lotus.Config do
           unique_names: boolean(),
           data_sources: %{String.t() => module() | map()},
           default_source: String.t() | nil,
+          data_source_descriptions: %{String.t() => String.t()},
           default_page_size: pos_integer() | nil,
           table_visibility: map(),
           column_visibility: map(),
@@ -155,6 +159,12 @@ defmodule Lotus.Config do
       required: false,
       doc:
         "The default data source name to use when no source is specified. Required when multiple data_sources are configured."
+    ],
+    data_source_descriptions: [
+      type: {:map, :string, :string},
+      default: %{},
+      doc:
+        "A short description of each data source, by name (e.g. `%{\"support\" => \"helpdesk tickets and agents\"}`). The AI assistant and the MCP server show it to the model, so it picks the right source."
     ],
     default_page_size: [
       type: {:or, [:pos_integer, nil]},
@@ -546,6 +556,12 @@ defmodule Lotus.Config do
         source
     end
   end
+
+  @doc """
+  The description of a data source from `:data_source_descriptions`, or `nil`.
+  """
+  @spec data_source_description(String.t()) :: String.t() | nil
+  def data_source_description(name), do: Map.get(load!()[:data_source_descriptions], name)
 
   @doc """
   Lists the names of all configured data sources.

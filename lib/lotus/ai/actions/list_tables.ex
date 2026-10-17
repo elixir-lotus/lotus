@@ -17,7 +17,8 @@ defmodule Lotus.AI.Actions.ListTables do
   def description,
     do:
       "Get list of all available tables in the database with their schemas " <>
-        "(e.g., 'public.users', 'reporting.customers')"
+        "(e.g., 'public.users', 'reporting.customers'), and approx_rows: an estimate " <>
+        "of each table's row count from the database's statistics, where it has one"
 
   @impl true
   def schema do
@@ -30,7 +31,8 @@ defmodule Lotus.AI.Actions.ListTables do
   def run(params, context) do
     case Lotus.Schema.list_tables(params.data_source, actor_opts(context)) do
       {:ok, tables} ->
-        {:ok, %{tables: format_table_names(tables)}}
+        names = format_table_names(tables)
+        {:ok, with_estimates(%{tables: names}, names, params.data_source, context)}
 
       {:error, reason} ->
         {:error, reason}
@@ -43,4 +45,31 @@ defmodule Lotus.AI.Actions.ListTables do
       table -> table
     end)
   end
+
+  # The engine's row count estimates, for the tables listed: a caller that
+  # knows a table is large picks a limit. A source without them, or a
+  # failure to read them, leaves approx_rows out.
+  defp with_estimates(result, names, data_source, context) do
+    case Lotus.Schema.table_row_estimates(data_source, actor_opts(context)) do
+      {:ok, estimates} when map_size(estimates) > 0 ->
+        listed = MapSet.new(names)
+
+        approx =
+          for {{schema, table}, rows} <- estimates,
+              name = format_table_name(schema, table),
+              MapSet.member?(listed, name),
+              into: %{},
+              do: {name, rows}
+
+        if approx == %{}, do: result, else: Map.put(result, :approx_rows, approx)
+
+      _ ->
+        result
+    end
+  rescue
+    _ -> result
+  end
+
+  defp format_table_name(nil, table), do: table
+  defp format_table_name(schema, table), do: "#{schema}.#{table}"
 end

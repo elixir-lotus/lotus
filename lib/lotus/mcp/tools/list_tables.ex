@@ -6,7 +6,9 @@ if Code.ensure_loaded?(Sake.Server) do
       title: "List tables",
       description:
         "List the tables of a data source that may be queried, schema-qualified where " <>
-          "the source has schemas (e.g. public.users).",
+          "the source has schemas (e.g. public.users), and approx_rows: each table's " <>
+          "estimated row count from the database's statistics, where it has one. Use it " <>
+          "to tell large tables from small ones and pick a limit.",
       scope: "lotus:read",
       annotations: [read_only: true, idempotent: true, open_world: false]
 

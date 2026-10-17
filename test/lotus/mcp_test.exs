@@ -150,6 +150,40 @@ defmodule Lotus.MCPTest do
       assert "email" in Enum.map(columns, & &1["name"])
     end
 
+    test "what helps a model write a query: descriptions, joins, sizes" do
+      Mimic.stub(Lotus.Config, :data_source_description, fn
+        "postgres" -> "the app's users and posts"
+        _ -> nil
+      end)
+
+      Repo.query!("ANALYZE test_users")
+      client = client()
+
+      assert %{structured: %{"data_sources" => sources}} =
+               call!(client, "list_data_sources", %{})
+
+      assert %{"description" => "the app's users and posts"} =
+               Enum.find(sources, &(&1["name"] == "postgres"))
+
+      refute Map.has_key?(Enum.find(sources, &(&1["name"] == "sqlite")), "description")
+
+      assert %{structured: %{"columns" => columns}} =
+               call!(client, "describe_table", %{
+                 "data_source" => "postgres",
+                 "table" => "test_posts"
+               })
+
+      assert %{"references" => "public.test_users.id"} =
+               Enum.find(columns, &(&1["name"] == "user_id"))
+
+      refute Map.has_key?(Enum.find(columns, &(&1["name"] == "title")), "references")
+
+      assert %{structured: %{"approx_rows" => approx}} =
+               call!(client, "list_tables", %{"data_source" => "postgres"})
+
+      assert is_integer(approx["public.test_users"])
+    end
+
     test "an unknown data source is a tool error, not a crash" do
       assert %{is_error: true, text: "Unknown data source \"nope\"" <> _} =
                call!(client(), "list_tables", %{"data_source" => "nope"})
