@@ -88,21 +88,10 @@ defmodule Lotus.AI.ActorThreadingTest do
       def column_rules_for(_source, _scope), do: []
     end
 
+    # A stub, not the application env: the env is global, and this module
+    # runs async alongside others that read the configured resolver.
     setup do
-      previous = Application.get_env(:lotus, :visibility_resolver)
-      Application.put_env(:lotus, :visibility_resolver, DenyAllResolver)
-      Lotus.Config.reload!()
-
-      on_exit(fn ->
-        if previous do
-          Application.put_env(:lotus, :visibility_resolver, previous)
-        else
-          Application.delete_env(:lotus, :visibility_resolver)
-        end
-
-        Lotus.Config.reload!()
-      end)
-
+      Mimic.stub(Lotus.Config, :visibility_resolver, fn -> DenyAllResolver end)
       :ok
     end
 

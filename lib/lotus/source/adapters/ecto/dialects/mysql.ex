@@ -285,6 +285,25 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     "SELECT value_column FROM #{table}"
   end
 
+  # Named locks (held by the pooled connection), files, waits on
+  # replication, and sleeps max_execution_time may not bound.
+  @impl true
+  def denied_functions do
+    [
+      "get_lock",
+      "release_lock",
+      "release_all_locks",
+      "load_file",
+      "sleep",
+      "benchmark",
+      "master_pos_wait",
+      "source_pos_wait",
+      "wait_for_executed_gtid_set",
+      "sys_exec",
+      "sys_eval"
+    ]
+  end
+
   @impl true
   def builtin_schema_denies(_repo) do
     ["information_schema", "mysql", "performance_schema", "sys"]

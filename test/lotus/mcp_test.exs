@@ -150,6 +150,20 @@ defmodule Lotus.MCPTest do
       assert "email" in Enum.map(columns, & &1["name"])
     end
 
+    test "list_data_sources leaves out the sources the actor may not use" do
+      Mimic.stub(Lotus.Visibility, :source_visible?, fn
+        "sqlite", %{id: 7} -> false
+        _source, _scope -> true
+      end)
+
+      assert %{structured: %{"data_sources" => sources}} =
+               call!(client(), "list_data_sources", %{})
+
+      names = Enum.map(sources, & &1["name"])
+      assert "postgres" in names
+      refute "sqlite" in names
+    end
+
     test "what helps a model write a query: descriptions, joins, sizes" do
       Mimic.stub(Lotus.Config, :data_source_description, fn
         "postgres" -> "the app's users and posts"

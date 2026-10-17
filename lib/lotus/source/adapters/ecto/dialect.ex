@@ -117,6 +117,21 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
 
   @callback builtin_schema_denies(repo) :: [String.t() | Regex.t()]
 
+  @doc """
+  Functions a read-only statement may not call: those with effects that
+  outlast the transaction or reach other sessions (locks, session settings,
+  signalling backends, files, other connections), or that run SQL text
+  preflight can't see.
+
+  Names are lowercase; `*` matches any run of word characters
+  (`"pg_advisory_*"`). Sanitization refuses a call to any of them, with or
+  without a schema qualifier. A deny list is never complete: it is defense
+  in depth behind a database role that can only read.
+
+  Default (when not implemented): `[]`.
+  """
+  @callback denied_functions() :: [String.t()]
+
   @callback default_schemas(repo) :: [String.t()]
 
   # ---------------------------------------------------------------------------
@@ -246,6 +261,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
 
   @optional_callbacks [
     table_row_estimates: 2,
+    denied_functions: 0,
     set_statement_timeout: 2,
     set_search_path: 2,
     supports_feature?: 1,

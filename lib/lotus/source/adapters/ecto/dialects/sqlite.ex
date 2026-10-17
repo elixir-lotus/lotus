@@ -194,6 +194,18 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
     "SELECT value_column FROM #{table}"
   end
 
+  # Extensions and files.
+  @impl true
+  def denied_functions do
+    [
+      "load_extension",
+      "readfile",
+      "writefile",
+      "edit",
+      "fts3_tokenizer"
+    ]
+  end
+
   @impl true
   def builtin_schema_denies(_repo) do
     []

@@ -12,7 +12,7 @@ defmodule Lotus.Runner do
   """
 
   alias Lotus.{Middleware, Preflight, Result, Telemetry, Visibility}
-  alias Lotus.Preflight.Relations
+  alias Lotus.Preflight.{Columns, Relations}
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
   alias Lotus.Visibility.{Mask, Policy}
@@ -407,11 +407,33 @@ defmodule Lotus.Runner do
     # Preflight hands its relations back as a value, and they travel down the
     # pipeline explicitly. Nothing crosses a statement boundary through the
     # process dictionary.
-    with :ok <- tag(:sanitize, Adapter.sanitize_query(adapter, statement, sanitize_opts(opts))),
-         {:ok, relations} <- tag(:preflight, preflight_visibility(adapter, statement, opts)),
+    with {:ok, relations} <- check_phases(adapter, statement, opts),
          {:ok, assigns} <-
            tag(:before_execute, before_execute(adapter, statement, relations, :executed, opts)) do
       {:ok, %{relations: relations, assigns: assigns}}
+    end
+  end
+
+  @doc false
+  # What execution checks before it asks middleware: sanitization, the
+  # source's visibility, preflight and how the statement uses protected
+  # columns. Returns preflight's relations, or the error execution gives.
+  # `Lotus.AI.Actions.ValidateStatement` runs it so that validating a
+  # statement reveals no more than running it would.
+  @spec check_statement(Adapter.t(), Statement.t(), opts()) ::
+          {:ok, relations()} | {:error, term()}
+  def check_statement(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
+    adapter |> check_phases(statement, opts) |> untag()
+  end
+
+  defp check_phases(adapter, statement, opts) do
+    with :ok <- tag(:sanitize, Adapter.sanitize_query(adapter, statement, sanitize_opts(opts))),
+         :ok <- tag(:preflight, source_visible(adapter, opts)),
+         {:ok, matcher} <- tag(:preflight, matcher(adapter, opts)),
+         {:ok, relations} <-
+           tag(:preflight, preflight_visibility(adapter, statement, matcher, opts)),
+         :ok <- tag(:preflight, check_columns(adapter, statement, relations, matcher)) do
+      {:ok, relations}
     end
   end
 
@@ -590,17 +612,44 @@ defmodule Lotus.Runner do
     Keyword.take(opts, [:read_only])
   end
 
+  # One matcher for preflight and the column check; the result asks again,
+  # as a cached result does without them.
+  defp matcher(%Adapter{name: name}, opts) do
+    {:ok, Visibility.matcher_for(name, Keyword.get(opts, :scope))}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp source_visible(%Adapter{name: name}, opts) do
+    if Visibility.source_visible?(name, Keyword.get(opts, :scope)),
+      do: :ok,
+      else: {:error, "Data source #{inspect(name)} is not available"}
+  end
+
+  # Column policies apply by result column name, so a SQL statement that
+  # renames or transforms a protected column is refused before it runs.
+  # A statement preflight skipped (EXPLAIN, SHOW) returns no column values.
+  defp check_columns(_adapter, _statement, {:skipped, _reason}, _matcher), do: :ok
+
+  defp check_columns(%Adapter{} = adapter, %Statement{body: body}, relations, matcher)
+       when is_binary(body) do
+    if String.starts_with?(Adapter.query_language(adapter), "sql") do
+      Columns.check(body, Adapter.lexical_profile(adapter), matcher, relations)
+    else
+      :ok
+    end
+  end
+
+  defp check_columns(_adapter, _statement, _relations, _matcher), do: :ok
+
   # Returns what preflight knows about the statement: a list of
   # `{schema, table}`, `{:unrestricted, reason}` for an adapter that cannot
   # name them, or `{:skipped, reason}` for a statement the adapter does not
   # preflight — nothing was analysed, so nothing is known, and that is not the
   # same as an empty list.
-  defp preflight_visibility(%Adapter{} = adapter, %Statement{} = statement, opts) do
+  defp preflight_visibility(%Adapter{} = adapter, %Statement{} = statement, matcher, opts) do
     if Adapter.needs_preflight?(adapter, statement) do
-      search_path = Keyword.get(opts, :search_path)
-      scope = Keyword.get(opts, :scope)
-
-      Preflight.analyze(adapter, statement, search_path, scope)
+      Preflight.analyze_with(adapter, statement, Keyword.get(opts, :search_path), matcher)
     else
       {:ok, {:skipped, "the adapter does not preflight this statement"}}
     end

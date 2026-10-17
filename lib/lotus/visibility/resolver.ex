@@ -52,5 +52,19 @@ defmodule Lotus.Visibility.Resolver do
   @callback matcher_for(source_name :: String.t(), scope :: term()) ::
               Lotus.Visibility.Matcher.t()
 
-  @optional_callbacks matcher_for: 2
+  @doc """
+  Whether the caller in `scope` may use the source at all.
+
+  Optional. Without it, every configured source is visible, and the rule
+  callbacks decide what is visible inside it. Return `false` and Lotus
+  refuses to run statements against the source for that scope, hides
+  everything in it from discovery, and leaves it out of the data sources
+  the AI assistant and `Lotus.MCP` list.
+
+      def source_visible?("billing", %{role: role}), do: role == :finance
+      def source_visible?(_source, _scope), do: true
+  """
+  @callback source_visible?(source_name :: String.t(), scope :: term()) :: boolean()
+
+  @optional_callbacks matcher_for: 2, source_visible?: 2
 end

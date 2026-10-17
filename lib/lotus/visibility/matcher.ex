@@ -57,6 +57,12 @@ defmodule Lotus.Visibility.Matcher do
             table_deny: @empty_tables,
             column: @empty_columns
 
+  @doc false
+  # A matcher that allows no schema, and so no relation: the one a source the
+  # caller may not use gets.
+  @spec deny_all() :: t()
+  def deny_all, do: %__MODULE__{schema_allow: @empty_names}
+
   # ---------------------------------------------------------------------------
   # Compilation
   # ---------------------------------------------------------------------------
@@ -225,6 +231,26 @@ defmodule Lotus.Visibility.Matcher do
       find_table_column(column.table, rels, column_name) ||
       find_column(column, column_name)
   end
+
+  @doc false
+  # Whether any column rule that can apply to `relations` does more than
+  # allow: a rule for one of the relations, or a rule naming only a column.
+  @spec restricts_columns?(t(), [{String.t() | nil, String.t()}] | nil) :: boolean()
+  def restricts_columns?(%__MODULE__{column: column}, relations) do
+    rels = relations || []
+
+    Enum.any?(column.schema_table, fn {schema_pat, table_pat, _col, policy} ->
+      restricts?(policy) and
+        Enum.any?(rels, fn {s, t} -> cv_match?(schema_pat, s) and cv_match?(table_pat, t) end)
+    end) or
+      Enum.any?(column.table, fn {table_pat, _col, policy} ->
+        restricts?(policy) and Enum.any?(rels, fn {_s, t} -> cv_match?(table_pat, t) end)
+      end) or
+      Enum.any?(column.exact, fn {_name, {_pos, policy}} -> restricts?(policy) end) or
+      Enum.any?(column.patterns, fn {_pos, _pat, policy} -> restricts?(policy) end)
+  end
+
+  defp restricts?(policy), do: normalize(policy).action != :allow
 
   defp schema_allow_pass?(:all, _schema), do: true
   defp schema_allow_pass?(set, schema), do: name_match?(set, schema)
