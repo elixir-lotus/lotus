@@ -473,6 +473,7 @@ defmodule Lotus.Config do
       :unique_names,
       :data_sources,
       :default_source,
+      :data_source_descriptions,
       :default_page_size,
       :table_visibility,
       :column_visibility,
