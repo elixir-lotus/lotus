@@ -125,6 +125,7 @@ For the complete setup guide (caching, multiple databases, visibility controls),
 - **AI query explanation** — get plain-language explanations of what a query does, including selected fragments; understands Lotus `{{variable}}` and `[[optional]]` syntax
 - **AI query optimization** — get actionable optimization suggestions (indexes, rewrites, schema changes) powered by query-plan analysis
 - **Adapter-driven AI** — each adapter describes its own query language, example query, syntax notes, and error patterns through `ai_context/1`, so the assistant speaks the engine's dialect instead of assuming SQL. Free-form adapter text only reaches the prompt for adapters you list in `:trusted_source_adapters`
+- **MCP server** — connect Claude Code or any MCP client to your app with `Lotus.MCP` (built on [Sake](https://hexdocs.pm/sake)): it signs in through your own login, reads your saved queries and dashboards, runs read-only queries within your visibility rules, and saves new queries, charts and dashboards. No LLM key needed. See the [MCP guide](guides/mcp.md)
 - **Three-level visibility** — schema, table, and column rules, with schema taking precedence over table and per-column `:omit` / `{:mask, _}` / `:error` policies applied to result rows
 - **Middleware** — a plug-style pipeline with `:before_query`, `:before_execute`, `:after_query`, and `:after_list_*` hooks for auditing, access control, per-tenant statement rewriting, and authorizing on the tables a statement provably touches
 - **Telemetry** — `[:lotus, ...]` events for query execution, schema introspection, and cache hits and misses
@@ -272,6 +273,20 @@ ReqLLM supports. A source whose adapter opts out of AI returns
 `{:error, :ai_not_supported_for_source}`. See the
 [AI query generation guide](guides/ai_query_generation.md) for setup,
 multi-turn conversation support, and query optimization.
+
+### MCP Server
+
+Let Claude Code (or any MCP client) work with your Lotus data as a signed-in user of your app. Add `{:sake, "~> 0.3"}`, set up Sake's authorization with your login, and mount the endpoint:
+
+```elixir
+sake_endpoint "/lotus/mcp", server: Lotus.MCP, auth: true
+```
+
+```
+claude mcp add --transport http lotus https://myapp.example.com/lotus/mcp
+```
+
+The client can then list and run your saved queries and dashboards, explore schemas, run read-only statements, and save queries, charts and dashboards, each behind its own OAuth scope (`lotus:read`, `lotus:query`, `lotus:write`). See the [MCP guide](guides/mcp.md).
 
 ## Configuration
 
