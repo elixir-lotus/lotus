@@ -229,18 +229,53 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
     query = "PRAGMA table_info(#{quote_identifier(table_name)})"
 
     result = repo.query!(query)
+    references = foreign_keys(repo, table_name)
 
     Enum.map(result.rows, fn row ->
       [_cid, name, type, notnull, default, pk] = row
 
+      # pk is the column's position in the primary key (1, 2, ... for a
+      # composite one), 0 when it is not part of it.
       %{
         name: name,
         type: type,
         nullable: notnull == 0,
         default: default,
-        primary_key: pk == 1
+        primary_key: pk > 0,
+        references: Map.get(references, name)
       }
     end)
+  end
+
+  # A reference without a column ("to" is NULL) names the referenced
+  # table's primary key.
+  defp foreign_keys(repo, table_name) do
+    %{rows: rows} = repo.query!("PRAGMA foreign_key_list(#{quote_identifier(table_name)})")
+
+    Enum.reduce(rows, %{}, fn [_id, _seq, ref_table, from, to | _], acc ->
+      Map.put_new(acc, from, %{schema: nil, table: ref_table, column: to})
+    end)
+  end
+
+  @impl true
+  def table_row_estimates(repo, _schemas) do
+    # SQLite keeps no row count. ANALYZE writes one into sqlite_stat1 (the
+    # first number of each stat); without it there is no estimate.
+    %{rows: tables} =
+      repo.query!("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1'")
+
+    if tables == [] do
+      %{}
+    else
+      %{rows: rows} = repo.query!("SELECT tbl, stat FROM sqlite_stat1")
+
+      Enum.reduce(rows, %{}, fn [table, stat], acc ->
+        case Integer.parse(to_string(stat)) do
+          {count, _} -> Map.update(acc, {nil, table}, count, &max(&1, count))
+          :error -> acc
+        end
+      end)
+    end
   end
 
   @impl true

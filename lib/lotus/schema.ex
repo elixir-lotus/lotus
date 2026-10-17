@@ -255,6 +255,84 @@ defmodule Lotus.Schema do
   end
 
   @doc """
+  Estimates the row count of each table in the source's schemas, from the
+  engine's statistics: one cheap query, never a `COUNT(*)` of every table.
+
+  Returns `{:ok, %{{schema, table} => count}}` (`schema` is `nil` for a
+  source without schemas), with only the tables the caller may see. A
+  table the engine has no estimate for (never analyzed, say) is left out,
+  and a source whose adapter does not implement
+  `c:Lotus.Source.Adapter.table_row_estimates/2` returns an empty map.
+
+  Estimates lag behind writes: use `get_table_stats/3` for an exact count of
+  one table.
+
+  ## Options
+
+  - `:schema`, `:schemas`, `:search_path` - The schemas to estimate, as for
+    `list_tables/2`
+  - `:scope` - Opaque value passed to the visibility resolver and hashed into
+    the cache key
+  - `:cache` - Cache options (profile, ttl_ms, etc.); the default profile is
+    `:results`, as for `get_table_stats/3`
+
+  ## Examples
+
+      {:ok, %{{"public", "users"} => 1204}} = Lotus.Schema.table_row_estimates("postgres")
+  """
+  @spec table_row_estimates(module() | String.t(), keyword()) ::
+          {:ok, %{{String.t() | nil, String.t()} => non_neg_integer()}} | {:error, term()}
+  def table_row_estimates(repo_or_name, opts \\ []) do
+    adapter = Source.resolve!(repo_or_name, nil)
+    scope = Keyword.get(opts, :scope)
+    schemas = effective_schemas(adapter, opts)
+
+    case Visibility.validate_schemas(schemas, adapter.name, scope) do
+      :ok ->
+        key =
+          schema_key(
+            :table_row_estimates,
+            adapter.name,
+            Keyword.get(opts, :search_path) || Enum.join(schemas, ","),
+            nil,
+            scope
+          )
+
+        tags = ["source:#{adapter.name}", "schema:table_row_estimates"] ++ scope_tags(scope)
+
+        profile =
+          if is_list(opts[:cache]),
+            do: Keyword.get(opts[:cache], :profile, :results),
+            else: :results
+
+        exec_with_cache(opts[:cache], profile, key, tags, fn ->
+          fetch_row_estimates(adapter, schemas, scope)
+        end)
+
+      {:error, :schema_not_visible, denied: denied} ->
+        {:error, "Schema(s) not visible: #{Enum.join(denied, ", ")}"}
+    end
+  end
+
+  defp fetch_row_estimates(adapter, schemas, scope) do
+    case Adapter.table_row_estimates(adapter, schemas) do
+      {:ok, estimates} ->
+        {:ok,
+         Map.filter(estimates, fn {relation, _count} ->
+           Visibility.allowed_relation?(adapter.name, relation, scope)
+         end)}
+
+      {:error, :unsupported} ->
+        {:ok, %{}}
+
+      {:error, reason} ->
+        {:error, if(is_binary(reason), do: reason, else: inspect(reason))}
+    end
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  @doc """
   Describes a specific table (column definitions).
 
   Returns a list of column definitions with their types and constraints.
@@ -397,6 +475,7 @@ defmodule Lotus.Schema do
     cols
     |> Enum.reduce([], fn col, acc ->
       policy = Visibility.column_policy_for(matcher, rels, col.name)
+      col = col |> primary_key_not_null() |> visible_reference(source_name, matcher, scope)
 
       cond do
         Policy.hidden_from_schema?(policy) -> acc
@@ -406,6 +485,26 @@ defmodule Lotus.Schema do
     end)
     |> Enum.reverse()
   end
+
+  # A primary key column holds no NULL, whatever the engine reports (SQLite
+  # reports a nullable INTEGER PRIMARY KEY).
+  defp primary_key_not_null(%{primary_key: true} = col), do: %{col | nullable: false}
+  defp primary_key_not_null(col), do: col
+
+  # A foreign key may name a relation, or a column, the caller may not see:
+  # the reference is left out rather than reveal it.
+  defp visible_reference(%{references: %{table: table} = ref} = col, source, matcher, scope) do
+    visible? =
+      Visibility.allowed_relation?(source, {ref[:schema], table}, scope) and
+        not (is_binary(ref[:column]) and
+               Policy.hidden_from_schema?(
+                 Visibility.column_policy_for(matcher, [{ref[:schema], table}], ref[:column])
+               ))
+
+    if visible?, do: col, else: %{col | references: nil}
+  end
+
+  defp visible_reference(col, _source, _matcher, _scope), do: col
 
   defp table_not_visible_message(nil, table_name),
     do: "Table '#{table_name}' is not visible by Lotus policy"

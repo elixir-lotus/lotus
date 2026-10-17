@@ -56,7 +56,8 @@ defmodule Lotus.SchemaTest do
 
       id_col = Enum.find(schema, &(&1.name == "id"))
       assert id_col.primary_key == true
-      assert id_col.nullable == true
+      # SQLite reports an INTEGER PRIMARY KEY as nullable; Lotus does not.
+      assert id_col.nullable == false
 
       name_col = Enum.find(schema, &(&1.name == "name"))
       assert name_col.type =~ "TEXT" or name_col.type =~ "VARCHAR"

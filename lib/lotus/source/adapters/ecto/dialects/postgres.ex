@@ -255,23 +255,84 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
           AND kcu.table_name = c.table_name
           AND kcu.column_name = c.column_name
           AND tc.constraint_type = 'PRIMARY KEY'
-      ) AS is_primary_key
+      ) AS is_primary_key,
+      col_description(
+        format('%I.%I', c.table_schema, c.table_name)::regclass,
+        c.ordinal_position::int
+      ) AS comment
     FROM information_schema.columns c
     WHERE c.table_schema = $1 AND c.table_name = $2
     ORDER BY c.ordinal_position
     """
 
     %{rows: rows} = repo.query!(sql, [schema, table])
+    references = foreign_keys(repo, schema, table)
 
-    Enum.map(rows, fn [name, type, char_len, num_prec, num_scale, nullable, default, is_pk] ->
+    Enum.map(rows, fn [
+                        name,
+                        type,
+                        char_len,
+                        num_prec,
+                        num_scale,
+                        nullable,
+                        default,
+                        is_pk,
+                        comment
+                      ] ->
       %{
         name: name,
         type: format_postgres_type(type, char_len, num_prec, num_scale),
         nullable: nullable == "YES",
         default: default,
-        primary_key: is_pk || false
+        primary_key: is_pk || false,
+        comment: comment,
+        references: Map.get(references, name)
       }
     end)
+  end
+
+  # Each column of a foreign key and the column it references, from
+  # pg_constraint: a separate query, since joining it into the columns
+  # query would repeat a column once per constraint it is part of.
+  defp foreign_keys(repo, schema, table) do
+    sql = """
+    SELECT a.attname, fn.nspname, fc.relname, fa.attname
+    FROM pg_constraint con
+    JOIN pg_class cl ON cl.oid = con.conrelid
+    JOIN pg_namespace n ON n.oid = cl.relnamespace
+    JOIN pg_class fc ON fc.oid = con.confrelid
+    JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+    CROSS JOIN LATERAL unnest(con.conkey, con.confkey) AS k(attnum, fattnum)
+    JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+    JOIN pg_attribute fa ON fa.attrelid = con.confrelid AND fa.attnum = k.fattnum
+    WHERE con.contype = 'f' AND n.nspname = $1 AND cl.relname = $2
+    ORDER BY con.conname, k.attnum
+    """
+
+    %{rows: rows} = repo.query!(sql, [schema, table])
+
+    Enum.reduce(rows, %{}, fn [column, ref_schema, ref_table, ref_column], acc ->
+      Map.put_new(acc, column, %{schema: ref_schema, table: ref_table, column: ref_column})
+    end)
+  end
+
+  @impl true
+  def table_row_estimates(repo, schemas) do
+    # The planner's estimate, kept up to date by autovacuum and ANALYZE:
+    # cheap for any number of tables. A table never analyzed reports -1.
+    sql = """
+    SELECT n.nspname, c.relname, c.reltuples::bigint
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'm', 'f')
+    """
+
+    %{rows: rows} = repo.query!(sql, [schemas])
+
+    for [schema, table, rows] <- rows,
+        is_integer(rows) and rows >= 0,
+        into: %{},
+        do: {{schema, table}, rows}
   end
 
   @impl true
