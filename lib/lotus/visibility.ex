@@ -238,24 +238,23 @@ defmodule Lotus.Visibility do
   def compile(%Matcher{} = matcher, opts), do: merge_builtin(matcher, opts)
   def compile(%{} = rules, opts), do: rules |> Matcher.compile() |> merge_builtin(opts)
 
+  # The tables Lotus and its companions own are denied on every path.
   defp merge_builtin(matcher, opts) do
+    {schema_denies, table_denies} = builtin_denies(opts)
+    Matcher.merge_builtin(matcher, schema_denies, table_denies ++ Adapter.owned_table_denies())
+  end
+
+  defp builtin_denies(opts) do
     case Keyword.fetch(opts, :adapter) do
       {:ok, %Adapter{} = adapter} ->
-        Matcher.merge_builtin(
-          matcher,
-          Adapter.builtin_schema_denies(adapter),
-          Adapter.builtin_denies(adapter)
-        )
+        {Adapter.builtin_schema_denies(adapter), Adapter.builtin_denies(adapter)}
 
       {:ok, nil} ->
-        Matcher.merge_builtin(matcher, Adapter.builtin_schema_denies(), Adapter.builtin_denies())
+        {Adapter.builtin_schema_denies(), Adapter.builtin_denies()}
 
       :error ->
-        Matcher.merge_builtin(
-          matcher,
-          Keyword.get(opts, :builtin_schema_denies, []),
-          Keyword.get(opts, :builtin_table_denies, [])
-        )
+        {Keyword.get(opts, :builtin_schema_denies, []),
+         Keyword.get(opts, :builtin_table_denies, [])}
     end
   end
 

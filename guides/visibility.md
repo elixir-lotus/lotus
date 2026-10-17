@@ -519,6 +519,10 @@ Lotus denies its own and the engine's internals regardless of your rules.
   `lotus_query_visualizations`, `lotus_dashboards`,
   `lotus_dashboard_cards`, `lotus_dashboard_filters`,
   `lotus_dashboard_card_filter_mappings`
+- Lotus Pro's tables, in any schema: `lotus_access_policies`,
+  `lotus_pro_migrations`
+- the OAuth tables of Sake, which `Lotus.MCP` signs in with, in any
+  schema (`~r/^sake_oauth_/`): they hold token and code hashes
 
 These denies always apply, even where your rules would allow them.
 
