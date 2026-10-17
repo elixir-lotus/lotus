@@ -98,7 +98,7 @@ defmodule Lotus.Schema do
       end
 
     cache_result =
-      exec_with_cache(opts[:cache], profile, key, tags, fn ->
+      exec_with_cache(opts[:cache], profile, key, tags, rules(adapter, scope), fn ->
         try do
           case Adapter.list_schemas(adapter) do
             {:ok, raw_schemas} ->
@@ -205,7 +205,7 @@ defmodule Lotus.Schema do
               :schema
             end
 
-          exec_with_cache(opts[:cache], profile, key, tags, fn ->
+          exec_with_cache(opts[:cache], profile, key, tags, rules(adapter, scope), fn ->
             try do
               case Adapter.list_tables(adapter, schemas, include_views: include_views?) do
                 {:ok, raw_relations} ->
@@ -305,7 +305,7 @@ defmodule Lotus.Schema do
             do: Keyword.get(opts[:cache], :profile, :results),
             else: :results
 
-        exec_with_cache(opts[:cache], profile, key, tags, fn ->
+        exec_with_cache(opts[:cache], profile, key, tags, rules(adapter, scope), fn ->
           fetch_row_estimates(adapter, schemas, scope)
         end)
 
@@ -444,7 +444,7 @@ defmodule Lotus.Schema do
         :schema
       end
 
-    exec_with_cache(opts[:cache], profile, key, tags, fn ->
+    exec_with_cache(opts[:cache], profile, key, tags, rules(adapter, scope), fn ->
       if Visibility.allowed_relation?(adapter.name, {resolved_schema, table_name}, scope) do
         fetch_and_annotate_columns(adapter, resolved_schema, table_name, scope)
       else
@@ -594,7 +594,7 @@ defmodule Lotus.Schema do
         :results
       end
 
-    exec_with_cache(opts[:cache], profile, key, tags, fn ->
+    exec_with_cache(opts[:cache], profile, key, tags, rules(adapter, scope), fn ->
       if Visibility.allowed_relation?(adapter.name, {resolved_schema, table_name}, scope) do
         fetch_table_stats(adapter, resolved_schema, table_name)
       else
@@ -687,7 +687,7 @@ defmodule Lotus.Schema do
       end
 
     cache_result =
-      exec_with_cache(opts[:cache], profile, key, tags, fn ->
+      exec_with_cache(opts[:cache], profile, key, tags, rules(adapter, scope), fn ->
         try do
           case Adapter.list_tables(adapter, schemas, include_views: include_views?) do
             {:ok, raw_relations} ->
@@ -783,7 +783,7 @@ defmodule Lotus.Schema do
         else: default_profile
 
     cache_result =
-      exec_with_cache(cache_opts, profile, key, tags, fn ->
+      exec_with_cache(cache_opts, profile, key, tags, nil, fn ->
         case Adapter.resolve_table_namespace(adapter, table, schemas) do
           {:ok, nil} -> {:ok, :not_found}
           {:ok, schema} -> {:ok, {:found, schema}}
@@ -848,7 +848,15 @@ defmodule Lotus.Schema do
     end
   end
 
-  defp exec_with_cache(cache_opts, ttl_default_profile, key, tags, fun) do
+  # A discovery entry holds a list the visibility rules already filtered, so
+  # it is stored with the fingerprint of those rules and served only while
+  # the caller's rules still match it. One stored under other rules (or
+  # before entries carried a fingerprint) is refreshed as on a miss. The
+  # fingerprint is taken only when the cache is used; `nil`: the entry
+  # depends on no rule.
+  defp rules(adapter, scope), do: fn -> Visibility.rules_fingerprint(adapter.name, scope) end
+
+  defp exec_with_cache(cache_opts, ttl_default_profile, key, tags, rules, fun) do
     case cache_mode(cache_opts) do
       :off ->
         fun.()
@@ -857,34 +865,57 @@ defmodule Lotus.Schema do
         fun.()
 
       :refresh ->
-        case fun.() do
-          {:ok, val} ->
-            ttl = choose_ttl(cache_opts, ttl_default_profile)
-            :ok = Lotus.Cache.put(key, val, ttl, build_cache_options(cache_opts, tags))
-            {:ok, val}
-
-          other ->
-            other
-        end
+        refresh(cache_opts, ttl_default_profile, key, tags, fingerprint(rules), fun)
 
       :use ->
-        exec_with_cache_use(cache_opts, ttl_default_profile, key, tags, fun)
+        exec_with_cache_use(cache_opts, ttl_default_profile, key, tags, fingerprint(rules), fun)
     end
   end
 
-  defp exec_with_cache_use(cache_opts, ttl_default_profile, key, tags, fun) do
+  defp refresh(cache_opts, ttl_default_profile, key, tags, rules, fun) do
+    case fun.() do
+      {:ok, val} ->
+        ttl = choose_ttl(cache_opts, ttl_default_profile)
+        opts = build_cache_options(cache_opts, tags)
+        :ok = Lotus.Cache.put(key, with_rules(rules, val), ttl, opts)
+        {:ok, val}
+
+      other ->
+        other
+    end
+  end
+
+  defp exec_with_cache_use(cache_opts, ttl_default_profile, key, tags, rules, fun) do
     ttl = choose_ttl(cache_opts, ttl_default_profile)
     opts = build_cache_options(cache_opts, tags)
 
     try do
-      case Lotus.Cache.get_or_store(key, ttl, fn -> cache_value_or_throw(fun) end, opts) do
-        {:ok, val, _meta} -> {:ok, val}
-        {:error, _} -> fun.()
+      store = fn -> with_rules(rules, cache_value_or_throw(fun)) end
+
+      case Lotus.Cache.get_or_store(key, ttl, store, opts) do
+        {:ok, stored, _meta} ->
+          case under_rules(stored, rules) do
+            {:ok, val} -> {:ok, val}
+            :stale -> refresh(cache_opts, ttl_default_profile, key, tags, rules, fun)
+          end
+
+        {:error, _} ->
+          fun.()
       end
     catch
       {:lotus_cache_error, e} -> {:error, e}
     end
   end
+
+  defp fingerprint(nil), do: nil
+  defp fingerprint(rules_fun), do: rules_fun.()
+
+  defp with_rules(nil, val), do: val
+  defp with_rules(rules, val), do: {:lotus_rules, rules, val}
+
+  defp under_rules(val, nil), do: {:ok, val}
+  defp under_rules({:lotus_rules, rules, val}, rules), do: {:ok, val}
+  defp under_rules(_stored, _rules), do: :stale
 
   defp cache_value_or_throw(fun) do
     case fun.() do

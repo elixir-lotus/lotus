@@ -58,6 +58,29 @@ defmodule Lotus.Visibility.Matcher do
             column: @empty_columns
 
   @doc false
+  # A digest of the rules, the same on every node for the same rules. A
+  # compiled regex is reduced to its source and options, which are what make
+  # two regexes the same rule.
+  @spec fingerprint(t()) :: binary()
+  def fingerprint(%__MODULE__{} = matcher) do
+    term = matcher |> Map.from_struct() |> portable()
+
+    :sha256
+    |> :crypto.hash(:erlang.term_to_binary(term, [:deterministic]))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp portable(%Regex{} = rx), do: {:regex, Regex.source(rx), Regex.opts(rx)}
+  defp portable(%MapSet{} = set), do: {:set, set |> Enum.map(&portable/1) |> Enum.sort()}
+  defp portable(%{} = map), do: Map.new(map, fn {k, v} -> {portable(k), portable(v)} end)
+  defp portable(list) when is_list(list), do: Enum.map(list, &portable/1)
+
+  defp portable(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.map(&portable/1) |> List.to_tuple()
+
+  defp portable(other), do: other
+
+  @doc false
   # A matcher that allows no schema, and so no relation: the one a source the
   # caller may not use gets.
   @spec deny_all() :: t()

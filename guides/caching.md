@@ -488,6 +488,21 @@ Lotus.Cache.invalidate_tags(["table:public.users"])
 > their own and re-seed on the next read, so this is a cold cache, not a
 > correctness problem.
 
+### Cached entries follow rule changes
+
+A cached result was checked against the visibility rules, and its column
+policies applied, when it was stored; a cached table list or description
+was filtered by them. So every entry carries a fingerprint of the rules
+the caller's scope had, and a hit is served only while the scope's rules
+have the same fingerprint now. When they differ (a table is denied, a
+column is masked, `source_visible?/2` hides the source), the call runs as
+on a miss and replaces the entry. Comparing costs one call to the
+visibility resolver and no database query.
+
+The fingerprint covers what the resolver returns. A resolver whose rules
+depend on something outside them and the scope, such as a flag it reads
+at call time, should still invalidate after a change.
+
 ### Per-Scope Cache Invalidation
 
 When you pass `:scope` to a discovery or execution function, the entry is tagged with a scope digest. That lets you clear everything for one scope without flushing the cache:
@@ -504,7 +519,7 @@ When you pass `:scope` to a discovery or execution function, the entry is tagged
 {:ok, _} = Lotus.list_tables("postgres", scope: %{tenant_id: 2})
 ```
 
-This is what you want when visibility rules change for one scope — a tenant's permissions are updated, a role gains a table — and stale entries for that scope must go. `Lotus.invalidate_scope/1` (delegating to `Lotus.Cache.invalidate_scope/1`) clears both discovery and result entries carrying the scope tag.
+Entries stored under rules that have since changed are already refreshed on their next hit (see above); invalidating clears them at once, and frees their memory. `Lotus.invalidate_scope/1` (delegating to `Lotus.Cache.invalidate_scope/1`) clears both discovery and result entries carrying the scope tag.
 
 `invalidate_scope/1` accepts any term and returns `:ok`. Passing `nil` is a no-op, because there is no scope tag to invalidate.
 

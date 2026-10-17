@@ -99,6 +99,15 @@
   `= NULL`) has no scan of `t`, so preflight missed it and the statement
   returned a hidden table's columns. The tables a statement names in
   FROM and JOIN now count too.
+- **A cached result or discovery list follows rule changes**
+  ([#326](https://github.com/elixir-lotus/lotus/issues/326)). A hit used
+  to skip preflight and the statement checks, so after a visibility rule
+  changed, entries stored under the old rules were served until they
+  expired: unmasked values, a newly denied table's rows, a hidden table in
+  a table list. Each entry now carries a fingerprint of the rules it was
+  checked under, and a hit is served only while the caller's rules match
+  it; otherwise the call runs as on a miss and replaces the entry. The
+  check asks the visibility resolver and queries no database.
 - `Lotus.AI.Actions.GetColumnValues` runs its statement read-only, as
   the other actions do, and returns no values for a column an `:omit`
   policy hides instead of raising.
