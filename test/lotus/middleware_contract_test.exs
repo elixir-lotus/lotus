@@ -285,7 +285,7 @@ defmodule Lotus.MiddlewareContractTest do
         )
 
       assert {:ok, entry} = Lotus.Cache.get(key)
-      assert entry |> Map.keys() |> Enum.sort() == [:relations, :result]
+      assert entry |> Map.keys() |> Enum.sort() == [:relations, :result, :rules]
     end
 
     test "the uncached runner path carries the assigns" do

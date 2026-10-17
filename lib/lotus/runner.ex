@@ -15,7 +15,7 @@ defmodule Lotus.Runner do
   alias Lotus.Preflight.{Columns, Relations}
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
-  alias Lotus.Visibility.{Mask, Policy}
+  alias Lotus.Visibility.{Mask, Matcher, Policy}
 
   @type query_result :: Result.t()
   @type opts :: [
@@ -64,9 +64,10 @@ defmodule Lotus.Runner do
 
   @typedoc """
   What authorizing a statement produced: the relations preflight proved it
-  touches, and the assigns its `:before_execute` plugs left.
+  touches, the assigns its `:before_execute` plugs left, and the fingerprint
+  of the visibility rules it was checked against (see `rules_fingerprint/2`).
   """
-  @type authorization :: %{relations: relations(), assigns: assigns()}
+  @type authorization :: %{relations: relations(), assigns: assigns(), rules: binary()}
 
   @typedoc """
   What a run produced, as `:after_query` sees it: the statement that ran, its
@@ -407,10 +408,25 @@ defmodule Lotus.Runner do
     # Preflight hands its relations back as a value, and they travel down the
     # pipeline explicitly. Nothing crosses a statement boundary through the
     # process dictionary.
-    with {:ok, relations} <- check_phases(adapter, statement, opts),
+    with {:ok, %{relations: relations, matcher: matcher}} <-
+           check_phases(adapter, statement, opts),
          {:ok, assigns} <-
            tag(:before_execute, before_execute(adapter, statement, relations, :executed, opts)) do
-      {:ok, %{relations: relations, assigns: assigns}}
+      {:ok, %{relations: relations, assigns: assigns, rules: Matcher.fingerprint(matcher)}}
+    end
+  end
+
+  @doc false
+  # The fingerprint of the visibility rules the caller's scope gets for the
+  # source now. A cached result was checked, and its column policies applied,
+  # under the rules of the call that stored it, so it is served only while
+  # the fingerprint stored with it matches. Asks the resolver; queries no
+  # database. `nil` when the resolver fails, which matches no entry.
+  @spec rules_fingerprint(Adapter.t(), opts()) :: binary() | nil
+  def rules_fingerprint(%Adapter{} = adapter, opts) do
+    case matcher(adapter, opts) do
+      {:ok, matcher} -> Matcher.fingerprint(matcher)
+      {:error, _reason} -> nil
     end
   end
 
@@ -423,7 +439,8 @@ defmodule Lotus.Runner do
   @spec check_statement(Adapter.t(), Statement.t(), opts()) ::
           {:ok, relations()} | {:error, term()}
   def check_statement(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
-    adapter |> check_phases(statement, opts) |> untag()
+    with {:ok, %{relations: relations}} <- adapter |> check_phases(statement, opts) |> untag(),
+         do: {:ok, relations}
   end
 
   defp check_phases(adapter, statement, opts) do
@@ -433,7 +450,7 @@ defmodule Lotus.Runner do
          {:ok, relations} <-
            tag(:preflight, preflight_visibility(adapter, statement, matcher, opts)),
          :ok <- tag(:preflight, check_columns(adapter, statement, relations, matcher)) do
-      {:ok, relations}
+      {:ok, %{relations: relations, matcher: matcher}}
     end
   end
 

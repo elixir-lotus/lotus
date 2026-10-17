@@ -628,8 +628,8 @@ defmodule Lotus do
   # belong to this call and must never reach the shared entry. Errors keep the
   # phase the runner tagged them with, so the run span can report it.
   defp exec_cached_statement(adapter, statement, runner_opts, cache, pagination_meta) do
-    case lookup_execution(cache) do
-      {:ok, %{result: %Result{} = res, relations: relations}} ->
+    case cache |> lookup_execution() |> current_entry(adapter, runner_opts) do
+      {:current, %{result: res, relations: relations}} ->
         {:ok, %{statement: statement, result: res, relations: relations, origin: :cached}}
 
       lookup ->
@@ -639,25 +639,52 @@ defmodule Lotus do
     end
   end
 
+  # An entry was authorized, and its column policies applied, under the
+  # visibility rules of the call that stored it. It is served while the rules
+  # the caller gets now have the same fingerprint, which takes no database
+  # query. One stored under other rules (a rule changed, the source was
+  # hidden) or before entries carried a fingerprint is stale: the call
+  # executes, as on a miss, and replaces it.
+  defp current_entry(
+         {:ok, %{result: %Result{}, relations: _, rules: rules} = entry} = found,
+         adapter,
+         runner_opts
+       ) do
+    if is_binary(rules) and rules == Runner.rules_fingerprint(adapter, runner_opts),
+      do: {:current, entry},
+      else: found
+  end
+
+  defp current_entry(lookup, _adapter, _runner_opts), do: lookup
+
   defp authorize_and_store(adapter, statement, runner_opts, cache, lookup, pagination_meta) do
-    with {:ok, %{relations: relations} = authorization} <-
+    with {:ok, %{relations: relations, rules: rules} = authorization} <-
            Runner.authorize_phases(adapter, statement, runner_opts),
          {:ok, %{result: %Result{} = res}} <-
-           store_execution(cache, lookup, fn ->
-             execute_authorized(adapter, statement, relations, runner_opts, pagination_meta)
+           store_execution(cache, lookup, rules, fn ->
+             execute_authorized(
+               adapter,
+               statement,
+               relations,
+               rules,
+               runner_opts,
+               pagination_meta
+             )
            end) do
       # When another caller stores the entry while this one waits for the lock,
       # the result comes from the cache, but this call was authorized on fresh
       # preflight relations with origin `:executed`, and the gate must not run
       # twice.
+      authorization = Map.delete(authorization, :rules)
       {:ok, Map.merge(authorization, %{statement: statement, result: res, origin: :executed})}
     end
   end
 
-  defp execute_authorized(adapter, statement, relations, runner_opts, pagination_meta) do
+  defp execute_authorized(adapter, statement, relations, rules, runner_opts, pagination_meta) do
     with {:ok, %Result{} = res} <-
            Runner.execute_authorized(adapter, statement, relations, runner_opts) do
-      {:ok, %{result: merge_pagination_meta(res, pagination_meta), relations: relations}}
+      {:ok,
+       %{result: merge_pagination_meta(res, pagination_meta), relations: relations, rules: rules}}
     end
   end
 
@@ -668,21 +695,27 @@ defmodule Lotus do
     end
   end
 
-  # An entry stored before results carried their relations. `:before_execute`
-  # has nothing to gate on, so the entry is of no use: execute, and replace it
-  # with one that carries them.
-  defp store_execution(cache, {:ok, _stale}, fetch) do
+  # A stale entry: stored under other visibility rules, or before entries
+  # carried their relations and rules. Execute, and replace it.
+  defp store_execution(cache, {:ok, _stale}, _rules, fetch) do
     with {:ok, execution} <- fetch.() do
       put_cache_entry(cache, execution)
       {:ok, execution}
     end
   end
 
-  defp store_execution(cache, :miss, fetch) do
+  # Another caller may store the entry while this one waits for the lock; it
+  # serves only if it was stored under the same rules as this call's.
+  defp store_execution(cache, :miss, rules, fetch) do
     case exec_with_cache_origin(cache, fetch) do
-      {:ok, %{result: %Result{}, relations: _} = execution, _origin} -> {:ok, execution}
-      {:ok, stale, :hit} -> store_execution(cache, {:ok, stale}, fetch)
-      {:error, _} = error -> error
+      {:ok, %{result: %Result{}, relations: _, rules: ^rules} = execution, _origin} ->
+        {:ok, execution}
+
+      {:ok, stale, :hit} ->
+        store_execution(cache, {:ok, stale}, rules, fetch)
+
+      {:error, _} = error ->
+        error
     end
   end
 

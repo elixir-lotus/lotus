@@ -311,6 +311,13 @@ defmodule Lotus.Visibility do
   end
 
   @doc false
+  # The fingerprint of the rules `matcher_for/2` gives the scope now, which
+  # the caches store with an entry and compare on a hit.
+  @spec rules_fingerprint(String.t(), term()) :: binary()
+  def rules_fingerprint(source_name, scope \\ nil),
+    do: source_name |> matcher_for(scope) |> Matcher.fingerprint()
+
+  @doc false
   @spec source_adapter(String.t()) :: Adapter.t() | nil
   def source_adapter(source_name) do
     case Config.source_resolver().resolve(source_name, nil) do
