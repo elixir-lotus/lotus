@@ -152,6 +152,8 @@ defmodule Lotus.MixProject do
     [
       "README.md",
       "CHANGELOG.md",
+      "CONTRIBUTING.md",
+      "SECURITY.md",
       "guides/overview.md",
       "guides/installation.md",
       "guides/getting-started.md",

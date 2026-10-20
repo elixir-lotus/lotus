@@ -5,8 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for proposing an improvement!
-        Before you open a pull request, please make sure there is an issue tracking the change.
+        Thanks for the idea. A new feature or a change of behaviour is agreed here before a pull request; small fixes need no issue (see CONTRIBUTING.md).
+        A security problem goes to a private report instead (see SECURITY.md).
   - type: textarea
     id: context
     attributes:
