@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to report a bug!
+        Thanks for taking the time to report a bug! A security problem goes to a private report instead (see SECURITY.md).
 
   - type: input
     id: elixir_version

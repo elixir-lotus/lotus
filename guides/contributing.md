@@ -547,38 +547,23 @@ We welcome contributions of all sizes! Here are some areas where help is especia
 
 ### Before Submitting
 
-1. **Check existing issues**: Make sure your change isn't already being worked on
-2. **Discuss large changes**: Open an issue to discuss major features or breaking changes
-3. **Update documentation**: Include relevant guide updates
-4. **Add tests**: Ensure your changes are well-tested
-5. **Follow conventions**: Conventional Commits, and match the existing code style
+1. **Check existing issues**: make sure your change isn't already being worked on
+2. **Open an issue first for bigger changes**: a feature, a change of behaviour or of the public API, a new dependency, a change that touches many files or needs a design decision. A small change whose reason is plain from the diff (a typo, a docs fix, a small bug fix with a test) needs no issue
+3. **Keep it to one change**: and say in the description the problem it solves
+4. **Update documentation**: include relevant guide updates and a `CHANGELOG.md` entry
+5. **Add tests**: ensure your changes are well-tested
+6. **Follow conventions**: Conventional Commits, and match the existing code style
+
+Benchmark numbers and the version are kept by the maintainers. See
+[CONTRIBUTING.md](https://github.com/elixir-lotus/lotus/blob/main/CONTRIBUTING.md)
+for the full policy.
 
 ### Pull Request Template
 
-When creating a pull request, please include:
-
-```markdown
-## Description
-Brief description of the changes
-
-## Type of Change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Documentation update
-- [ ] Performance improvement
-- [ ] Refactoring
-
-## Testing
-- [ ] Tests pass locally
-- [ ] New tests added for functionality
-- [ ] Documentation updated
-
-## Checklist
-- [ ] Code follows project style guidelines
-- [ ] Self-review completed
-- [ ] Comments added for complex logic
-- [ ] Corresponding documentation updated
-```
+Opening a pull request fills in the description from
+[`.github/pull_request_template.md`](https://github.com/elixir-lotus/lotus/blob/main/.github/pull_request_template.md):
+why the change is needed, what it does, how it was tested, and a checklist
+of the checks CI runs.
 
 ### Review Process
 
