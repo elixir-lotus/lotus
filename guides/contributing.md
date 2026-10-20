@@ -421,8 +421,13 @@ It builds a matrix of:
 MySQL 8.0 runs as a service in every matrix entry. Each job runs, in order:
 `mix deps.get`, `mix format --check-formatted`, `mix deps.compile`,
 `mix compile --warnings-as-errors`, `mix credo --strict`, `mix test.setup`,
-`mix test`, and `mix dialyzer`. A warning is a failure, so compile cleanly
-before you push.
+`mix test`, `epmd -daemon && mix test --only cluster`, and `mix dialyzer`.
+A warning is a failure, so compile cleanly before you push.
+
+The cluster tests (`test/integration/cluster/`, tagged `:cluster`) check
+the cache across nodes. A plain `mix test` excludes them because they start
+peer nodes, which needs `epmd` running: run them with
+`epmd -daemon && mix test --only cluster` when you change the cache.
 
 ### Code Style Guidelines
 
