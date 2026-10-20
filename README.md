@@ -373,7 +373,7 @@ See the [contribution guide](guides/contributing.md) for the full workflow.
 
 ## Contributing
 
-See [CONTRIBUTING.md](https://github.com/elixir-lotus/lotus/blob/main/CONTRIBUTING.md) for when to open an issue and what a pull request needs, and the [contribution guide](guides/contributing.md) for setup, databases and architecture. Report security problems privately, as [SECURITY.md](https://github.com/elixir-lotus/lotus/blob/main/SECURITY.md) describes.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for when to open an issue and what a pull request needs, and the [contribution guide](guides/contributing.md) for setup, databases and architecture. Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
 
 ## License
 
