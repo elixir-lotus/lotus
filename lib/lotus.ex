@@ -517,7 +517,9 @@ defmodule Lotus do
     if language_compatible?(q.query_language, adapter_language) do
       vars = prepare_variables(q, opts)
 
-      case Query.compile(q, vars, adapter: adapter) do
+      compile_opts = [adapter: adapter, search_path: Keyword.get(opts, :search_path)]
+
+      case Query.compile(q, vars, compile_opts) do
         {:ok, %Statement{body: body, params: params}} ->
           execute_query(q, adapter, body, params, vars, opts)
 

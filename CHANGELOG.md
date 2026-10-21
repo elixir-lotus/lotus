@@ -4,6 +4,21 @@
 
 ### Fixed
 
+- **A variable bound to a column of an unqualified table is typed from the
+  table the statement reads.** Lotus looked the column up in the first
+  schema of the search path, or `public` without one. On MySQL, which has
+  no `public` schema, no such variable was ever cast: a `binary(16)` UUID
+  matched nothing and `"true"` against a `tinyint(1)` matched the `false`
+  rows. On PostgreSQL, a table in a later schema of the search path (say
+  `public` under `reporting, public`) raised a Postgrex encoding error. The
+  lookup now resolves the table the way schema discovery does: through every
+  schema of the search path, or the source's default schemas (the database,
+  on MySQL). `Lotus.run_query/2` also types variables under its runtime
+  `search_path` override, not only the query's stored one. A MySQL variable
+  on an unqualified table is now cast like a PostgreSQL one, so a value that
+  doesn't fit its column (`"abc"` for an `int`) is refused instead of
+  matching nothing (#339).
+
 - **A raw 16-byte UUID whose bytes happen to be valid UTF-8 renders as a
   UUID.** Postgrex returns a `uuid` column, and MyXQL a `binary(16)` one, as
   16 raw bytes. `Lotus.Normalizer` took those bytes for a UUID only when

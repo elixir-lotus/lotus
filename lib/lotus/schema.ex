@@ -741,6 +741,32 @@ defmodule Lotus.Schema do
     end
   end
 
+  @doc false
+  # The schema an unqualified `table` resolves to, by the rules discovery
+  # uses: the search path's schemas in order, else the source's default
+  # schemas. With one candidate there is nothing to choose between, so no
+  # lookup is made. `{:ok, nil}` is a schema-less source such as SQLite.
+  @spec resolve_table_schema(Adapter.t(), String.t(), String.t() | nil) ::
+          {:ok, String.t() | nil} | :not_found | {:error, term()}
+  def resolve_table_schema(%Adapter{} = adapter, table, search_path) do
+    opts = if is_binary(search_path), do: [search_path: search_path], else: []
+
+    case effective_schemas(adapter, opts) do
+      [] ->
+        {:ok, nil}
+
+      [schema] ->
+        {:ok, schema}
+
+      schemas ->
+        case resolve_table_namespace_with_cache(adapter, table, schemas, nil, :schema) do
+          nil -> :not_found
+          {:error, _} = err -> err
+          schema -> {:ok, schema}
+        end
+    end
+  end
+
   defp effective_schemas(adapter, opts) do
     schemas =
       cond do

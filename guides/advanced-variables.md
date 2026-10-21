@@ -222,7 +222,7 @@ Lotus includes an intelligent automatic type casting system that detects column 
 When you use a variable in your query, Lotus:
 
 1. **Analyzes the SQL** (`Lotus.Storage.VariableResolver`) to determine which table column the variable is bound to
-2. **Queries the schema cache** to get the column's database type
+2. **Queries the schema cache** to get the column's database type. An unqualified table is looked up the way schema discovery finds it: through the schemas of the search path in order, or the source's default schemas without one (the connection's database, on MySQL)
 3. **Maps the database type** to a Lotus internal type (`:uuid`, `:integer`, `:date`, etc.)
 4. **Casts the value** if needed, or passes it through for text types
 5. **Asks the dialect for a placeholder**, with a type annotation where the dialect wants one
