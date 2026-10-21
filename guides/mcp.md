@@ -7,6 +7,12 @@ opening the admin panel: it reads the saved queries and dashboards you
 already have, runs its own read-only queries, and saves new queries,
 charts and dashboards that then show up in Lotus Web.
 
+Lotus Web isn't required: this guide sets up `Lotus.MCP` with Lotus
+alone, and an agent gets every tool. With Lotus Web, serve its
+`Lotus.Web.MCP` instead, which adds charts in the conversation and lets
+your dashboard resolver decide who may do what (see Lotus Web's MCP
+guide).
+
 No LLM API key is involved: the MCP client is the model, and Lotus only
 supplies tools. The [AI query generation](ai_query_generation.md) feature
 is separate and stays optional.
@@ -63,7 +69,8 @@ What every tool keeps to:
 ```
 
 Add `:sake` to the `import_deps` of your `.formatter.exs` if you write
-Sake modules of your own.
+Sake modules of your own. If `config :lotus, :mcp` is set but Sake isn't a
+dependency, Lotus logs a warning when it starts.
 
 ### 2. Make your login the authorization server
 
@@ -243,6 +250,30 @@ end
 
 Serve `MyApp.MCP` on the endpoint and list it in the `Sake` child's
 `servers:`. The `lotus:*` scopes come with the mount.
+
+### Saying who may use Lotus from your server
+
+Your server can say who may use Lotus and as which actor, instead of
+`config :lotus, :mcp`, with the `Lotus.MCP.Host` middleware:
+
+```elixir
+defmodule MyApp.MCP do
+  use Sake.Server, name: "my-app", version: "1.0.0"
+
+  mount Lotus.MCP, prefix: "lotus"
+
+  middleware :before_request, [
+    {Lotus.MCP.Host, authorize: {MyApp.Accounts, :lotus_user?},
+                     actor: {MyApp.Reporting, :lotus_actor}}
+  ]
+end
+```
+
+`:authorize` and `:actor` mean what they mean in the config, above, and
+take a `{module, function}`. `config :lotus, :mcp` still wins where it
+sets the same key, so keep `:data_sources` and `:max_rows` there and leave
+these two out of it. Lotus Web's `Lotus.Web.MCP` declares it with your
+resolver, which is why a host serving it configures neither.
 
 ### Prompts of your own
 

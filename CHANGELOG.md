@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`Lotus.MCP.Host`**, a Sake middleware with which the server that
+  serves `Lotus.MCP` says who may use Lotus and as which actor
+  (`authorize:` and `actor:`), instead of `config :lotus, :mcp`. Lotus Web's
+  `Lotus.Web.MCP` declares it with the dashboard resolver, so a host
+  serving it no longer sets `config :lotus, :mcp` for those two. Where
+  `config :lotus, :mcp` sets a key, it still wins, so an existing setup is
+  unchanged (#332).
+- **A missing Sake is reported.** When `config :lotus, :mcp` is set but
+  Sake isn't a dependency, Lotus logs a warning when it starts, instead of
+  `Lotus.MCP` silently not existing.
+
 ### Changed
 
 - **Sake's `sake_tasks` table is always hidden**, like its `sake_oauth_`

@@ -29,8 +29,8 @@ if Code.ensure_loaded?(Sake.Server) do
     Every statement runs read-only, whatever `config :lotus, read_only:` says,
     and through Lotus's visibility rules and middleware with the person as the
     actor; a statement that writes is not saved either. Nothing is deleted
-    through MCP. Nobody may use it until `config :lotus, :mcp, authorize:`
-    says who.
+    through MCP. Nobody may use it until `config :lotus, :mcp, authorize:`,
+    or the serving server with `Lotus.MCP.Host`, says who.
 
     ## Configuration
 

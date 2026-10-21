@@ -5,6 +5,7 @@ if Code.ensure_loaded?(Sake.Server) do
     # stands for, the data sources the endpoint exposes, and how results and
     # errors are shaped for a model to read.
 
+    alias Lotus.MCP.Host
     alias Lotus.{Normalizer, Result}
     alias Lotus.Query.Statement
     alias Lotus.Source.Adapter
@@ -20,14 +21,15 @@ if Code.ensure_loaded?(Sake.Server) do
     @doc """
     The `:context` and `:scope` options the `Lotus` functions take, for the
     principal Sake put in `ctx.scope`. With `actor: {module, function}`
-    configured, the function receives the principal and returns both, as a
+    configured (in `config :lotus, :mcp`, or by the serving server with
+    `Lotus.MCP.Host`), the function receives the principal and returns both, as a
     keyword list or a map with atom keys; without it, the principal is
     both. Anything else raises rather than run with a `nil` scope the
     visibility resolver would read as nobody's.
     """
     @spec actor_opts(Sake.Context.t()) :: keyword()
-    def actor_opts(%{scope: principal}) do
-      case config()[:actor] do
+    def actor_opts(%{scope: principal, assigns: assigns}) do
+      case Host.setting(assigns, :actor) do
         {module, function} -> actor!(apply(module, function, [principal]))
         fun when is_function(fun, 1) -> actor!(fun.(principal))
         nil -> [context: principal, scope: principal]

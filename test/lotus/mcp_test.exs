@@ -4,6 +4,7 @@ defmodule Lotus.MCPTest do
   import Lotus.Fixtures
   import Sake.Test
 
+  alias Lotus.MCP.Host
   alias Lotus.Middleware
 
   @all ["lotus:read", "lotus:query", "lotus:write"]
@@ -18,6 +19,21 @@ defmodule Lotus.MCPTest do
       {:cont, payload}
     end
   end
+
+  defmodule HostServer do
+    @moduledoc false
+    # A host's own server, saying who may use Lotus instead of the config.
+    use Sake.Server, name: "host", version: "1.0.0"
+
+    mount Lotus.MCP
+
+    middleware :before_request, [
+      {Lotus.MCP.Host, authorize: {Lotus.MCPTest, :admin?}, actor: {Lotus.MCPTest, :host_actor}}
+    ]
+  end
+
+  def admin?(principal), do: Map.get(principal, :admin?) == true
+  def host_actor(principal), do: [context: {:host, principal.id}, scope: nil]
 
   setup do
     setup_test_data()
@@ -122,6 +138,48 @@ defmodule Lotus.MCPTest do
                  "data_source" => "postgres",
                  "statement" => "SELECT 1"
                })
+    end
+  end
+
+  describe "served by the host's own server, with Lotus.MCP.Host" do
+    setup do
+      Application.put_env(:lotus, :mcp, [])
+      :ok
+    end
+
+    defp host_client(principal),
+      do: connect(HostServer, scope: principal, scopes: @all)
+
+    test "its authorize: decides who may use Lotus, without config :lotus, :mcp" do
+      assert {:ok, []} = list_tools(host_client(%{id: 1, admin?: false}))
+      assert {:ok, [_ | _]} = list_tools(host_client(%{id: 1, admin?: true}))
+
+      assert {:error, {:rpc, _}} =
+               call_tool(host_client(%{id: 1, admin?: false}), "list_data_sources", %{})
+    end
+
+    test "its actor: is the actor Lotus runs with" do
+      Middleware.compile(%{before_query: [{Recorder, self()}]})
+      on_exit(fn -> Middleware.compile(%{}) end)
+
+      call!(host_client(%{id: 3, admin?: true}), "run_sql", %{
+        "data_source" => "postgres",
+        "statement" => "SELECT 1"
+      })
+
+      assert_receive {:before_query, {:host, 3}}
+    end
+
+    test "config :lotus, :mcp still wins where it sets a key" do
+      mcp_config(authorize: fn _ -> false end)
+
+      assert {:ok, []} = list_tools(host_client(%{id: 1, admin?: true}))
+    end
+
+    test "takes only :authorize and :actor" do
+      assert_raise ArgumentError, ~r/takes :authorize and :actor/, fn ->
+        Host.init(authorise: {Lotus.MCPTest, :admin?})
+      end
     end
   end
 
