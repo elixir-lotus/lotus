@@ -187,3 +187,48 @@ if Code.ensure_loaded?(Postgrex.Circle) do
     end
   end
 end
+
+if Code.ensure_loaded?(Postgrex.Line) do
+  defimpl Lotus.Normalizer, for: Postgrex.Line do
+    def normalize(%Postgrex.Line{a: a, b: b, c: c}) do
+      "{#{a},#{b},#{c}}"
+    end
+  end
+end
+
+if Code.ensure_loaded?(Postgrex.MACADDR) do
+  defimpl Lotus.Normalizer, for: Postgrex.MACADDR do
+    def normalize(%Postgrex.MACADDR{address: address}) do
+      address
+      |> Tuple.to_list()
+      |> Enum.map_join(":", &(&1 |> Integer.to_string(16) |> String.pad_leading(2, "0")))
+      |> String.downcase()
+    end
+  end
+end
+
+if Code.ensure_loaded?(Postgrex.Lexeme) do
+  # A tsvector arrives as a list of lexemes, so each renders as PostgreSQL
+  # writes one lexeme: quoted, then its positions and any weight but D.
+  defimpl Lotus.Normalizer, for: Postgrex.Lexeme do
+    def normalize(%Postgrex.Lexeme{word: word, positions: positions}) do
+      quoted = "'" <> String.replace(word, ["'", "\\"], &(&1 <> &1)) <> "'"
+
+      case positions do
+        empty when empty in [nil, []] -> quoted
+        positions -> quoted <> ":" <> Enum.map_join(positions, ",", &format_position/1)
+      end
+    end
+
+    defp format_position({position, nil}), do: Integer.to_string(position)
+    defp format_position({position, weight}), do: "#{position}#{weight}"
+  end
+end
+
+if Code.ensure_loaded?(Postgrex.Multirange) do
+  defimpl Lotus.Normalizer, for: Postgrex.Multirange do
+    def normalize(%Postgrex.Multirange{ranges: ranges}) do
+      "{" <> Enum.map_join(ranges || [], ",", &Lotus.Normalizer.normalize/1) <> "}"
+    end
+  end
+end

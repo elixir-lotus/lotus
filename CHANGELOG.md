@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **`Lotus.Normalizer` no longer raises on a struct it has no impl for.**
+  The protocol had an `Any` impl meant as an `inspect/1` fallback but never
+  set `@fallback_to_any`, so such a struct raised `Protocol.UndefinedError`
+  wherever results were normalized (`Result.to_encodable/1`, exports, MCP).
+  It now falls back to `inspect/1` as intended. PostgreSQL `macaddr`,
+  `line`, `tsvector` and multirange values, which Postgrex returns as
+  structs Lotus had no impl for, now render as PostgreSQL writes them
+  (#334).
+
 ## [1.3.0] - 2026-10-17
 
 Lotus gets an MCP server, `Lotus.MCP`, built on Sake 0.4: an MCP client such

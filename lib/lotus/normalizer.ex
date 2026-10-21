@@ -5,7 +5,13 @@ defprotocol Lotus.Normalizer do
   Lotus applies this protocol to all query result values before they reach
   consumers (UI, exports, API). Implement this protocol for custom database
   types that need special handling.
+
+  A value whose type has no implementation, such as a struct from a database
+  extension Lotus does not know about, falls back to `inspect/1` rather than
+  raising.
   """
+
+  @fallback_to_any true
 
   @doc "Normalize a value so it is JSON-safe and human-readable."
   @spec normalize(t) :: term()
