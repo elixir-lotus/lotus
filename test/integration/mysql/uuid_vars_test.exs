@@ -12,8 +12,6 @@ defmodule Lotus.Integration.Mysql.UuidVarsTest do
   alias Lotus.Storage.Query
   alias Lotus.Test.MysqlRepo
 
-  # Lotus looks up a bound column's type only for a schema-qualified MySQL
-  # table, so the statements name the database.
   @database MysqlRepo.config()[:database]
 
   @uuid "550e8400-e29b-41d4-a716-446655440000"
@@ -30,9 +28,9 @@ defmodule Lotus.Integration.Mysql.UuidVarsTest do
     :ok
   end
 
-  defp run(column, value) do
+  defp run(column, value, table \\ "test_uuid_keys") do
     query = %Query{
-      statement: "SELECT label FROM #{@database}.test_uuid_keys WHERE #{column} = {{id}}",
+      statement: "SELECT label FROM #{table} WHERE #{column} = {{id}}",
       variables: [%{name: "id", type: :text, default: nil}],
       data_source: "mysql"
     }
@@ -50,6 +48,10 @@ defmodule Lotus.Integration.Mysql.UuidVarsTest do
 
   test "a binary(16) column matches the UUID string, bound as its bytes" do
     assert {:ok, %{rows: [["match"]]}} = run("binary_id", @uuid)
+  end
+
+  test "a binary(16) column in a table qualified by its database matches too" do
+    assert {:ok, %{rows: [["match"]]}} = run("binary_id", @uuid, "#{@database}.test_uuid_keys")
   end
 
   test "a binary(16) column still rejects a value that is not a UUID" do

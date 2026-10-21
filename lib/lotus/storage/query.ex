@@ -123,6 +123,9 @@ defmodule Lotus.Storage.Query do
       the run does not resolve it again. Without it the stored `data_source`
       is resolved, falling back to the default source when that name is
       stale.
+    * `:search_path` — the search path the statement runs under, for typing
+      variables bound to unqualified tables. Defaults to the query's own
+      `search_path`. `Lotus.run_query/2` passes its runtime override.
 
   Use `compile!/2` if you prefer a raising variant.
   """
@@ -149,7 +152,11 @@ defmodule Lotus.Storage.Query do
     variable_bindings = VariableResolver.resolve_variables(transformed_body)
 
     enriched_bindings =
-      enrich_bindings_with_types(variable_bindings, adapter, q.search_path)
+      enrich_bindings_with_types(
+        variable_bindings,
+        adapter,
+        Keyword.get(opts, :search_path) || q.search_path
+      )
 
     # Build the statement by folding each variable through the adapter's
     # substitution callback. The adapter owns placeholder syntax and param
@@ -327,34 +334,28 @@ defmodule Lotus.Storage.Query do
   end
 
   defp enrich_binding_with_type(binding, adapter, search_path) do
-    schema = binding.schema || resolve_from_search_path(search_path)
-
-    case SchemaCache.get_column_type(adapter, schema, binding.table, binding.column) do
-      {:ok, db_type} ->
-        lotus_type = Adapter.db_type_to_lotus_type(adapter, db_type)
-        Map.put(binding, :lotus_type, lotus_type)
-
-      :not_found ->
+    with {:ok, schema} <- binding_schema(binding, adapter, search_path),
+         {:ok, db_type} <-
+           SchemaCache.get_column_type(adapter, schema, binding.table, binding.column) do
+      Map.put(binding, :lotus_type, Adapter.db_type_to_lotus_type(adapter, db_type))
+    else
+      _ ->
         Logger.debug(
-          "Column type not found: #{schema}.#{binding.table}.#{binding.column}, " <>
-            "defaulting to :text"
+          "Column type not found: #{binding.table}.#{binding.column}, defaulting to :text"
         )
 
         Map.put(binding, :lotus_type, :text)
     end
   end
 
-  defp resolve_from_search_path(search_path) when is_binary(search_path) do
-    search_path
-    |> String.split(",")
-    |> List.first()
-    |> case do
-      nil -> "public"
-      schema -> String.trim(schema)
-    end
-  end
+  # A qualified table names its schema. An unqualified one resolves the way
+  # discovery resolves it, so a variable is typed from the table the
+  # statement actually reads.
+  defp binding_schema(%{schema: schema}, _adapter, _search_path) when is_binary(schema),
+    do: {:ok, schema}
 
-  defp resolve_from_search_path(_), do: "public"
+  defp binding_schema(binding, adapter, search_path),
+    do: Lotus.Schema.resolve_table_schema(adapter, binding.table, search_path)
 
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp determine_type_and_cast(value, manual_type, binding) do
