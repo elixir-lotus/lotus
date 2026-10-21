@@ -42,6 +42,17 @@ defmodule Lotus.VisibilityTest do
       end
     end
 
+    test "denies the tasks table of Sake, which keeps people's MCP results" do
+      refute Visibility.allowed_relation?("postgres", {"public", "sake_tasks"})
+      refute Visibility.allowed_relation?("postgres", {"mcp", "sake_tasks"})
+      refute Visibility.allowed_relation?("sqlite", {nil, "sake_tasks"})
+      refute Visibility.allowed_relation?("mysql", {nil, "sake_tasks"})
+      refute Visibility.allowed_relation?("unconfigured_source", {"public", "sake_tasks"})
+
+      # Only that table: a host's own table that merely starts the same way stays.
+      assert Visibility.allowed_relation?("postgres", {"public", "sake_tasks_archive"})
+    end
+
     test "denies SQLite system tables" do
       refute Visibility.allowed_relation?("sqlite", {nil, "sqlite_master"})
       refute Visibility.allowed_relation?("sqlite", {nil, "sqlite_sequence"})

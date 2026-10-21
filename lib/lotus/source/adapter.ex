@@ -1102,21 +1102,25 @@ defmodule Lotus.Source.Adapter do
   ]
 
   # Tables that Lotus's companions own, in any schema or none: Lotus Pro's
-  # policies and migrations, and the OAuth tables of Sake, which Lotus.MCP signs
-  # in with. They hold policies and token hashes, never data to report on.
+  # policies and migrations, and the tables of Sake, which Lotus.MCP runs on:
+  # its OAuth tables and `sake_tasks`. They hold policies, token hashes and
+  # other people's task results, never data to report on.
   # Not a `^lotus_` pattern: Lotus's own SQL aliases a subquery `lotus_sub`, and
   # SQLite's preflight reads that alias as a table.
   @owned_table_denies [
     "lotus_access_policies",
     "lotus_pro_migrations",
     {~r/.*/, ~r/^sake_oauth_/},
-    {nil, ~r/^sake_oauth_/}
+    {nil, ~r/^sake_oauth_/},
+    {~r/.*/, ~r/^sake_tasks$/},
+    {nil, ~r/^sake_tasks$/}
   ]
 
   @doc """
   Table-level deny rules for the tables Lotus's companions own: Lotus Pro's
-  (`lotus_access_policies`, `lotus_pro_migrations`) and every `sake_oauth_`
-  table (the OAuth server of `Lotus.MCP`), in any schema.
+  (`lotus_access_policies`, `lotus_pro_migrations`), every `sake_oauth_`
+  table (the OAuth server of `Lotus.MCP`) and `sake_tasks` (where Sake keeps
+  MCP task results), in any schema.
 
   `Lotus.Visibility` adds them to every source, whatever its adapter and the
   host's rules, so no adapter needs to list them. Lotus's own tables stay in

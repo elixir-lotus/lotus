@@ -143,8 +143,8 @@ defmodule Lotus.PreflightPostgresTest do
       assert msg =~ "lotus_queries"
     end
 
-    test "blocks the tables of Lotus Pro and of Sake's OAuth server" do
-      for table <- ["lotus_access_policies", "sake_oauth_tokens"] do
+    test "blocks the tables of Lotus Pro and of Sake" do
+      for table <- ["lotus_access_policies", "sake_oauth_tokens", "sake_tasks"] do
         Repo.query!("CREATE TABLE public.#{table} (id integer)")
 
         {:error, msg} =
