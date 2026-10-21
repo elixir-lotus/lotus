@@ -261,6 +261,11 @@ Automatically handles UUID columns across different databases:
 
 This works with standard UUIDs (v4) and custom UUID formats like UUID v7 (using libraries like Unid).
 
+On MySQL, a `binary(16)` column is a UUID column and gets the 16 bytes. A
+`char(36)` or `char(32)` column holds text, so a value compared with it is
+bound as the string you supply: the dashed form for `char(36)`, the hex form
+for `char(32)`.
+
 #### Numeric Types
 
 Automatically casts string numbers to integers, floats, or decimals:

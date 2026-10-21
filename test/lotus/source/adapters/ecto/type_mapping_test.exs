@@ -88,12 +88,9 @@ defmodule Lotus.Source.Adapters.Ecto.TypeMappingTest do
   end
 
   describe "db_type_to_lotus_type/1 for MySQL" do
-    test "maps char(36) to :uuid" do
-      assert Dialects.MySQL.db_type_to_lotus_type("char(36)") == :uuid
-    end
-
-    test "maps char(32) to :uuid" do
-      assert Dialects.MySQL.db_type_to_lotus_type("char(32)") == :uuid
+    test "maps char(36) and char(32) to :text, since they hold text" do
+      assert Dialects.MySQL.db_type_to_lotus_type("char(36)") == :text
+      assert Dialects.MySQL.db_type_to_lotus_type("char(32)") == :text
     end
 
     test "maps binary(16) to :uuid" do

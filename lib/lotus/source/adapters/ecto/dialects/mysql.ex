@@ -608,8 +608,10 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     mysql_scalar_type(String.downcase(db_type))
   end
 
-  defp mysql_scalar_type("char(36)"), do: :uuid
-  defp mysql_scalar_type("char(32)"), do: :uuid
+  # Only binary(16) holds a UUID as the 16 bytes `:uuid` casts to. A char(36)
+  # or char(32) column holds text (a UUID's string or hex form, or anything
+  # else that long, such as an MD5 digest), so a value compared with it is
+  # bound as the text it is.
   defp mysql_scalar_type("binary(16)"), do: :uuid
   defp mysql_scalar_type("tinyint(1)"), do: :boolean
   defp mysql_scalar_type("date"), do: :date
