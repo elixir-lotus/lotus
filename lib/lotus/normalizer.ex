@@ -29,9 +29,12 @@ defimpl Lotus.Normalizer, for: BitString do
   def normalize(value) when is_binary(value) do
     cond do
       # Some databases return UUID values as raw 16-byte binaries rather than strings.
-      # Detect by checking for exactly 16 non-UTF-8 bytes, which avoids misidentifying
-      # valid UTF-8 strings that happen to be 16 bytes long.
-      byte_size(value) == 16 and not String.valid?(value) ->
+      # Nothing here says which column a value came from, so take 16 bytes for a
+      # UUID unless they read as text: valid UTF-8 and printable. Random UUID bytes
+      # are valid UTF-8 about once in 15,000 v4 UUIDs, and nearly all of those hold
+      # a control character, as every UUIDv7 does in its leading timestamp byte.
+      # A text value that happens to be 16 bytes long stays text.
+      byte_size(value) == 16 and not (String.valid?(value) and String.printable?(value)) ->
         case Ecto.UUID.load(value) do
           {:ok, uuid} -> uuid
           :error -> Base.encode64(value)
