@@ -24,6 +24,7 @@ defmodule Lotus.Visibility.MatcherTest do
 
       refute Visibility.allowed_relation?(matcher, {"public", "lotus_access_policies"})
       refute Visibility.allowed_relation?(matcher, {nil, "sake_oauth_tokens"})
+      refute Visibility.allowed_relation?(matcher, {nil, "sake_tasks"})
       assert Visibility.allowed_relation?(matcher, {"public", "lotus_sub"})
     end
 

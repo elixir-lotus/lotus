@@ -523,6 +523,9 @@ Lotus denies its own and the engine's internals regardless of your rules.
   `lotus_pro_migrations`
 - the OAuth tables of Sake, which `Lotus.MCP` signs in with, in any
   schema (`~r/^sake_oauth_/`): they hold token and code hashes
+- `sake_tasks`, in any schema: Sake keeps the results of MCP tasks there,
+  each person's own, so one person's results must not be readable by another
+  through Lotus
 
 These denies always apply, even where your rules would allow them.
 

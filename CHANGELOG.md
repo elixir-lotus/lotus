@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Sake's `sake_tasks` table is always hidden**, like its `sake_oauth_`
+  tables. Sake keeps MCP task results there, with the principal each belongs
+  to, so anyone who could query Lotus could read other people's results
+  unless the host hid the table by hand. It is now denied in every source
+  and schema, whatever your rules: discovery leaves it out and a statement
+  that reads it is refused (#332).
+
 ### Fixed
 
 - **A variable bound to a column of an unqualified table is typed from the
