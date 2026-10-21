@@ -212,6 +212,27 @@ defmodule Lotus.Export.ValueTest do
       assert byte_size(another_16_byte) == 16
       assert Value.to_csv_string(another_16_byte) == "exactly16bytes!!"
       assert Value.for_json(another_16_byte) == "exactly16bytes!!"
+
+      accented = "naïve café ok!"
+      assert byte_size(accented) == 16
+      assert Value.for_json(accented) == accented
+    end
+
+    test "handles raw UUID binary whose bytes happen to be valid UTF-8" do
+      uuid = "17d1945a-6f6a-43c6-a81f-6d74d2bbc5a3"
+      {:ok, uuid_binary} = Ecto.UUID.dump(uuid)
+      assert String.valid?(uuid_binary)
+
+      assert Value.to_csv_string(uuid_binary) == uuid
+      assert Value.for_json(uuid_binary) == uuid
+    end
+
+    test "handles raw UUIDv7 binary, whose timestamp starts with a control byte" do
+      # A timestamp in 2031; every UUIDv7 until 2039 starts with byte 0x01.
+      uuid_binary = <<0x01, 0xC3, 0xA9, 0x41, 0x42, 0x43, 0x7A, 0xC3, 0xA9>> <> "abcdefg"
+      assert String.valid?(uuid_binary)
+
+      assert Value.for_json(uuid_binary) == Ecto.UUID.load!(uuid_binary)
     end
 
     test "handles non-UTF-8 16-byte binary as Base64" do

@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **A raw 16-byte UUID whose bytes happen to be valid UTF-8 renders as a
+  UUID.** Postgrex returns a `uuid` column, and MyXQL a `binary(16)` one, as
+  16 raw bytes. `Lotus.Normalizer` took those bytes for a UUID only when
+  they were not valid UTF-8, so about one v4 UUID in 15,000 came back as a
+  garbled string instead (in Lotus Web's results, exports and the JSON
+  API). Bytes that are valid UTF-8 but not printable are now taken for a
+  UUID too. That covers every UUIDv7 and nearly all such v4s; about one v4
+  UUID in 120,000 is still printable and still comes back raw. Telling those apart
+  needs the result's column types, which `Lotus.Result` doesn't carry yet.
+
 - **A MySQL variable compared with a `char(36)` or `char(32)` column now
   matches.** Lotus typed those columns as UUIDs and bound the value as 16
   raw bytes, which no text column equals, so the query returned no rows and
