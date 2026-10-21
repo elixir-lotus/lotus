@@ -10,10 +10,6 @@
   no error. They are text columns now and the value is bound as given; only
   `binary(16)` is still a UUID column (#335).
 
-## [Unreleased]
-
-### Fixed
-
 - **`Lotus.Normalizer` no longer raises on a struct it has no impl for.**
   The protocol had an `Any` impl meant as an `inspect/1` fallback but never
   set `@fallback_to_any`, so such a struct raised `Protocol.UndefinedError`
