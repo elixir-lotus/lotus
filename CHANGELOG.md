@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [1.3.1] - 2026-10-23
+
+A security release: Lotus requires `req_llm` 1.29, which verifies the TLS
+certificate of its WebSocket sessions.
 
 ### Security
 
