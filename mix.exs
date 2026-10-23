@@ -53,7 +53,7 @@ defmodule Lotus.MixProject do
       {:telemetry, "~> 1.0"},
 
       # AI/LLM Integration
-      {:req_llm, "~> 1.6"},
+      {:req_llm, "~> 1.29"},
 
       # Development and testing dependencies
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
