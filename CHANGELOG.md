@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Security
+
+- **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
+  check the TLS certificate of their WebSocket sessions, so someone on the
+  network path could read the API keys and OAuth tokens they send
+  (EEF-CVE-2026-107685, critical). Lotus allowed `~> 1.6`; it now requires
+  `~> 1.29`, so an app can't resolve a vulnerable version. Run
+  `mix deps.update req_llm` if your lock holds an older one.
+
 ### Added
 
 - **`Lotus.MCP.Host`**, a Sake middleware with which the server that
