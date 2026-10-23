@@ -146,7 +146,23 @@ See the [ReqLLM documentation](https://hexdocs.pm/req_llm) for the full list of 
 
 ## Installation
 
-Lotus includes the `req_llm` dependency automatically. No additional packages needed.
+The AI features use [ReqLLM](https://hex.pm/packages/req_llm), an optional
+dependency of Lotus. Add it to your app's deps:
+
+```elixir
+def deps do
+  [
+    {:lotus, "~> 2.0"},
+    {:req_llm, "~> 1.29"}
+  ]
+end
+```
+
+Without it, Lotus compiles and runs without its AI: `Lotus.AI.available?/0`
+is `false`, `Lotus.AI.enabled?/0` is `false` even with `ai: [enabled: true]`
+(Lotus logs a warning once), and the AI functions return
+`{:error, :dependency_missing}`. Lotus Web shows its assistant only when
+`Lotus.AI.enabled?/0` is `true`.
 
 ## Configuration
 

@@ -809,7 +809,9 @@ defmodule Lotus.Config do
   def ai, do: get(:ai) || []
 
   @doc """
-  Returns whether AI features are enabled.
+  Returns whether AI features are switched on in the config. Whether they
+  can run (their optional dependency loaded, an API key) is
+  `Lotus.AI.enabled?/0`, which the UIs consult.
   """
   @spec ai_enabled?() :: boolean()
   def ai_enabled?, do: (get(:ai) || [])[:enabled] || false
