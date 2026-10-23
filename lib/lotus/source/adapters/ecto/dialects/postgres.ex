@@ -14,6 +14,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
 
   alias __MODULE__.EditorConfig
   alias Lotus.Preflight.Columns
+  alias Lotus.Query.Filter
   alias Lotus.Query.Statement
   alias Lotus.Query.Tokenizer.Profile
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
@@ -454,6 +455,9 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
     escaped = String.replace(identifier, "\"", "\"\"")
     ~s("#{escaped}")
   end
+
+  @impl true
+  def supported_filter_operators, do: Filter.operators()
 
   @impl true
   def apply_filters(%Statement{body: sql, params: params} = statement, filters) do

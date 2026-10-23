@@ -195,6 +195,38 @@ defmodule Lotus.SQL.FilterInjectorTest do
       assert params == ["US", "active"]
     end
 
+    test "matches text as written and without regard to case" do
+      for {op, pattern} <- [
+            contains: "%50!%!_off%",
+            starts_with: "50!%!_off%",
+            ends_with: "%50!%!_off"
+          ] do
+        filters = [Filter.new("name", op, "50%_off")]
+
+        {result, params} =
+          FilterInjector.apply("SELECT 1", [], filters, &double_quote/1, &pg_placeholder/1)
+
+        assert result =~ ~s[LOWER("name") LIKE LOWER($1) ESCAPE '!'], "Failed for op: #{op}"
+        assert params == [pattern]
+      end
+    end
+
+    test "numbers a text filter's placeholder after the query's own" do
+      filters = [Filter.new("name", :contains, "ann"), Filter.new("age", :gt, 30)]
+
+      {result, params} =
+        FilterInjector.apply(
+          "SELECT * FROM t WHERE x = $1",
+          [1],
+          filters,
+          &double_quote/1,
+          &pg_placeholder/1
+        )
+
+      assert result =~ ~s[LOWER("name") LIKE LOWER($2) ESCAPE '!' AND "age" > $3]
+      assert params == [1, "%ann%", 30]
+    end
+
     test "handles all comparison operators" do
       ops = [eq: "=", neq: "!=", gt: ">", lt: "<", gte: ">=", lte: "<=", like: "LIKE"]
 

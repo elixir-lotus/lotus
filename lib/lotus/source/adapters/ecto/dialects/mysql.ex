@@ -14,6 +14,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   @behaviour Lotus.Source.Adapters.Ecto.Dialect
 
   alias __MODULE__.EditorConfig
+  alias Lotus.Query.Filter
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
   alias Lotus.SQL.FilterInjector
@@ -455,6 +456,9 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     escaped = String.replace(identifier, "`", "``")
     "`#{escaped}`"
   end
+
+  @impl true
+  def supported_filter_operators, do: Filter.operators()
 
   @impl true
   def apply_filters(%Statement{body: sql, params: params} = statement, filters) do

@@ -3,6 +3,8 @@ defmodule Lotus.Query.FilterTest do
 
   alias Lotus.Query.Filter
 
+  doctest Lotus.Query.Filter
+
   describe "new/3" do
     test "creates a filter with column, op, and value" do
       filter = Filter.new("region", :eq, "US")
@@ -31,8 +33,33 @@ defmodule Lotus.Query.FilterTest do
       assert :gte in ops
       assert :lte in ops
       assert :like in ops
+      assert :contains in ops
+      assert :starts_with in ops
+      assert :ends_with in ops
       assert :is_null in ops
       assert :is_not_null in ops
+    end
+  end
+
+  describe "text_operators/0" do
+    test "are the operators that match text as written" do
+      assert Filter.text_operators() == [:contains, :starts_with, :ends_with]
+      assert Filter.text_operators() -- Filter.operators() == []
+    end
+  end
+
+  describe "like_pattern/3" do
+    test "wraps the text for its operator" do
+      assert Filter.like_pattern(:contains, "ann", "!") == "%ann%"
+      assert Filter.like_pattern(:starts_with, "ann", "!") == "ann%"
+      assert Filter.like_pattern(:ends_with, "ann", "!") == "%ann"
+    end
+
+    test "escapes the wildcards and the escape itself, so they match as themselves" do
+      assert Filter.like_pattern(:contains, "50%", "!") == "%50!%%"
+      assert Filter.like_pattern(:contains, "user_id", "!") == "%user!_id%"
+      assert Filter.like_pattern(:contains, "hi!", "!") == "%hi!!%"
+      assert Filter.like_pattern(:contains, ~S(a\b), "!") == ~S(%a\b%)
     end
   end
 
@@ -45,6 +72,9 @@ defmodule Lotus.Query.FilterTest do
       assert Filter.operator_label(:gte) == "≥"
       assert Filter.operator_label(:lte) == "≤"
       assert Filter.operator_label(:like) == "LIKE"
+      assert Filter.operator_label(:contains) == "contains"
+      assert Filter.operator_label(:starts_with) == "starts with"
+      assert Filter.operator_label(:ends_with) == "ends with"
       assert Filter.operator_label(:is_null) == "IS NULL"
       assert Filter.operator_label(:is_not_null) == "IS NOT NULL"
     end
