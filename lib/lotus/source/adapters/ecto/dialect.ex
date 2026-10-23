@@ -259,6 +259,17 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
   """
   @callback ai_context() :: {:ok, Lotus.Source.Adapter.ai_context_map()} | {:error, term()}
 
+  @doc """
+  Return the `Lotus.Query.Filter` operators this dialect's `apply_filters/2`
+  handles.
+
+  Default (when not implemented): `Lotus.Query.Filter.operators/0` without
+  `Lotus.Query.Filter.text_operators/0`. A dialect whose `apply_filters/2`
+  is `Lotus.SQL.FilterInjector`'s, on an engine that takes
+  `LOWER(col) LIKE LOWER(?) ESCAPE '!'`, declares them all.
+  """
+  @callback supported_filter_operators() :: [Lotus.Query.Filter.operator()]
+
   @optional_callbacks [
     table_row_estimates: 2,
     denied_functions: 0,
@@ -272,6 +283,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
     needs_preflight?: 1,
     db_type_to_lotus_type: 1,
     editor_config: 0,
-    ai_context: 0
+    ai_context: 0,
+    supported_filter_operators: 0
   ]
 end

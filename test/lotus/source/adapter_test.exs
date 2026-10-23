@@ -2,6 +2,7 @@ defmodule Lotus.Source.AdapterTest do
   use ExUnit.Case, async: true
   use Mimic
 
+  alias Lotus.Query.Filter
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
 
@@ -643,6 +644,14 @@ defmodule Lotus.Source.AdapterTest do
     test "default_schemas/1 and builtin_schema_denies/1 are empty", %{adapter: adapter} do
       assert Adapter.default_schemas(adapter) == []
       assert Adapter.builtin_schema_denies(adapter) == []
+    end
+
+    test "supported_filter_operators/1 leaves out the text operators", %{adapter: adapter} do
+      ops = Adapter.supported_filter_operators(adapter)
+
+      assert :like in ops
+      assert ops -- Filter.text_operators() == ops
+      assert Enum.sort(ops) == Enum.sort(Filter.operators() -- Filter.text_operators())
     end
 
     test "supports_feature?/2 answers false for everything", %{adapter: adapter} do

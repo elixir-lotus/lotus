@@ -14,6 +14,18 @@
 - **A missing Sake is reported.** When `config :lotus, :mcp` is set but
   Sake isn't a dependency, Lotus logs a warning when it starts, instead of
   `Lotus.MCP` silently not existing.
+- **Filters that match text as written: `:contains`, `:starts_with` and
+  `:ends_with`.** They take plain text, not a `LIKE` pattern: a `%` or `_`
+  in it is that character, so "contains `user_id`" no longer also finds
+  `userXid`, and "contains `_`" no longer finds every row. They ignore case
+  ("ann" finds "Ann" and "ANNA"). On PostgreSQL, MySQL and SQLite they are
+  `LOWER(col) LIKE LOWER(?) ESCAPE '!'`. `:like` is unchanged.
+  `Lotus.Query.Filter.text_operators/0` lists them.
+
+  An adapter outside Lotus that does not implement
+  `supported_filter_operators/1`, and an Ecto dialect without
+  `supported_filter_operators/0`, is not taken to support them, since its
+  engine may not take that SQL; it declares them when it does.
 
 ### Changed
 

@@ -363,7 +363,8 @@ defmodule Lotus.Source.Adapters.Ecto do
         do: EctoAdapter.do_validate_identifier(kind, value)
 
       @impl true
-      def supported_filter_operators(_repo), do: EctoAdapter.do_supported_filter_operators()
+      def supported_filter_operators(_repo),
+        do: EctoAdapter.do_supported_filter_operators(@dialect)
 
       @impl true
       def ai_context(_repo), do: EctoAdapter.do_ai_context(@dialect)
@@ -774,7 +775,7 @@ defmodule Lotus.Source.Adapters.Ecto do
   def validate_identifier(_repo, kind, value), do: do_validate_identifier(kind, value)
 
   @impl true
-  def supported_filter_operators(_repo), do: do_supported_filter_operators()
+  def supported_filter_operators(_repo), do: do_supported_filter_operators(@default_dialect)
 
   @impl true
   def ai_context(_repo), do: do_ai_context(@default_dialect)
@@ -1076,11 +1077,17 @@ defmodule Lotus.Source.Adapters.Ecto do
     Identifier.validate_identifier(value, "#{kind} name")
   end
 
-  # Ecto-backed adapters implement all `Lotus.Query.Filter` operators via
-  # `Lotus.SQL.FilterInjector`. Dialects may override to declare a narrower
-  # set (e.g. if an engine lacks regex LIKE support).
+  # Ecto-backed adapters implement the `Lotus.Query.Filter` operators via
+  # `Lotus.SQL.FilterInjector`. A dialect declares its own set with
+  # `supported_filter_operators/0`; one that does not has all of them but
+  # the text operators, whose `LIKE ... ESCAPE` its engine may not take.
   @doc false
-  def do_supported_filter_operators, do: Filter.operators()
+  def do_supported_filter_operators(dialect) do
+    if Code.ensure_loaded?(dialect) and
+         function_exported?(dialect, :supported_filter_operators, 0),
+       do: dialect.supported_filter_operators(),
+       else: Filter.operators() -- Filter.text_operators()
+  end
 
   # Assemble the dialect's AI context. Dialects that implement the
   # optional `ai_context/0` callback supply their own (Postgres/MySQL/

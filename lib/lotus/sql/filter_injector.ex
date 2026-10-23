@@ -21,6 +21,8 @@ defmodule Lotus.SQL.FilterInjector do
 
   import Lotus.SQL.Sanitizer, only: [strip_trailing_semicolon: 1]
 
+  @like_escape "!"
+
   @doc """
   Wraps the given SQL in a CTE and appends parameterized WHERE clauses for each filter.
 
@@ -92,6 +94,25 @@ defmodule Lotus.SQL.FilterInjector do
     end
   end
 
+  # Text as written, without regard to case. `!` escapes the pattern's `%`
+  # and `_`: PostgreSQL, MySQL and SQLite take `ESCAPE '!'` alike, where a
+  # backslash would need quoting of its own in MySQL.
+  defp build_condition(
+         %Filter{column: column, op: op, value: value},
+         quote_fn,
+         placeholder_fn,
+         idx
+       )
+       when op in [:contains, :starts_with, :ends_with] do
+    validate_column!(column)
+    param_idx = idx + 1
+    placeholder = placeholder_fn.(param_idx)
+    pattern = Filter.like_pattern(op, to_string(value), @like_escape)
+
+    {"LOWER(#{quote_fn.(column)}) LIKE LOWER(#{placeholder}) ESCAPE '#{@like_escape}'", [pattern],
+     param_idx}
+  end
+
   defp build_condition(
          %Filter{column: column, op: op, value: value},
          quote_fn,
@@ -115,4 +136,5 @@ defmodule Lotus.SQL.FilterInjector do
   defp op_to_sql(:gte), do: ">="
   defp op_to_sql(:lte), do: "<="
   defp op_to_sql(:like), do: "LIKE"
+  defp op_to_sql(op) when op in [:contains, :starts_with, :ends_with], do: "LIKE"
 end

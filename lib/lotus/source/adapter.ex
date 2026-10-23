@@ -539,10 +539,12 @@ defmodule Lotus.Source.Adapter do
   `Lotus.Source.supported_filter_operators/1` to gate the filter operator
   dropdown per source.
 
-  Default (when not implemented): all operators in `Lotus.Query.Filter.operators/0`
-  — the permissive choice, which existing adapters inherit without change.
-  Adapters that cannot implement the full set must override and declare
-  their actual support.
+  Default (when not implemented): the operators in `Lotus.Query.Filter.operators/0`
+  but `Lotus.Query.Filter.text_operators/0` (`:contains`, `:starts_with`,
+  `:ends_with`), which came later: an adapter declares them when its
+  `apply_filters/3` matches text as written and without regard to case.
+  Adapters that cannot implement the rest must override and declare their
+  actual support.
   """
   @callback supported_filter_operators(state :: term()) :: [atom()]
 
@@ -1447,14 +1449,15 @@ defmodule Lotus.Source.Adapter do
 
   @doc """
   Return the filter operators this adapter's `apply_filters/3` supports.
-  Defaults to all of `Lotus.Query.Filter.operators/0` if the adapter does
-  not declare a subset.
+  Defaults to `Lotus.Query.Filter.operators/0` without its text operators
+  (`Lotus.Query.Filter.text_operators/0`) if the adapter does not declare
+  its own.
   """
   @spec supported_filter_operators(t()) :: [atom()]
   def supported_filter_operators(%__MODULE__{module: mod, state: state}) do
     if function_exported?(mod, :supported_filter_operators, 1),
       do: mod.supported_filter_operators(state),
-      else: Filter.operators()
+      else: Filter.operators() -- Filter.text_operators()
   end
 
   @doc "Apply filters to a statement via the adapter. Empty filters short-circuit."

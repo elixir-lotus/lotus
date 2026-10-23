@@ -677,6 +677,13 @@ defmodule Lotus.Source.Adapters.EctoTest do
 
       assert Enum.sort(ops) == Enum.sort(Filter.operators())
     end
+
+    test "a dialect that does not declare its operators has no text operators" do
+      ops = EctoAdapter.do_supported_filter_operators(String)
+
+      assert :like in ops
+      assert Enum.sort(ops) == Enum.sort(Filter.operators() -- Filter.text_operators())
+    end
   end
 
   describe "prepare_for_analysis/2" do
