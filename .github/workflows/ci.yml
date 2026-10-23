@@ -3,7 +3,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, v1.x]
 
 env:
   CACHE_VERSION: v1
