@@ -38,6 +38,21 @@
 
 ### Changed
 
+- **Breaking: adapter capabilities are declared behaviours.**
+  `Lotus.Source.Adapter` is now the core behaviour with the nine required
+  callbacks. The optional callbacks moved to five capability behaviours —
+  `Lotus.Source.Adapter.Introspection`, `Preflight`, `Binding`, `Shaping`
+  and `Editor` — and the compiler checks that a declared capability is
+  implemented completely. Lotus calls a capability's callbacks only when
+  the adapter declares its behaviour, settled once when the adapter is
+  built and kept in the new `:capabilities` field of `%Adapter{}`, instead
+  of checking `function_exported?/3` on every call. An adapter that exports
+  `apply_filters/3` without `@behaviour Lotus.Source.Adapter.Shaping` loses
+  filtering, and Lotus logs a warning. `use Lotus.Source.Adapters.Ecto`
+  declares every capability, so Ecto-backed adapters don't change. The new
+  `mix lotus.adapter.check` task lists the capabilities a module declares.
+  See the [v2.0 upgrade guide](guides/upgrading-to-v2.md) (#299).
+
 - **Sake's `sake_tasks` table is always hidden**, like its `sake_oauth_`
   tables. Sake keeps MCP task results there, with the principal each belongs
   to, so anyone who could query Lotus could read other people's results

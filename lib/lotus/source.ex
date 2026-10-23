@@ -28,7 +28,7 @@ defmodule Lotus.Source do
   def resolve!(source_opt, q_source) do
     case resolver().resolve(source_opt, q_source) do
       {:ok, %Adapter{} = adapter} ->
-        adapter
+        Adapter.with_capabilities(adapter)
 
       {:error, :not_found} ->
         available = resolver().list_source_names()
@@ -44,13 +44,13 @@ defmodule Lotus.Source do
   Lists all configured source adapters.
   """
   @spec list_sources() :: [Adapter.t()]
-  def list_sources, do: resolver().list_sources()
+  def list_sources, do: Enum.map(resolver().list_sources(), &Adapter.with_capabilities/1)
 
   @doc """
   Gets a source adapter by name. Raises if not found.
   """
   @spec get_source!(String.t()) :: Adapter.t()
-  def get_source!(name), do: resolver().get_source!(name)
+  def get_source!(name), do: name |> resolver().get_source!() |> Adapter.with_capabilities()
 
   @doc """
   Returns the default source as an `%Adapter{}` struct.
@@ -58,7 +58,7 @@ defmodule Lotus.Source do
   @spec default_source() :: Adapter.t()
   def default_source do
     {_name, adapter} = resolver().default_source()
-    adapter
+    Adapter.with_capabilities(adapter)
   end
 
   @doc """

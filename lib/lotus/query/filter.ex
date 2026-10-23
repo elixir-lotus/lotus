@@ -65,7 +65,7 @@ defmodule Lotus.Query.Filter do
   case: `:contains`, `:starts_with` and `:ends_with`.
 
   An adapter that does not implement `supported_filter_operators/1` is not
-  taken to support them (see `c:Lotus.Source.Adapter.supported_filter_operators/1`).
+  taken to support them (see `c:Lotus.Source.Adapter.Shaping.supported_filter_operators/1`).
   """
   @spec text_operators() :: [text_operator(), ...]
   def text_operators, do: @text_operators

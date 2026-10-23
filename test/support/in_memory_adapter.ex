@@ -57,6 +57,11 @@ defmodule Lotus.Test.InMemoryAdapter do
   """
 
   @behaviour Lotus.Source.Adapter
+  @behaviour Lotus.Source.Adapter.Introspection
+  @behaviour Lotus.Source.Adapter.Preflight
+  @behaviour Lotus.Source.Adapter.Binding
+  @behaviour Lotus.Source.Adapter.Shaping
+  @behaviour Lotus.Source.Adapter.Editor
 
   alias Lotus.Query.Filter
   alias Lotus.Query.Sort

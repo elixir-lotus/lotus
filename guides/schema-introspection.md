@@ -263,7 +263,7 @@ Enum.find(columns, &(&1.name == "ssn"))
 ```
 
 Lotus asks the adapter first. A source whose adapter implements the
-optional `c:Lotus.Source.Adapter.table_stats/3` callback answers from
+optional `c:Lotus.Source.Adapter.Introspection.table_stats/3` callback answers from
 that callback and may return extra keys alongside `:row_count` (on-disk
 size, segment counts, a last-analyzed timestamp) — callers should
 tolerate extras. An adapter that does not implement it falls back to

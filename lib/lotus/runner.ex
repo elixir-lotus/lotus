@@ -8,7 +8,7 @@ defmodule Lotus.Runner do
   allow write operations.
 
   What counts as a write is the adapter's judgement, via
-  `c:Lotus.Source.Adapter.sanitize_query/3`.
+  `c:Lotus.Source.Adapter.Preflight.sanitize_query/3`.
   """
 
   alias Lotus.{Middleware, Preflight, Result, Telemetry, Visibility}

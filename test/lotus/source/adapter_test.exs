@@ -9,6 +9,7 @@ defmodule Lotus.Source.AdapterTest do
   defmodule MockAdapter do
     @moduledoc false
     @behaviour Lotus.Source.Adapter
+    use Lotus.Test.AdapterDefaults, [:introspection, :preflight, :binding, :shaping, :editor]
 
     # --- Query Execution ---
     @impl true
@@ -321,6 +322,7 @@ defmodule Lotus.Source.AdapterTest do
     defmodule TrustedAdapter do
       @moduledoc false
       @behaviour Lotus.Source.Adapter
+      use Lotus.Test.AdapterDefaults, [:introspection, :preflight, :binding, :shaping, :editor]
 
       # Minimal required callbacks (enough to compile the behaviour)
       @impl true
@@ -432,6 +434,7 @@ defmodule Lotus.Source.AdapterTest do
     defmodule EvilLanguageAdapter do
       @moduledoc false
       @behaviour Lotus.Source.Adapter
+      use Lotus.Test.AdapterDefaults, [:introspection, :preflight, :binding, :shaping, :editor]
 
       @impl true
       def execute_query(_, _, _, _), do: {:error, :ni}
@@ -513,6 +516,7 @@ defmodule Lotus.Source.AdapterTest do
     defmodule StatsAdapter do
       @moduledoc false
       @behaviour Lotus.Source.Adapter
+      use Lotus.Test.AdapterDefaults, [:introspection]
 
       @impl true
       def execute_query(_state, _body, _params, _opts),
@@ -727,6 +731,7 @@ defmodule Lotus.Source.AdapterTest do
     defmodule CapabilityAdapter do
       @moduledoc false
       @behaviour Lotus.Source.Adapter
+      use Lotus.Test.AdapterDefaults, [:introspection, :preflight, :binding, :shaping, :editor]
 
       @impl true
       def execute_query(_, _, _, _), do: {:error, :ni}
@@ -830,6 +835,7 @@ defmodule Lotus.Source.AdapterTest do
       defmodule NoCapabilityAdapter do
         @moduledoc false
         @behaviour Lotus.Source.Adapter
+        use Lotus.Test.AdapterDefaults, [:introspection, :preflight, :binding, :shaping, :editor]
 
         @impl true
         def execute_query(_, _, _, _), do: {:error, :ni}
@@ -907,60 +913,79 @@ defmodule Lotus.Source.AdapterTest do
     alias Lotus.Query.Tokenizer.Profile
 
     defmodule MysqlLikeAdapter do
-      Lotus.Source.Adapter
+      @moduledoc false
+      @behaviour Lotus.Source.Adapter
+      use Lotus.Test.AdapterDefaults, [:editor]
 
-      true
-
+      @impl true
       def execute_query(_state, _body, _params, _opts),
         do: {:ok, %{columns: [], rows: [], num_rows: 0}}
 
-      true
+      @impl true
       def transaction(state, fun, _opts), do: {:ok, fun.(state)}
 
-      true
+      @impl true
       def list_tables(_state, _schemas, _opts), do: {:ok, []}
 
-      true
+      @impl true
       def describe_table(_state, _schema, _table), do: {:ok, []}
 
-      true
+      @impl true
       def builtin_denies(_state), do: []
 
-      true
+      @impl true
       def health_check(_state), do: :ok
 
-      true
+      @impl true
+      def disconnect(_state), do: :ok
+
+      @impl true
+      def format_error(_state, error), do: inspect(error)
+
+      @impl true
+      def source_type(_state), do: :other
+
+      @impl true
       def query_language(_state), do: "sql:mysql"
     end
 
     defmodule SpecAdapter do
-      Lotus.Source.Adapter
+      @moduledoc false
+      @behaviour Lotus.Source.Adapter
+      use Lotus.Test.AdapterDefaults, [:editor]
 
-      true
-
+      @impl true
       def execute_query(_state, _body, _params, _opts),
         do: {:ok, %{columns: [], rows: [], num_rows: 0}}
 
-      true
+      @impl true
       def transaction(state, fun, _opts), do: {:ok, fun.(state)}
 
-      true
+      @impl true
       def list_tables(_state, _schemas, _opts), do: {:ok, []}
 
-      true
+      @impl true
       def describe_table(_state, _schema, _table), do: {:ok, []}
 
-      true
+      @impl true
       def builtin_denies(_state), do: []
 
-      true
+      @impl true
       def health_check(_state), do: :ok
 
-      true
+      @impl true
+      def disconnect(_state), do: :ok
+
+      @impl true
+      def format_error(_state, error), do: inspect(error)
+
+      @impl true
+      def source_type(_state), do: :other
+
+      @impl true
       def query_language(_state), do: "sql:clickhouse"
 
-      true
-
+      @impl true
       def editor_config(_state),
         do: %{language: "sql", dialect_spec: %{identifier_quotes: "`", hash_comments: true}}
     end

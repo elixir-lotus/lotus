@@ -262,7 +262,7 @@ defmodule Lotus.Schema do
   source without schemas), with only the tables the caller may see. A
   table the engine has no estimate for (never analyzed, say) is left out,
   and a source whose adapter does not implement
-  `c:Lotus.Source.Adapter.table_row_estimates/2` returns an empty map.
+  `c:Lotus.Source.Adapter.Introspection.table_row_estimates/2` returns an empty map.
 
   Estimates lag behind writes: use `get_table_stats/3` for an exact count of
   one table.
@@ -534,7 +534,7 @@ defmodule Lotus.Schema do
       {:ok, stats} = Lotus.Schema.get_table_stats("postgres", "customers", schema: "reporting")
       # Gets stats for reporting.customers
 
-  Sources whose adapter implements `c:Lotus.Source.Adapter.table_stats/3`
+  Sources whose adapter implements `c:Lotus.Source.Adapter.Introspection.table_stats/3`
   answer from that callback and may return additional keys alongside
   `:row_count`. Everything else falls back to `SELECT COUNT(*)`.
   """
