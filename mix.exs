@@ -2,7 +2,7 @@ defmodule Lotus.MixProject do
   use Mix.Project
 
   @source_url "https://github.com/elixir-lotus/lotus"
-  @version "1.3.0"
+  @version "1.3.1"
 
   def project do
     [
@@ -53,7 +53,7 @@ defmodule Lotus.MixProject do
       {:telemetry, "~> 1.0"},
 
       # AI/LLM Integration
-      {:req_llm, "~> 1.6"},
+      {:req_llm, "~> 1.29"},
 
       # Development and testing dependencies
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
