@@ -154,6 +154,23 @@ defmodule Lotus.Source.Adapter do
   """
   @type capability :: :introspection | :preflight | :binding | :shaping | :editor
 
+  @typedoc """
+  What a statement cost the engine, as `execute_query/4` may report it. Every
+  key is optional:
+
+    * `:bytes_scanned` - Bytes the engine read
+    * `:bytes_billed` - Bytes the engine charges for, when it rounds or has a
+      minimum (BigQuery)
+    * `:rows_scanned` - Rows the engine read, not the rows returned
+    * `:credits` - Compute credits or another unit the engine bills in
+  """
+  @type cost :: %{
+          optional(:bytes_scanned) => non_neg_integer(),
+          optional(:bytes_billed) => non_neg_integer(),
+          optional(:rows_scanned) => non_neg_integer(),
+          optional(:credits) => number()
+        }
+
   @typedoc "A capability and the behaviour that declares it."
   @type capability_behaviour ::
           {:introspection, Lotus.Source.Adapter.Introspection}
@@ -213,6 +230,20 @@ defmodule Lotus.Source.Adapter do
   Adapters without a cheap inline count should omit the key and use
   `apply_pagination/3` + `:count_spec` to compute the total via a separate
   query. See the pagination callback for the full precedence rule.
+
+  ## Optional `:cost` — what the statement cost the engine
+
+  An engine that bills by work done (a warehouse that charges per byte
+  scanned or in credits) can say what the statement cost by including
+  `:cost` (see `t:cost/0`):
+
+      {:ok, %{columns: [...], rows: [...], num_rows: N,
+              cost: %{bytes_scanned: 52_428_800, bytes_billed: 52_428_800}}}
+
+  Lotus keeps the keys it knows with non-negative values, puts them in the
+  result's `meta.cost`, and adds them to the measurements of the
+  `[:lotus, :query, :stop]` telemetry event. An adapter whose engine reports
+  nothing omits the key.
   """
   @callback execute_query(state :: term(), sql :: term(), params :: list(), opts :: keyword()) ::
               {:ok,
@@ -220,7 +251,8 @@ defmodule Lotus.Source.Adapter do
                  :columns => [String.t()],
                  :rows => [[term()]],
                  :num_rows => non_neg_integer(),
-                 optional(:total_count) => non_neg_integer() | nil
+                 optional(:total_count) => non_neg_integer() | nil,
+                 optional(:cost) => cost()
                }}
               | {:error, term()}
 

@@ -34,6 +34,14 @@
 
 ### Added
 
+- **An adapter can report what a statement cost.** `execute_query/4` may
+  return `:cost` with `:bytes_scanned`, `:bytes_billed`, `:rows_scanned`
+  and `:credits` (`t:Lotus.Source.Adapter.cost/0`). Lotus puts it in the
+  result's `meta.cost` and adds it to the measurements of
+  `[:lotus, :query, :stop]`, which a cache hit doesn't emit, so summing
+  them counts each statement the engine ran once. No built-in adapter
+  reports one; a warehouse adapter that bills per byte or credit can.
+
 - **A card can start folded.** A dashboard card's `layout` has `folded`
   (`false` by default): the card starts folded to its title, as Lotus Web
   shows it, and a viewer can open it. Layouts saved before read as open.
