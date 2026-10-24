@@ -341,6 +341,24 @@ defmodule Lotus.DashboardsTest do
       assert updated.title == "Updated"
     end
 
+    test "a layout starts open, and keeps folded" do
+      dashboard = dashboard_fixture()
+
+      {:ok, card} =
+        Dashboards.create_dashboard_card(dashboard, %{
+          card_type: :text,
+          position: 0,
+          layout: %{x: 0, y: 0, w: 6, h: 2}
+        })
+
+      refute card.layout.folded
+
+      {:ok, folded} =
+        Dashboards.update_dashboard_card(card, %{layout: %{x: 0, y: 0, w: 6, h: 2, folded: true}})
+
+      assert Dashboards.get_dashboard_card!(folded.id).layout.folded
+    end
+
     test "updates layout" do
       dashboard = dashboard_fixture()
       card = dashboard_card_fixture(dashboard)

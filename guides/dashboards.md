@@ -120,6 +120,7 @@ Cards use a 12-column grid. `layout` is an embedded schema with these fields:
 | `y` | Row position | `>= 0` | `0` |
 | `w` | Width in columns | `1..12` | `6` |
 | `h` | Height in rows | `>= 1` | `4` |
+| `folded` | Starts folded to its title (a viewer can open it) | boolean | `false` |
 
 `x + w` must not exceed 12 — a card that extends beyond the grid is rejected
 with a changeset error on `:w`.
