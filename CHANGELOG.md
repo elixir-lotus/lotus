@@ -42,6 +42,11 @@
 
 ### Added
 
+- **A Slack channel.** `"slack"` posts each run of a schedule as a message in
+  a Slack channel, through an incoming webhook (`config["webhook_url"]`):
+  the schedule's name, an alert's status, and each result's first ten rows
+  as a table, within Slack's limits. It needs Req, like the webhook.
+
 - **Channels an editor can draw.** `Lotus.Delivery.Channel` has three
   optional callbacks: `label/0` (the channel's name for people),
   `settings/0` (the fields of a delivery's settings, with their type: URL,

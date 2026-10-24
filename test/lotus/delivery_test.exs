@@ -9,7 +9,7 @@ defmodule Lotus.DeliveryTest do
   import Lotus.Fixtures
 
   alias Lotus.{Config, Delivery, Result, Schedules}
-  alias Lotus.Delivery.Channels.Webhook
+  alias Lotus.Delivery.Channels.{Slack, Webhook}
   alias Lotus.Delivery.Content
   alias Lotus.Delivery.Formats.{CSV, HTML, JSON}
   alias Lotus.Scheduler.Worker
@@ -54,7 +54,8 @@ defmodule Lotus.DeliveryTest do
     stub(Config, :delivery, fn ->
       [
         channels: %{"send" => SendChannel, "pigeon" => PigeonChannel},
-        webhook: [req_options: [plug: {Req.Test, __MODULE__}]] ++ extra
+        webhook: [req_options: [plug: {Req.Test, __MODULE__}]] ++ extra,
+        slack: [req_options: [plug: {Req.Test, __MODULE__}]]
       ]
     end)
   end
@@ -115,7 +116,7 @@ defmodule Lotus.DeliveryTest do
     end
 
     test "says each channel as an editor draws it, sorted by label" do
-      assert ["Carrier pigeon", "send", "Webhook"] =
+      assert ["Carrier pigeon", "send", "Slack", "Webhook"] =
                Enum.map(Delivery.channel_specs(), & &1.label)
 
       assert %{
@@ -287,6 +288,116 @@ defmodule Lotus.DeliveryTest do
 
       assert {:error, "the webhook answered 503: busy"} =
                Webhook.deliver(content([]), [], %{"url" => "https://x.io"})
+    end
+  end
+
+  describe "the Slack channel" do
+    setup do
+      delivery_config()
+      :ok
+    end
+
+    @hook "https://hooks.slack.com/services/T000/B000/XXXX"
+
+    test "takes only a Slack incoming webhook's URL" do
+      assert :ok = Delivery.validate("slack", "csv", %{"webhook_url" => @hook})
+
+      assert {:error, :config, "a Slack delivery needs the incoming webhook's URL"} =
+               Delivery.validate("slack", "csv", %{})
+
+      for url <- [
+            "https://example.com/hook",
+            "http://hooks.slack.com/services/x",
+            "hooks.slack.com"
+          ] do
+        assert {:error, :config, "the URL must be a Slack incoming webhook's" <> _} =
+                 Delivery.validate("slack", "csv", %{"webhook_url" => url})
+      end
+
+      assert %{label: "Slack", available: :ok, settings: [%{key: "webhook_url", type: :secret}]} =
+               spec("slack")
+    end
+
+    test "posts the results as a message with a table of the first rows" do
+      pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(pid, {:slack, conn.request_path, Lotus.JSON.decode!(body)})
+        Plug.Conn.send_resp(conn, 200, "ok")
+      end)
+
+      rows = for n <- 1..12, do: ["north <#{n}>", n * 10]
+      content = content([result("Revenue & costs", ["region", "total"], rows)])
+
+      assert :ok = Slack.deliver(content, [], %{"webhook_url" => @hook})
+      assert_received {:slack, "/services/T000/B000/XXXX", message}
+
+      assert %{
+               "text" => "Weekly <revenue>",
+               "blocks" => [
+                 %{"type" => "header", "text" => %{"text" => "Weekly <revenue>"}},
+                 %{"type" => "section", "text" => %{"type" => "mrkdwn", "text" => table}},
+                 %{"type" => "context"}
+               ]
+             } = message
+
+      assert table =~ "*Revenue &amp; costs* · the first 10 of 12 rows"
+      assert table =~ "region      total"
+      assert table =~ "north &lt;1&gt;   10\nnorth &lt;2&gt;   20"
+      refute table =~ "north &lt;11&gt;"
+    end
+
+    test "an alert says it fired or recovered" do
+      content = %{
+        content([])
+        | alert: %{status: "firing", value: 12, message: "total is above 10"}
+      }
+
+      assert %{"text" => "Weekly <revenue>: total is above 10", "blocks" => [_header, alert | _]} =
+               Slack.message(content)
+
+      assert alert["text"]["text"] =~ ":rotating_light: *Alert*: total is above 10"
+
+      recovered = %{content | alert: %{status: "ok", value: 3, message: "total is back under 10"}}
+
+      assert %{"text" => "Weekly <revenue> recovered: total is back under 10"} =
+               Slack.message(recovered)
+    end
+
+    test "keeps a long result under Slack's limits, and says the results it leaves out" do
+      wide = for n <- 1..10, do: Enum.map(1..30, &"#{&1}-#{String.duplicate("x", 40)}-#{n}")
+      columns = Enum.map(1..30, &"c#{&1}")
+
+      content =
+        content(for n <- 1..5, do: result("Result #{n}", columns, wide))
+
+      %{"blocks" => blocks} = Slack.message(content)
+
+      sections = Enum.filter(blocks, &(&1["type"] == "section"))
+      assert length(sections) == 3
+      assert Enum.all?(sections, &(String.length(&1["text"]["text"]) <= 3000))
+      assert Enum.all?(sections, &String.ends_with?(&1["text"]["text"], "```"))
+
+      assert Enum.any?(
+               blocks,
+               &(&1["type"] == "context" and hd(&1["elements"])["text"] =~ "and 2 more results")
+             )
+    end
+
+    test "an answer that is not 2xx is an error" do
+      Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 404, "no_service") end)
+
+      assert {:error, "Slack answered 404: no_service"} =
+               Slack.deliver(content([]), [], %{"webhook_url" => @hook})
+    end
+
+    test "without Req, Slack is not available" do
+      Application.put_env(:lotus, :__req_dependency__, Lotus.DeliveryTest.NoReq)
+      on_exit(fn -> Application.delete_env(:lotus, :__req_dependency__) end)
+
+      assert %{available: {:error, message}} = spec("slack")
+      assert message =~ "the slack channel needs Req"
     end
   end
 
