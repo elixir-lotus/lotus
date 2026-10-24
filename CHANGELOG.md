@@ -86,6 +86,10 @@
   them counts each statement the engine ran once. No built-in adapter
   reports one; a warehouse adapter that bills per byte or credit can.
 
+- **A card can be on a tab.** A dashboard card's `layout` has `tab` (`nil`
+  by default, the first tab): the id of a tab of the dashboard, whose tabs
+  Lotus Web keeps in the dashboard's `settings` (`"tabs"`). The layout is
+  stored as it is, so no migration.
 - **A card can start folded.** A dashboard card's `layout` has `folded`
   (`false` by default): the card starts folded to its title, as Lotus Web
   shows it, and a viewer can open it. Layouts saved before read as open.
