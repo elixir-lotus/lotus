@@ -533,6 +533,42 @@ defmodule Lotus.DeliveryTest do
     end
   end
 
+  describe "send_test/4" do
+    setup do
+      delivery_config()
+      :ok
+    end
+
+    test "sends sample results to a delivery, now" do
+      assert :ok = Delivery.send_test("send", "csv", %{"to" => "ops"}, title: "Weekly revenue")
+
+      assert_received {:delivered, "ops", "Test: Weekly revenue",
+                       [%{filename: filename, body: body}]}
+
+      assert filename =~ ".csv"
+      assert IO.iodata_to_binary(body) =~ "North,1200"
+    end
+
+    test "as an alert, to see how one looks" do
+      assert :ok = Delivery.send_test("email", "csv", %{"to" => ["a@example.com"]}, alert: true)
+      assert_received {:email, %{subject: "[Alert] Test: a Lotus report", attachments: [_csv]}}
+    end
+
+    test "says what is wrong before sending anything" do
+      assert {:error, "needs a recipient"} = Delivery.send_test("send", "csv", %{})
+      assert {:error, "the pigeons are not set up"} = Delivery.send_test("pigeon", "csv", %{})
+      assert {:error, "is not a known channel: \"nope\""} = Delivery.send_test("nope", "csv", %{})
+      refute_received {:delivered, _, _, _}
+    end
+
+    test "says the channel's reason when it fails" do
+      Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 401, "bad token") end)
+
+      assert {:error, "the webhook answered 401: bad token"} =
+               Delivery.send_test("webhook", "json", %{"url" => "https://hooks.example.com/x"})
+    end
+  end
+
   describe "a run with deliveries" do
     setup do
       delivery_config()
