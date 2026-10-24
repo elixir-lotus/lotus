@@ -96,6 +96,13 @@ if Code.ensure_loaded?(ReqLLM) do
       Defaults to logging a warning.
     - `:request` - Map of what the request is for, added to the telemetry
       metadata: `:feature`, `:data_source`, `:context`, `:scope`
+    - `:on_tool_call` - Function of one argument, called as each tool runs, so
+      that an interface can show the work while the request is still going.
+      It is called with `%{phase: :start, id: id, tool: name, args: args}`
+      before the tool runs and with the same keys plus `:result` (the text
+      handed back to the model) and `:duration` (native time units) after.
+      It runs in the process that runs the loop; what it raises is logged
+      and does not stop the request.
 
     ## Returns
 
@@ -107,7 +114,7 @@ if Code.ensure_loaded?(ReqLLM) do
     def run(model, context, tools, opts \\ []) do
       loop = %{
         model: model,
-        tools: tools,
+        tools: observe_tools(tools, Keyword.get(opts, :on_tool_call)),
         api_key: Keyword.fetch!(opts, :api_key),
         temperature: Keyword.get(opts, :temperature, 0.2),
         max: Keyword.get(opts, :max_iterations, @default_max_iterations),
@@ -175,6 +182,49 @@ if Code.ensure_loaded?(ReqLLM) do
           Logger.error("AI service error: #{inspect(raw_error)}")
           {:error, Error.wrap(raw_error), acc}
       end
+    end
+
+    # Each tool's callback, wrapped to tell `:on_tool_call` when the tool
+    # starts and what it returned.
+    defp observe_tools(tools, nil), do: tools
+
+    defp observe_tools(tools, on_tool_call) when is_function(on_tool_call, 1),
+      do: Enum.map(tools, &observe_tool(&1, on_tool_call))
+
+    defp observe_tool(%{name: name, callback: callback} = tool, on_tool_call) do
+      %{
+        tool
+        | callback: fn args ->
+            call = %{id: make_ref(), tool: name, args: args}
+            notify(on_tool_call, Map.put(call, :phase, :start))
+            started = System.monotonic_time()
+            result = call_tool(callback, args)
+
+            notify(
+              on_tool_call,
+              Map.merge(call, %{
+                phase: :stop,
+                result: tool_result(result),
+                duration: System.monotonic_time() - started
+              })
+            )
+
+            result
+          end
+      }
+    end
+
+    defp call_tool(fun, args) when is_function(fun, 1), do: fun.(args)
+    defp call_tool({module, function}, args), do: apply(module, function, [args])
+    defp call_tool({module, function, extra}, args), do: apply(module, function, extra ++ [args])
+
+    defp tool_result({:ok, result}), do: result
+    defp tool_result({:error, reason}), do: {:error, reason}
+
+    defp notify(on_tool_call, event) do
+      on_tool_call.(event)
+    rescue
+      error -> Logger.warning("on_tool_call raised: " <> Exception.message(error))
     end
 
     defp add_tool_calls(acc, tool_calls),

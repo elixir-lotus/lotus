@@ -42,6 +42,12 @@
 
 ### Added
 
+- **`:on_tool_call` on the AI functions.** `Lotus.AI.generate_query_with_context/1`,
+  `generate_query/1`, `suggest_optimizations/1` and `explain_query/1` take a
+  function called as each tool the model asks for starts and stops (its
+  name, arguments, result and duration), so an interface can show the work
+  while the request is still going. See `Lotus.AI.Tool.run/4`.
+
 - **Alert conditions of your own, or Lotus Pro's.** A condition registered
   by name (`config :lotus, alerts: [conditions: %{"change" => MyMod}]`,
   behaviour `Lotus.Schedules.Alert.Condition`) can be a rule's `condition`,

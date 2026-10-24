@@ -222,6 +222,57 @@ defmodule Lotus.AI.RequestHooksTest do
                        %{tool_calls: ["list_tables"], iterations: 2}}
     end
 
+    test ":on_tool_call is told as each tool starts and stops" do
+      tool_call = ReqLLM.ToolCall.new("call_1", "list_tables", "{}")
+      asking = ReqLLM.Context.assistant("", tool_calls: [tool_call])
+      answer = ReqLLM.Context.assistant("```sql\nSELECT * FROM users\n```")
+
+      expect(ReqLLM, :generate_text, fn _model, _messages, _opts ->
+        {:ok,
+         response(asking, %{input_tokens: 1, output_tokens: 1, total_tokens: 2}, :tool_calls)}
+      end)
+
+      expect(ReqLLM, :generate_text, fn _model, _messages, _opts ->
+        {:ok, response(answer, %{input_tokens: 1, output_tokens: 1, total_tokens: 2}, :stop)}
+      end)
+
+      test_pid = self()
+
+      assert {:ok, _} = generate(on_tool_call: &send(test_pid, {:tool_call, &1}))
+
+      assert_received {:tool_call, %{phase: :start, id: id, tool: "list_tables"}}
+
+      assert_received {:tool_call,
+                       %{
+                         phase: :stop,
+                         id: ^id,
+                         tool: "list_tables",
+                         result: result,
+                         duration: duration
+                       }}
+
+      assert result =~ "users"
+      assert is_integer(duration)
+    end
+
+    test "an :on_tool_call that raises does not stop the request" do
+      tool_call = ReqLLM.ToolCall.new("call_1", "list_tables", "{}")
+      asking = ReqLLM.Context.assistant("", tool_calls: [tool_call])
+      answer = ReqLLM.Context.assistant("```sql\nSELECT * FROM users\n```")
+
+      expect(ReqLLM, :generate_text, fn _model, _messages, _opts ->
+        {:ok,
+         response(asking, %{input_tokens: 1, output_tokens: 1, total_tokens: 2}, :tool_calls)}
+      end)
+
+      expect(ReqLLM, :generate_text, fn _model, _messages, _opts ->
+        {:ok, response(answer, %{input_tokens: 1, output_tokens: 1, total_tokens: 2}, :stop)}
+      end)
+
+      assert {:ok, %{content: "SELECT * FROM users"}} =
+               generate(on_tool_call: fn _ -> raise "boom" end)
+    end
+
     test "a failed call to the provider emits :exception with the reason" do
       mock_api_error("Rate limit exceeded")
 
