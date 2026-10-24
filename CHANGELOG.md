@@ -222,6 +222,14 @@
 
 ### Fixed
 
+- **A conversation that holds an explanation, optimization suggestions or a
+  provider error no longer crashes the next request.**
+  `Lotus.AI.Conversation.build_context_messages/4` raised a `CaseClauseError`
+  on roles other than `:user`, `:assistant` and `:error`, so asking the
+  assistant anything after "Explain query" or a failed call to the provider
+  failed. An explanation is now kept as the assistant's message and the
+  other roles are left out.
+
 - **The AI functions report every round's tokens.** When the model called
   tools before answering, `:usage` counted only the last round. It is now
   the sum of every call made to the provider.

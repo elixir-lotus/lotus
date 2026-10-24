@@ -34,7 +34,7 @@ defmodule Lotus.AI.Conversation do
   """
 
   @type message :: %{
-          role: :system | :user | :assistant | :error,
+          role: :system | :user | :assistant | :error | atom(),
           content: String.t(),
           statement: String.t() | nil,
           variables: [map()] | nil,
@@ -227,13 +227,16 @@ defmodule Lotus.AI.Conversation do
     context_messages = build_query_context_messages(query_context, fence)
 
     conversation_messages =
-      Enum.map(conversation.messages, fn msg ->
+      Enum.flat_map(conversation.messages, fn msg ->
         case msg.role do
           :user ->
-            %{role: :user, content: msg.content}
+            [%{role: :user, content: msg.content}]
 
           :assistant ->
-            %{role: :assistant, content: format_assistant_content(msg, fence)}
+            [%{role: :assistant, content: format_assistant_content(msg, fence)}]
+
+          :explanation ->
+            [%{role: :assistant, content: msg.content}]
 
           :error ->
             # Format error as user message asking for fix
@@ -244,7 +247,12 @@ defmodule Lotus.AI.Conversation do
                 "An error occurred: #{msg.content}\n\nPlease help fix this."
               end
 
-            %{role: :user, content: error_context}
+            [%{role: :user, content: error_context}]
+
+          # What an interface keeps in the conversation but the model has no
+          # use for (a provider that was down, optimization suggestions).
+          _other ->
+            []
         end
       end)
 
