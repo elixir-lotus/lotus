@@ -145,3 +145,25 @@ What to do:
 and the built-in Ecto adapters fill it, so dispatch reads the struct instead
 of the module. A custom `wrap/2` or resolver may call it; a struct without it
 still works.
+
+---
+
+## 4. `req_llm` is an optional dependency
+
+Lotus no longer brings [ReqLLM](https://hex.pm/packages/req_llm) and its
+providers into every app. An app that uses the AI features adds it itself:
+
+```diff
+   defp deps do
+     [
+       {:lotus, "~> 2.0"},
++      {:req_llm, "~> 1.29"}
+     ]
+   end
+```
+
+Who is affected: an app with `config :lotus, ai: [enabled: true]`. Without
+`req_llm`, AI stays off: `Lotus.AI.enabled?/0` is `false`, with a warning
+logged once, and `Lotus.AI.generate_query/1` and the other AI functions
+return `{:error, :dependency_missing}`. `Lotus.AI.available?/0` says whether
+the dependency is loaded.

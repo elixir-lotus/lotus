@@ -50,17 +50,20 @@ defmodule Lotus.AI.Error do
 
   """
   @spec wrap(term()) :: Exception.t()
-  def wrap(%ReqLLM.Error.API.Request{status: 429}), do: %RateLimitError{}
+  # ReqLLM's errors, when it is loaded (an optional dependency).
+  if Code.ensure_loaded?(ReqLLM) do
+    def wrap(%ReqLLM.Error.API.Request{status: 429}), do: %RateLimitError{}
 
-  def wrap(%ReqLLM.Error.API.Request{status: status}) when status in [401, 403],
-    do: %AuthenticationError{}
+    def wrap(%ReqLLM.Error.API.Request{status: status}) when status in [401, 403],
+      do: %AuthenticationError{}
 
-  def wrap(%ReqLLM.Error.API.Request{status: status})
-      when is_integer(status) and status >= 500,
-      do: %ServerError{}
+    def wrap(%ReqLLM.Error.API.Request{status: status})
+        when is_integer(status) and status >= 500,
+        do: %ServerError{}
 
-  def wrap(%ReqLLM.Error.API.Request{reason: reason}) when is_binary(reason) do
-    if reason =~ ~r/timed?\s*out/i, do: %TimeoutError{}, else: %ServiceError{}
+    def wrap(%ReqLLM.Error.API.Request{reason: reason}) when is_binary(reason) do
+      if reason =~ ~r/timed?\s*out/i, do: %TimeoutError{}, else: %ServiceError{}
+    end
   end
 
   def wrap(_error), do: %ServiceError{}
