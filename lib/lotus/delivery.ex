@@ -23,8 +23,8 @@ defmodule Lotus.Delivery do
 
   ## Channels and formats
 
-  Built in: the `"webhook"` and `"slack"` channels, and the `"csv"`, `"json"`
-  and `"html"` formats. Your app or Lotus Pro registers more by name; a name here wins
+  Built in: the `"webhook"`, `"slack"` and `"email"` channels, and the
+  `"csv"`, `"json"` and `"html"` formats. Your app or Lotus Pro registers more by name; a name here wins
   over a built-in one:
 
       config :lotus,
@@ -41,7 +41,11 @@ defmodule Lotus.Delivery do
   alias Lotus.Delivery.{Channels, Content, Formats}
   alias Lotus.Telemetry
 
-  @builtin_channels %{"webhook" => Channels.Webhook, "slack" => Channels.Slack}
+  @builtin_channels %{
+    "webhook" => Channels.Webhook,
+    "slack" => Channels.Slack,
+    "email" => Channels.Email
+  }
 
   @builtin_formats %{
     "csv" => Formats.CSV,
