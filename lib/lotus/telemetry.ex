@@ -321,6 +321,39 @@ defmodule Lotus.Telemetry do
   **Metadata:** the start metadata, with `:run` as recorded: `"failed"` and
   its `:error`.
 
+  ## Delivery Events
+
+  One delivery of a schedule's run (`Lotus.Delivery`): rendering its format
+  and handing the attachments to its channel. A retried run emits them only
+  for the deliveries that had failed.
+
+  ### `[:lotus, :delivery, :start]`
+
+  **Measurements:** `:system_time`.
+
+  **Metadata:**
+
+    * `:schedule` - The `Lotus.Storage.Schedule`
+    * `:run` - The `Lotus.Storage.ScheduleRun`
+    * `:delivery` - `%{id: String.t(), channel: String.t(), format: String.t()}`
+
+  ### `[:lotus, :delivery, :stop]`
+
+  Emitted when the channel delivered.
+
+  **Measurements:** `:duration` (native units).
+
+  **Metadata:** the start metadata.
+
+  ### `[:lotus, :delivery, :exception]`
+
+  Emitted when rendering or sending failed.
+
+  **Measurements:** `:duration`.
+
+  **Metadata:** the start metadata plus `:reason`, the message the run
+  records.
+
   ## Example
 
   Attach a handler in your application's `start/2` callback:
@@ -389,6 +422,10 @@ defmodule Lotus.Telemetry do
   @schedule_run_stop [:lotus, :schedule, :run, :stop]
   @schedule_run_exception [:lotus, :schedule, :run, :exception]
 
+  @delivery_start [:lotus, :delivery, :start]
+  @delivery_stop [:lotus, :delivery, :stop]
+  @delivery_exception [:lotus, :delivery, :exception]
+
   @doc false
   def events do
     [
@@ -411,7 +448,10 @@ defmodule Lotus.Telemetry do
       @ai_request_exception,
       @schedule_run_start,
       @schedule_run_stop,
-      @schedule_run_exception
+      @schedule_run_exception,
+      @delivery_start,
+      @delivery_stop,
+      @delivery_exception
     ]
   end
 
@@ -512,6 +552,31 @@ defmodule Lotus.Telemetry do
       @content_change_exception,
       %{duration: duration},
       Map.put_new(metadata, :kind, :error)
+    )
+  end
+
+  @doc false
+  def delivery_start(metadata) do
+    start_time = System.monotonic_time()
+    :telemetry.execute(@delivery_start, %{system_time: System.system_time()}, metadata)
+    start_time
+  end
+
+  @doc false
+  def delivery_stop(start_time, metadata) do
+    :telemetry.execute(
+      @delivery_stop,
+      %{duration: System.monotonic_time() - start_time},
+      metadata
+    )
+  end
+
+  @doc false
+  def delivery_exception(start_time, metadata) do
+    :telemetry.execute(
+      @delivery_exception,
+      %{duration: System.monotonic_time() - start_time},
+      metadata
     )
   end
 

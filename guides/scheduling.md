@@ -5,8 +5,9 @@ zone, once per cluster. Every run is recorded. A run reads fresh data and,
 when a cache is configured, leaves the cache warm, so a heavy dashboard
 scheduled at 07:30 opens instantly at 08:00.
 
-Delivering the result somewhere (a webhook, an email) and alerting on it build
-on schedules and come next.
+A schedule can also deliver its results: as CSV, JSON or an HTML table, to a
+webhook or to a channel your app adds, such as email (see
+[Delivering results](#delivering-results)).
 
 ## Schedules
 
@@ -127,6 +128,67 @@ end
 It receives the schedule, then the arguments you configured, and returns the
 `:context` and `:scope`, or `{:error, reason}` to fail the run without running
 anything.
+
+## Delivering results
+
+A schedule's `deliveries` send each successful run somewhere. Each names a
+channel, a format and the channel's settings:
+
+```elixir
+Lotus.Schedules.create_schedule(%{
+  name: "Weekly revenue",
+  dashboard_id: dashboard.id,
+  cron: "0 8 * * MON",
+  time_zone: "Europe/Lisbon",
+  deliveries: [
+    %{channel: "webhook", format: "csv", config: %{"url" => "https://hooks.example.com/lotus"}},
+    %{channel: "email", format: "html", config: %{"to" => "founders@example.com"}}
+  ]
+})
+```
+
+### Formats
+
+- `"csv"`: a CSV file per result. A dashboard gives one per query card.
+- `"json"`: one file with the title and every result's columns and rows.
+- `"html"`: one document with a table per result, every value escaped. Fits an
+  email body.
+
+### The webhook channel
+
+`"webhook"` POSTs the attachments as JSON to `config["url"]`, with any
+`config["headers"]`. The URL must be `https`;
+`config :lotus, delivery: [webhook: [allow_http: true]]` allows `http` for a
+receiver on a private network. A 2xx response is a delivery.
+
+It sends with [Req](https://hex.pm/packages/req), an optional dependency: add
+`{:req, "~> 0.5"}` to your deps. An app with the AI features has it already.
+Without it a webhook delivery is refused when the schedule is saved.
+
+### Your own channels and formats
+
+A channel implements `Lotus.Delivery.Channel` (`formats/0`, `validate_config/1`,
+`deliver/3`), a format `Lotus.Delivery.Format` (`render/1`). Register them by
+name:
+
+```elixir
+config :lotus,
+  delivery: [
+    channels: %{"email" => MyApp.Lotus.EmailChannel},
+    formats: %{"xlsx" => MyApp.Lotus.XlsxFormat}
+  ]
+```
+
+A delivery stores the names, never a module: its settings are data people
+enter, so a channel validates them and takes nothing else from them.
+
+### Outcomes and retries
+
+Each delivery's outcome is recorded on the run, in `details["deliveries"]` by
+delivery id. A failed delivery fails the run. With Oban the run is retried, and
+the retry sends only the deliveries that failed, so nobody gets the same email
+twice. `[:lotus, :delivery, :start | :stop | :exception]` telemetry brackets
+each delivery.
 
 ## Observing runs
 

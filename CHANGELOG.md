@@ -42,6 +42,19 @@
 
 ### Added
 
+- **Schedules deliver their results.** A schedule's `deliveries` each name
+  a channel, a format and the channel's settings.
+  - Formats: `"csv"` (a file per result), `"json"` and `"html"` (a table
+    per result, escaped).
+  - The `"webhook"` channel POSTs the attachments as JSON to an `https` URL
+    with optional headers. It uses Req, a new optional dependency.
+  - A host or a package registers more channels and formats by name
+    (`Lotus.Delivery.Channel`, `Lotus.Delivery.Format`), an email channel
+    for example.
+  - Each delivery's outcome is recorded on the run. A failed delivery fails
+    the run, and a retry sends only what failed.
+  - `[:lotus, :delivery, ...]` telemetry brackets each delivery.
+
 - **Schedules: run a saved query or a dashboard on a cron expression, in a
   time zone, once per cluster.** `Lotus.Schedules` creates, lists and
   updates them and lists their runs. `cron` is read as the wall clock of

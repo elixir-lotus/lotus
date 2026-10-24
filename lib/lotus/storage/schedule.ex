@@ -8,7 +8,7 @@ defmodule Lotus.Storage.Schedule do
   import Ecto.Changeset
 
   alias Lotus.Schedules.Cron
-  alias Lotus.Storage.{Dashboard, Query, ScheduleRun}
+  alias Lotus.Storage.{Dashboard, Query, ScheduleDelivery, ScheduleRun}
 
   @type t :: %__MODULE__{
           id: term(),
@@ -19,6 +19,7 @@ defmodule Lotus.Storage.Schedule do
           time_zone: String.t(),
           enabled: boolean(),
           params: map(),
+          deliveries: [ScheduleDelivery.t()],
           next_run_at: DateTime.t() | nil,
           last_run_at: DateTime.t() | nil,
           owner_id: String.t() | nil,
@@ -42,6 +43,7 @@ defmodule Lotus.Storage.Schedule do
              :time_zone,
              :enabled,
              :params,
+             :deliveries,
              :next_run_at,
              :last_run_at,
              :owner_id,
@@ -61,6 +63,8 @@ defmodule Lotus.Storage.Schedule do
     field(:owner_id, :string)
     field(:tenant_id, :string)
 
+    embeds_many(:deliveries, ScheduleDelivery, on_replace: :delete)
+
     belongs_to(:query, Query)
     belongs_to(:dashboard, Dashboard)
     has_many(:runs, ScheduleRun)
@@ -75,6 +79,7 @@ defmodule Lotus.Storage.Schedule do
   def changeset(schedule, attrs) do
     schedule
     |> cast(attrs, @permitted)
+    |> cast_embed(:deliveries, with: &ScheduleDelivery.changeset/2)
     |> validate_required(@required)
     |> validate_length(:name, min: 1, max: 255)
     |> validate_target()

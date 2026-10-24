@@ -39,7 +39,9 @@ defmodule Lotus.Schedules do
   leaves the cache warm. It has no actor unless the `:actor` callback of the
   scheduler config gives one; see `Lotus.Scheduler.Worker`.
 
-  Each run is recorded in `lotus_schedule_runs` (`list_runs/2`).
+  Each run is recorded in `lotus_schedule_runs` (`list_runs/2`). A
+  schedule's `deliveries` send each successful run somewhere; see
+  `Lotus.Delivery`.
 
   ## Content changes
 

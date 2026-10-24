@@ -51,6 +51,7 @@ defmodule Lotus.MixProject do
       {:nimble_options, "~> 1.0"},
       {:oban, "~> 2.19", optional: true},
       {:postgrex, "~> 0.20", optional: true},
+      {:req, "~> 0.5", optional: true},
       {:sake, "~> 0.4", optional: true},
       {:telemetry, "~> 1.0"},
       {:tz, "~> 0.28"},
@@ -117,7 +118,10 @@ defmodule Lotus.MixProject do
           Lotus.Scheduler,
           ~r/Lotus\.Scheduler\..+/,
           Lotus.Storage.Schedule,
-          Lotus.Storage.ScheduleRun
+          Lotus.Storage.ScheduleDelivery,
+          Lotus.Storage.ScheduleRun,
+          Lotus.Delivery,
+          ~r/Lotus\.Delivery\..+/
         ],
         "Data Sources": [
           Lotus.Source,
