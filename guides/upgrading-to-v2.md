@@ -90,7 +90,7 @@ types stay.
 `Lotus.Source.Adapter` was one behaviour with 41 callbacks, 32 of them
 optional, and Lotus checked `function_exported?/3` on every call to decide
 what an adapter could do. In v2.0 it is the core behaviour with the nine
-required callbacks, and the rest live in five capability behaviours:
+required callbacks, and the rest live in capability behaviours:
 
 | Behaviour | Callbacks |
 |---|---|
@@ -99,6 +99,7 @@ required callbacks, and the rest live in five capability behaviours:
 | `Lotus.Source.Adapter.Binding` | `transform_statement/2`, `substitute_variable/5`, `substitute_list_variable/5`, `transform_bound_query/3`, `db_type_to_lotus_type/2` |
 | `Lotus.Source.Adapter.Shaping` | `apply_filters/3`, `apply_sorts/3`, `apply_pagination/3`, `limit_query/3`, `supported_filter_operators/1`, `quote_identifier/2` |
 | `Lotus.Source.Adapter.Editor` | `editor_config/1`, `query_language/1`, `example_query/3`, `ai_context/1` |
+| `Lotus.Source.Adapter.Session` | `setup_session/3` (new in v2.0: connection settings for one statement, for row-level security in the database) |
 
 `supports_feature?/2`, `can_handle?/1`, `wrap/2` and the process callbacks
 (`shared_children/0`, `source_children/2`, `source_started/2`,
@@ -116,7 +117,7 @@ There is no 1.x deprecation for this change; it lands in v2.0 only.
 Who is affected: an adapter that implements `Lotus.Source.Adapter` directly,
 such as `lotus_elasticsearch`. Adapters built with
 `use Lotus.Source.Adapters.Ecto, dialect: ...` (such as `lotus_clickhouse`)
-declare every capability through the macro and need no change. Host apps
+declare the first five capabilities through the macro and need no change. Host apps
 that call `Lotus.Source.Adapter` dispatch functions are not affected.
 
 What to do:

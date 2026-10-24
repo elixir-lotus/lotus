@@ -44,9 +44,9 @@ defmodule Lotus.Source.Adapters.Ecto do
         use Lotus.Source.Adapters.Ecto, dialect: LotusMSSql.Dialect
       end
 
-  The `use` macro declares `Lotus.Source.Adapter` and every capability
-  behaviour (`Lotus.Source.Adapter.Introspection`, `Preflight`, `Binding`,
-  `Shaping` and `Editor`) and injects default implementations for all their
+  The `use` macro declares `Lotus.Source.Adapter` and the capability
+  behaviours `Lotus.Source.Adapter.Introspection`, `Preflight`, `Binding`,
+  `Shaping` and `Editor`, and injects default implementations for all their
   callbacks, delegating shared Ecto logic to helper
   functions in this module and dialect-specific callbacks to the provided
   `:dialect` module. All callbacks are `defoverridable`.

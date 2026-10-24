@@ -494,9 +494,11 @@ defmodule Lotus.Runner do
 
   defp vars(opts), do: Keyword.get(opts, :vars) || %{}
 
+  # The statement's session settings are applied inside its transaction, so
+  # they end with it; a source that cannot apply them does not run it.
   defp exec_read_only(
          %Adapter{} = adapter,
-         %Statement{body: body, params: params},
+         %Statement{body: body, params: params, session: session},
          relations,
          opts
        ) do
@@ -505,12 +507,14 @@ defmodule Lotus.Runner do
       fn _state ->
         timeout = Keyword.get(opts, :timeout, 15_000)
 
-        {elapsed_us, res} =
-          :timer.tc(fn ->
-            Adapter.execute_query(adapter, body, params, opts ++ [timeout: timeout])
-          end)
+        with :ok <- Adapter.setup_session(adapter, session || %{}, opts) do
+          {elapsed_us, res} =
+            :timer.tc(fn ->
+              Adapter.execute_query(adapter, body, params, opts ++ [timeout: timeout])
+            end)
 
-        handle_query_result(res, elapsed_us, adapter, relations, Keyword.get(opts, :scope))
+          handle_query_result(res, elapsed_us, adapter, relations, Keyword.get(opts, :scope))
+        end
       end,
       opts
     )

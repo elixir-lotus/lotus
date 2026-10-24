@@ -27,6 +27,16 @@ defmodule Lotus.Query.Statement do
       a `count_spec` produced by `apply_pagination/3`, or search-path hints.
       Core only reads keys it owns; adapters may stash their own keys.
 
+    * `:session` — settings the source applies to the connection for this
+      statement only, as `%{"app.tenant_id" => "acme"}`. A `:before_query`
+      plug sets them for row-level security: a policy in the database reads
+      them, so every statement of the actor is filtered without being
+      rewritten. They are applied inside the statement's transaction by an
+      adapter that declares `Lotus.Source.Adapter.Session`, are part of the
+      result cache key, and carry over to the count run of a page. A source
+      whose adapter cannot apply them refuses the statement rather than run
+      it unfiltered. Empty by default.
+
   ## Immutability contract
 
   Pipeline callbacks return a new `%Statement{}` with the relevant field updated.
@@ -46,15 +56,22 @@ defmodule Lotus.Query.Statement do
   """
   @type params :: list() | map()
 
+  @typedoc """
+  Connection settings for one statement, by name. A value is a string, or an
+  integer or boolean Lotus turns into one.
+  """
+  @type session :: %{optional(String.t()) => String.t() | integer() | boolean()}
+
   @type t :: %__MODULE__{
           adapter: module() | nil,
           body: body(),
           params: params(),
-          meta: map()
+          meta: map(),
+          session: session()
         }
 
   @enforce_keys [:body]
-  defstruct adapter: nil, body: nil, params: [], meta: %{}
+  defstruct adapter: nil, body: nil, params: [], meta: %{}, session: %{}
 
   @doc """
   Build a statement from a body and optional bound params.

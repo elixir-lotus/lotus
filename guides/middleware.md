@@ -556,7 +556,39 @@ the plug works for every source type.
 
 ### Row-Level Security
 
-Block queries that don't include a tenant filter:
+On PostgreSQL, let the database filter the rows. A `:before_query` plug puts
+the actor's attributes in the statement's `:session`; Lotus applies them to the
+connection inside the statement's transaction, and a policy reads them:
+
+```elixir
+defmodule MyApp.TenantSession do
+  def init(opts), do: opts
+
+  def call(%{statement: statement, context: %{tenant_id: id}} = payload, _opts),
+    do: {:cont, %{payload | statement: %{statement | session: %{"app.tenant_id" => id}}}}
+
+  def call(_payload, _opts), do: {:halt, "tenant context required"}
+end
+```
+
+```sql
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_rows ON orders
+  USING (tenant_id = current_setting('app.tenant_id', true));
+```
+
+Every statement the actor runs is filtered, however it is written: subqueries,
+CTEs and joins included, and the count of a page too. The settings are part of
+the result cache key, so tenants never share an entry. Names must be custom
+settings (`prefix.name`); built-in ones such as `role` or
+`transaction_read_only` are refused. A source whose adapter does not declare
+`Lotus.Source.Adapter.Session` refuses a statement with settings rather than
+run it unfiltered. The role Lotus connects as must not own the tables or be a
+superuser, which bypass policies (or use `FORCE ROW LEVEL SECURITY` for the
+owner).
+
+Without database policies, a plug can at least refuse queries that don't
+include a tenant filter:
 
 ```elixir
 defmodule MyApp.TenantMiddleware do

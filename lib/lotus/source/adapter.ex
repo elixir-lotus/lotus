@@ -42,6 +42,8 @@ defmodule Lotus.Source.Adapter do
       and identifier quoting
     * `Lotus.Source.Adapter.Editor` — editor configuration, query language,
       example queries and AI context
+    * `Lotus.Source.Adapter.Session` — connection settings for one
+      statement, for row-level security in the database
 
   For example, a search engine adapter that filters and sorts but has no
   schemas:
@@ -60,7 +62,8 @@ defmodule Lotus.Source.Adapter do
   not enough: Lotus ignores it and logs a warning. `capabilities/1` says
   what an adapter declares, and `mix lotus.adapter.check` lists it with
   what is missing. `use Lotus.Source.Adapters.Ecto` declares every
-  capability.
+  capability but `Session`, which only `Lotus.Source.Adapters.Postgres`
+  declares.
 
   The `:capabilities` field of `%Adapter{}` holds the declared
   capabilities. `with_capabilities/1` fills it when the adapter is built,
@@ -152,7 +155,7 @@ defmodule Lotus.Source.Adapter do
   A capability behaviour an adapter module declares, named by its last
   segment: `:introspection` is `Lotus.Source.Adapter.Introspection`.
   """
-  @type capability :: :introspection | :preflight | :binding | :shaping | :editor
+  @type capability :: :introspection | :preflight | :binding | :shaping | :editor | :session
 
   @typedoc """
   What a statement cost the engine, as `execute_query/4` may report it. Every
@@ -178,6 +181,7 @@ defmodule Lotus.Source.Adapter do
           | {:binding, Lotus.Source.Adapter.Binding}
           | {:shaping, Lotus.Source.Adapter.Shaping}
           | {:editor, Lotus.Source.Adapter.Editor}
+          | {:session, Lotus.Source.Adapter.Session}
 
   @type t :: %__MODULE__{
           name: String.t(),
@@ -195,7 +199,8 @@ defmodule Lotus.Source.Adapter do
     preflight: Lotus.Source.Adapter.Preflight,
     binding: Lotus.Source.Adapter.Binding,
     shaping: Lotus.Source.Adapter.Shaping,
-    editor: Lotus.Source.Adapter.Editor
+    editor: Lotus.Source.Adapter.Editor,
+    session: Lotus.Source.Adapter.Session
   ]
 
   @capability_map Map.new(@capability_behaviours)
@@ -758,6 +763,49 @@ defmodule Lotus.Source.Adapter do
   @spec transaction(t(), (term() -> any()), keyword()) :: {:ok, any()} | {:error, any()}
   def transaction(%__MODULE__{module: mod, state: state}, fun, opts) do
     mod.transaction(state, fun, opts)
+  end
+
+  @doc """
+  Apply a statement's session settings through the adapter, inside its
+  transaction (see `Lotus.Source.Adapter.Session`).
+
+  Names are strings, and values are strings, or integers and booleans turned
+  into strings. An empty map does nothing. An adapter without the `:session`
+  capability, or a setting that is neither, is an error: the statement must
+  not run without the settings meant to filter it.
+  """
+  @spec setup_session(t(), map(), keyword()) :: :ok | {:error, term()}
+  def setup_session(adapter, settings, opts \\ [])
+
+  def setup_session(%__MODULE__{}, settings, _opts) when settings == %{}, do: :ok
+
+  def setup_session(%__MODULE__{module: mod, state: state} = adapter, settings, opts)
+      when is_map(settings) do
+    cond do
+      not has?(adapter, :session) ->
+        {:error,
+         "Data source #{inspect(adapter.name)} cannot apply session settings, " <>
+           "so the statement was not run"}
+
+      normalized = session_settings(settings) ->
+        mod.setup_session(state, normalized, opts)
+
+      true ->
+        {:error, "Session settings take string names and string, integer or boolean values"}
+    end
+  end
+
+  defp session_settings(settings) do
+    Enum.reduce_while(settings, %{}, fn
+      {name, value}, acc when is_binary(name) and is_binary(value) ->
+        {:cont, Map.put(acc, name, value)}
+
+      {name, value}, acc when is_binary(name) and (is_integer(value) or is_boolean(value)) ->
+        {:cont, Map.put(acc, name, to_string(value))}
+
+      _setting, _acc ->
+        {:halt, nil}
+    end)
   end
 
   @doc "List all schemas via the adapter."

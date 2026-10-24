@@ -42,6 +42,17 @@
 
 ### Added
 
+- **Connection settings for one statement, for row-level security.**
+  `%Lotus.Query.Statement{}` has a `:session` map that a `:before_query`
+  plug fills from the actor, such as `%{"app.tenant_id" => "acme"}`. An
+  adapter that declares the new `Lotus.Source.Adapter.Session` capability
+  applies it inside the statement's transaction, so a database policy reads
+  it with `current_setting/2`. `Lotus.Source.Adapters.Postgres` declares it
+  and takes custom settings (`prefix.name`) only. The settings key the
+  result cache and carry over to the count run of a page. A source that
+  can't apply them refuses the statement instead of returning unfiltered
+  rows.
+
 - **AI requests can be refused, grounded and observed.**
   - The new `:before_ai_request` middleware event fires before
     `Lotus.AI.generate_query/1`, `generate_query_with_context/1`,
