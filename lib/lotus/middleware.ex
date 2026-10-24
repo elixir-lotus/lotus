@@ -72,6 +72,13 @@ defmodule Lotus.Middleware do
   and `:cached` when it was served from the result cache. Both events carry
   it, so a plug that meters usage or cost can tell a read from an execution.
 
+  A stream (`Lotus.stream_query/3`, `Lotus.stream_statement/4`) fires
+  `:before_query` and `:before_execute` once, with origin `:executed`, and
+  `:after_query` once per chunk of rows, with origin `:streamed` and the
+  chunk as `:result`. A plug that masks or drops columns therefore applies to
+  every chunk; a halt stops the stream. A plug that needs the whole result
+  (a total, a row count) sees one chunk at a time.
+
   #### The `:assigns` payload
 
   `:assigns` carries what a `:before_execute` plug decided to the

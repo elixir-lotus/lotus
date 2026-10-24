@@ -44,6 +44,8 @@ defmodule Lotus.Source.Adapter do
       example queries and AI context
     * `Lotus.Source.Adapter.Session` — connection settings for one
       statement, for row-level security in the database
+    * `Lotus.Source.Adapter.Streaming` — reading a statement's rows as they
+      are consumed, for large exports
 
   For example, a search engine adapter that filters and sorts but has no
   schemas:
@@ -63,7 +65,8 @@ defmodule Lotus.Source.Adapter do
   what an adapter declares, and `mix lotus.adapter.check` lists it with
   what is missing. `use Lotus.Source.Adapters.Ecto` declares every
   capability but `Session`, which only `Lotus.Source.Adapters.Postgres`
-  declares.
+  declares, and `Streaming`, which the built-in Postgres, MySQL and SQLite
+  adapters declare.
 
   The `:capabilities` field of `%Adapter{}` holds the declared
   capabilities. `with_capabilities/1` fills it when the adapter is built,
@@ -155,7 +158,8 @@ defmodule Lotus.Source.Adapter do
   A capability behaviour an adapter module declares, named by its last
   segment: `:introspection` is `Lotus.Source.Adapter.Introspection`.
   """
-  @type capability :: :introspection | :preflight | :binding | :shaping | :editor | :session
+  @type capability ::
+          :introspection | :preflight | :binding | :shaping | :editor | :session | :streaming
 
   @typedoc """
   What a statement cost the engine, as `execute_query/4` may report it. Every
@@ -182,6 +186,7 @@ defmodule Lotus.Source.Adapter do
           | {:shaping, Lotus.Source.Adapter.Shaping}
           | {:editor, Lotus.Source.Adapter.Editor}
           | {:session, Lotus.Source.Adapter.Session}
+          | {:streaming, Lotus.Source.Adapter.Streaming}
 
   @type t :: %__MODULE__{
           name: String.t(),
@@ -200,7 +205,8 @@ defmodule Lotus.Source.Adapter do
     binding: Lotus.Source.Adapter.Binding,
     shaping: Lotus.Source.Adapter.Shaping,
     editor: Lotus.Source.Adapter.Editor,
-    session: Lotus.Source.Adapter.Session
+    session: Lotus.Source.Adapter.Session,
+    streaming: Lotus.Source.Adapter.Streaming
   ]
 
   @capability_map Map.new(@capability_behaviours)
@@ -806,6 +812,20 @@ defmodule Lotus.Source.Adapter do
       _setting, _acc ->
         {:halt, nil}
     end)
+  end
+
+  @doc """
+  Stream a statement's rows through the adapter, inside its transaction (see
+  `Lotus.Source.Adapter.Streaming`). An adapter without the `:streaming`
+  capability returns `{:error, :unsupported}`; `Lotus.Runner.stream/4` runs
+  the statement whole for it instead.
+  """
+  @spec stream_query(t(), term(), list() | map(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def stream_query(%__MODULE__{module: mod, state: state} = adapter, body, params, opts) do
+    if has?(adapter, :streaming),
+      do: mod.stream_query(state, body, params, opts),
+      else: {:error, :unsupported}
   end
 
   @doc "List all schemas via the adapter."

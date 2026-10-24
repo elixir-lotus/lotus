@@ -393,7 +393,7 @@ makes a useful starting point for a new adapter.
 source needs — `execute_query/4`, `transaction/3`, `list_tables/3`,
 `describe_table/3`, `builtin_denies/1`, `health_check/1`, `disconnect/1`,
 `format_error/2` and `source_type/1`. The rest of the contract is split into
-six capability behaviours. Declare the ones your source supports and
+seven capability behaviours. Declare the ones your source supports and
 implement every callback of each; Lotus uses a documented default for the
 ones you leave out (see
 [Core and Capability Behaviours](#core-and-capability-behaviours)). A useful
@@ -554,7 +554,7 @@ A real adapter implements `extract_accessed_resources/2` instead of opting
 out.
 
 ## Core and Capability Behaviours
-The contract is a core behaviour and six capability behaviours, the way
+The contract is a core behaviour and seven capability behaviours, the way
 `Ecto.Adapter` is split into `Ecto.Adapter.Queryable`, `Ecto.Adapter.Schema`
 and the rest. Each capability groups callbacks that only make sense
 together, so the compiler checks that a capability is implemented
@@ -596,6 +596,7 @@ MyApp.Adapters.Echo
   shaping        declared
   editor         declared
   session        not declared
+  streaming      not declared
 ```
 
 **`Lotus.Source.Adapter.Introspection`**
@@ -658,6 +659,12 @@ MyApp.Adapters.Echo
 | Callback | Default without the capability | When to implement |
 |---|---|---|
 | `setup_session/3` | a statement with a session is refused | Apply a statement's `:session` settings to the connection, inside its transaction and for it alone, so a policy in the database can filter rows by them. `Lotus.Source.Adapters.Postgres` does it with `set_config(name, value, true)`. Refuse a setting your source cannot apply: running the statement without it would return the rows it was meant to hide. |
+
+**`Lotus.Source.Adapter.Streaming`**
+
+| Callback | Default without the capability | When to implement |
+|---|---|---|
+| `stream_query/4` | the statement runs whole, and its rows are handed over in chunks | Return a lazy stream of `%{columns, rows}` chunks of at most `opts[:max_rows]` rows, read from the source as it is enumerated, so `Lotus.stream_query/3` and `Lotus.Export.stream/4` hold one chunk at a time. Lotus enumerates it inside your `transaction/3`. The built-in Ecto adapters use `Ecto.Adapters.SQL.stream/4`. |
 
 **Optional callbacks of `Lotus.Source.Adapter`:**
 

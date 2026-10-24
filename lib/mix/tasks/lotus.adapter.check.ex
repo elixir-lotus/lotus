@@ -15,6 +15,7 @@ defmodule Mix.Tasks.Lotus.Adapter.Check do
         shaping        not declared, ignores apply_filters/3, apply_sorts/3
         editor         declared, missing example_query/3
         session        not declared
+        streaming      not declared
 
   `Lotus.Source.Adapter` dispatches a capability's callbacks only to a
   module that declares its behaviour, so a capability is one of:

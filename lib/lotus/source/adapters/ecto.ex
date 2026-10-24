@@ -59,6 +59,7 @@ defmodule Lotus.Source.Adapters.Ecto do
   @behaviour Lotus.Source.Adapter.Shaping
   @behaviour Lotus.Source.Adapter.Editor
 
+  alias Ecto.Adapters.SQL, as: EctoSQL
   alias Lotus.Query.Filter
   alias Lotus.Query.OptionalClause
   alias Lotus.Query.Statement
@@ -885,6 +886,26 @@ defmodule Lotus.Source.Adapters.Ecto do
     end
   rescue
     e -> {:error, Exception.message(e)}
+  end
+
+  @doc false
+  # `c:Lotus.Source.Adapter.Streaming.stream_query/4` for the built-in Ecto
+  # adapters. Built from the repo the process runs on, so a dynamic repo's
+  # stream reads from it; enumerated inside the statement's transaction.
+  def do_stream_query(state, sql, params, opts) do
+    stream_opts = [
+      max_rows: Keyword.get(opts, :max_rows, 500),
+      timeout: Keyword.get(opts, :timeout, 15_000)
+    ]
+
+    with_repo(state, fn repo ->
+      stream =
+        repo.get_dynamic_repo()
+        |> EctoSQL.stream(sql, params, stream_opts)
+        |> Stream.map(fn raw -> %{columns: raw.columns || [], rows: raw.rows || []} end)
+
+      {:ok, stream}
+    end)
   end
 
   @doc false

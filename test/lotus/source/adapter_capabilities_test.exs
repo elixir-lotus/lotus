@@ -105,10 +105,12 @@ defmodule Lotus.Source.AdapterCapabilitiesTest do
   @filters [Filter.new("id", :eq, 1)]
 
   describe "capabilities/1" do
-    test "the built-in Ecto adapters declare every capability, and Postgres :session too" do
+    test "the Ecto adapters declare the first five capabilities, the built-in ones :streaming, and Postgres :session" do
       all = Keyword.keys(Adapter.capability_behaviours())
 
-      for mod <- [EctoAdapter | EctoAdapter.builtin_adapters()] do
+      assert Adapter.capabilities(EctoAdapter) == all -- [:session, :streaming]
+
+      for mod <- EctoAdapter.builtin_adapters() do
         expected =
           if mod == Lotus.Source.Adapters.Postgres, do: all, else: all -- [:session]
 

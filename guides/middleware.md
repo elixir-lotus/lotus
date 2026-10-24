@@ -153,6 +153,10 @@ by table — drop or mask columns of one relation, annotate another — does so
 without a second analysis. Both events also carry `:origin`, `:executed` or
 `:cached`.
 
+A stream (`Lotus.stream_query/3`) fires `:before_query` and `:before_execute`
+once, and `:after_query` once per chunk of rows with `origin: :streamed`, so a
+plug that masks columns masks every chunk, and a halt stops the stream.
+
 The two query hooks answer different questions, and both can be registered:
 
 | Hook | Question |

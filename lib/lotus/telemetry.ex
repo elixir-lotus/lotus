@@ -41,10 +41,13 @@ defmodule Lotus.Telemetry do
   **Metadata:** the start metadata, with `:statement` now the statement that
   ran, plus:
 
-    * `:result` - The `Lotus.Result` returned to the caller
+    * `:result` - The `Lotus.Result` returned to the caller. For a stream,
+      a result with the columns, no rows and the number of rows streamed as
+      `:num_rows`
     * `:relations` - What preflight knew about the statement: a list of
       `{schema, table}`, `{:unrestricted, reason}` or `{:skipped, reason}`
-    * `:origin` - `:executed` or `:cached`
+    * `:origin` - `:executed`, `:cached`, or `:streamed` for a stream
+      (`Lotus.stream_query/3`), whose `:row_count` is the rows streamed
 
   ### `[:lotus, :run, :exception]`
 
