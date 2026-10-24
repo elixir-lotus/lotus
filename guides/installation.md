@@ -156,7 +156,7 @@ def down, do: Lotus.Migrations.down(prefix: "analytics")
 `Lotus.Migrations.migrated_version/1` reports the version the database is on.
 
 > **Postgres is versioned; MySQL and SQLite are not.** The Postgres migration
-> runs a numbered chain (V1..V5), so `mix ecto.migrate` applies later changes —
+> runs a numbered chain (V1..V7), so `mix ecto.migrate` applies later changes —
 > including the v1.0 `data_repo` → `data_source` rename and the new
 > `query_language` column — on its own. The MySQL and SQLite migrations are
 > single-file and unversioned, so a host upgrading an existing 0.x install must

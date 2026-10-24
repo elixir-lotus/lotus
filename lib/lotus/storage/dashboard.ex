@@ -25,6 +25,8 @@ defmodule Lotus.Storage.Dashboard do
           settings: map(),
           public_token: String.t() | nil,
           auto_refresh_seconds: non_neg_integer() | nil,
+          owner_id: String.t() | nil,
+          tenant_id: String.t() | nil,
           cards: [DashboardCard.t()] | Ecto.Association.NotLoaded.t(),
           filters: [DashboardFilter.t()] | Ecto.Association.NotLoaded.t(),
           inserted_at: DateTime.t(),
@@ -44,6 +46,8 @@ defmodule Lotus.Storage.Dashboard do
              :settings,
              :public_token,
              :auto_refresh_seconds,
+             :owner_id,
+             :tenant_id,
              :inserted_at,
              :updated_at
            ]}
@@ -54,6 +58,8 @@ defmodule Lotus.Storage.Dashboard do
     field(:settings, :map, default: %{})
     field(:public_token, :string)
     field(:auto_refresh_seconds, :integer)
+    field(:owner_id, :string)
+    field(:tenant_id, :string)
 
     has_many(:cards, DashboardCard, on_delete: :delete_all)
     has_many(:filters, DashboardFilter, on_delete: :delete_all)
@@ -75,6 +81,7 @@ defmodule Lotus.Storage.Dashboard do
     |> validate_length(:name, min: 1, max: 255)
     |> validate_auto_refresh_seconds()
     |> unique_constraint(:name, name: "lotus_dashboards_name_index")
+    |> unique_constraint(:name, name: "lotus_dashboards_tenant_id_name_index")
     |> unique_constraint(:public_token, name: "lotus_dashboards_public_token_index")
   end
 
