@@ -181,8 +181,14 @@ defmodule Lotus.Middleware do
   makes the mutation function return `{:error, {:halted, reason}}` and nothing
   is written. The `:halted` tag keeps a refusal apart from
   `{:error, %Ecto.Changeset{}}` and `{:error, :not_found}`, which the same
-  functions already return. A plug may not change the changeset: Lotus writes
-  the changeset it built.
+  functions already return.
+
+  A plug may change the changeset: Lotus writes the changeset the last plug
+  continued with, so a plug can put a field the caller does not set, such as a
+  query's `owner_id` or `tenant_id` from the `:context`. A changeset of
+  another record, or a payload without one, is ignored and Lotus writes the
+  changeset it had. A field the plug puts is not validated again, and an
+  invalid changeset is still not written.
 
   #### Public sharing
 

@@ -29,6 +29,8 @@ defmodule Lotus.Storage.Query do
           data_source: String.t() | nil,
           search_path: String.t() | nil,
           query_language: String.t() | nil,
+          owner_id: String.t() | nil,
+          tenant_id: String.t() | nil,
           inserted_at: DateTime.t(),
           updated_at: DateTime.t()
         }
@@ -48,6 +50,8 @@ defmodule Lotus.Storage.Query do
              :data_source,
              :search_path,
              :query_language,
+             :owner_id,
+             :tenant_id,
              :inserted_at,
              :updated_at
            ]}
@@ -59,6 +63,8 @@ defmodule Lotus.Storage.Query do
     field(:data_source, :string)
     field(:search_path, :string)
     field(:query_language, :string)
+    field(:owner_id, :string)
+    field(:tenant_id, :string)
 
     embeds_many(:variables, QueryVariable, on_replace: :delete)
 
@@ -548,7 +554,9 @@ defmodule Lotus.Storage.Query do
 
   defp maybe_add_unique_constraint(changeset) do
     if Config.unique_names?() do
-      unique_constraint(changeset, :name, name: "lotus_queries_name_index")
+      changeset
+      |> unique_constraint(:name, name: "lotus_queries_name_index")
+      |> unique_constraint(:name, name: "lotus_queries_tenant_id_name_index")
     else
       changeset
     end

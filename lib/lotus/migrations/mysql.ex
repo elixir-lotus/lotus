@@ -18,11 +18,13 @@ defmodule Lotus.Migrations.MySQL do
       add(:data_source, :string, size: 255)
       add(:search_path, :string, size: 255)
       add(:query_language, :string, size: 32)
+      add(:owner_id, :string, size: 255)
+      add(:tenant_id, :string, size: 255)
       add(:inserted_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
       add(:updated_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
     end
 
-    create(unique_index(:lotus_queries, [:name], name: "lotus_queries_name_index"))
+    create_tenant_indexes(:lotus_queries)
 
     create_if_not_exists table(:lotus_query_visualizations, primary_key: false) do
       add(:id, :serial, primary_key: true)
@@ -54,11 +56,13 @@ defmodule Lotus.Migrations.MySQL do
       add(:settings, :json, null: false, default: fragment("('{}')"))
       add(:public_token, :string, size: 255)
       add(:auto_refresh_seconds, :integer)
+      add(:owner_id, :string, size: 255)
+      add(:tenant_id, :string, size: 255)
       add(:inserted_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
       add(:updated_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
     end
 
-    create(unique_index(:lotus_dashboards, [:name], name: "lotus_dashboards_name_index"))
+    create_tenant_indexes(:lotus_dashboards)
 
     create(
       unique_index(:lotus_dashboards, [:public_token],
@@ -160,11 +164,11 @@ defmodule Lotus.Migrations.MySQL do
     drop(table(:lotus_dashboard_cards))
 
     drop(index(:lotus_dashboards, [:public_token], name: "lotus_dashboards_public_token_index"))
-    drop(index(:lotus_dashboards, [:name], name: "lotus_dashboards_name_index"))
+    drop_tenant_indexes(:lotus_dashboards)
     drop(table(:lotus_dashboards))
 
     drop(table(:lotus_query_visualizations))
-    drop(index(:lotus_queries, [:name], name: "lotus_queries_name_index"))
+    drop_tenant_indexes(:lotus_queries)
     drop(table(:lotus_queries))
 
     :ok
@@ -172,6 +176,21 @@ defmodule Lotus.Migrations.MySQL do
 
   @impl Lotus.Migration
   def migrated_version(_opts), do: 0
+
+  # A name is unique within a tenant. MySQL has no partial indexes, and a
+  # unique index treats every NULL as distinct, so the index is on the tenant
+  # with NULL read as '' (a tenant id is never empty: Lotus casts "" to nil).
+  defp create_tenant_indexes(table) do
+    create(unique_index(table, ["(COALESCE(tenant_id, ''))", :name], name: "#{table}_name_index"))
+    create(index(table, [:tenant_id]))
+    create(index(table, [:owner_id]))
+  end
+
+  defp drop_tenant_indexes(table) do
+    drop(index(table, [:owner_id]))
+    drop(index(table, [:tenant_id]))
+    drop(index(table, [:name], name: "#{table}_name_index"))
+  end
 
   # MySQL migrations are single-file and unversioned, so there is no V4-style
   # compensating migration (as on Postgres) to rename `data_repo` →
