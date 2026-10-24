@@ -2,8 +2,8 @@ defmodule Lotus.Delivery.Channel do
   @moduledoc """
   Sends a run's attachments somewhere.
 
-  Lotus ships `"webhook"` (`Lotus.Delivery.Channels.Webhook`). A host or a
-  package adds its own by name, an email channel for example:
+  Lotus ships `"webhook"` (`Lotus.Delivery.Channels.Webhook`). Your app or
+  Lotus Pro adds its own by name, an email channel for example:
 
       config :lotus, delivery: [channels: %{"email" => MyApp.EmailChannel}]
 

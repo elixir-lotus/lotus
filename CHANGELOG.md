@@ -61,7 +61,7 @@
     per result, escaped).
   - The `"webhook"` channel POSTs the attachments as JSON to an `https` URL
     with optional headers. It uses Req, a new optional dependency.
-  - A host or a package registers more channels and formats by name
+  - Your app or Lotus Pro registers more channels and formats by name
     (`Lotus.Delivery.Channel`, `Lotus.Delivery.Format`), an email channel
     for example.
   - Each delivery's outcome is recorded on the run. A failed delivery fails

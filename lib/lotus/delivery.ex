@@ -24,8 +24,8 @@ defmodule Lotus.Delivery do
   ## Channels and formats
 
   Built in: the `"webhook"` channel, and the `"csv"`, `"json"` and `"html"`
-  formats. A host or a package registers more by name; a name here wins over
-  a built-in one:
+  formats. Your app or Lotus Pro registers more by name; a name here wins
+  over a built-in one:
 
       config :lotus,
         delivery: [

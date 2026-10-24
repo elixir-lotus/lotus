@@ -5,7 +5,7 @@ defmodule Lotus.Delivery.Format do
 
   Lotus ships `"csv"` (`Lotus.Delivery.Formats.CSV`), `"json"`
   (`Lotus.Delivery.Formats.JSON`) and `"html"` (`Lotus.Delivery.Formats.HTML`).
-  A host or a package adds its own by name:
+  Your app or Lotus Pro adds its own by name:
 
       config :lotus, delivery: [formats: %{"xlsx" => MyApp.XlsxFormat}]
   """
