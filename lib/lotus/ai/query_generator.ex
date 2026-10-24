@@ -102,7 +102,8 @@ if Code.ensure_loaded?(ReqLLM) do
             Tool.run(model_string, context, tools,
               api_key: api_key,
               temperature: temperature,
-              request: Request.metadata(:generation, request)
+              request: Request.metadata(:generation, request),
+              on_tool_call: Keyword.get(opts, :on_tool_call)
             )
             |> handle_response(model_string, data_source)
           end

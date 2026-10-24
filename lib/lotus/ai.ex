@@ -58,6 +58,26 @@ defmodule Lotus.AI do
   The `:usage` the functions return is that sum too. See `Lotus.Middleware`
   and `Lotus.Telemetry`.
 
+  ## Watching the tools run
+
+  Each function takes `:on_tool_call`, a function of one argument called as
+  each tool the model asks for starts and stops, so an interface can show
+  the work (the tables read, the values looked at) while the request is
+  still going:
+
+      parent = self()
+
+      Lotus.AI.generate_query_with_context(
+        prompt: "Revenue by month",
+        data_source: "postgres",
+        on_tool_call: &send(parent, {:ai_tool_call, &1})
+      )
+
+  See `Lotus.AI.Tool.run/4` for the events.
+
+  `explain_query/1` also takes `:on_text`, called with each piece of the
+  explanation as the model writes it.
+
   ## Error Handling
 
   The `generate_query/1` function returns structured error tuples that clients can
@@ -150,7 +170,7 @@ defmodule Lotus.AI do
                query_context: opts[:query_context],
                api_key: config.api_key,
                read_only: Keyword.get(opts, :read_only, true)
-             ] ++ actor_opts(opts)
+             ] ++ caller_opts(opts)
            ) do
       {:ok,
        %{
@@ -213,7 +233,7 @@ defmodule Lotus.AI do
                data_source: opts[:data_source],
                api_key: config.api_key,
                read_only: Keyword.get(opts, :read_only, true)
-             ] ++ actor_opts(opts)
+             ] ++ caller_opts(opts)
            ) do
       {:ok,
        %{
@@ -257,7 +277,7 @@ defmodule Lotus.AI do
           data_source: opts[:data_source],
           search_path: opts[:search_path],
           api_key: config.api_key
-        ] ++ actor_opts(opts)
+        ] ++ caller_opts(opts)
       )
     end
   end
@@ -309,7 +329,7 @@ defmodule Lotus.AI do
           fragment: opts[:fragment],
           data_source: opts[:data_source],
           api_key: config.api_key
-        ] ++ actor_opts(opts)
+        ] ++ caller_opts(opts)
       )
     end
   end
@@ -478,9 +498,10 @@ defmodule Lotus.AI do
   # every table it lists goes through Lotus with these options, so an
   # access-control plug or a scoped visibility resolver sees the same actor
   # for an AI-initiated action as for one the user made directly. Keys the
-  # caller omitted are left out rather than passed as nil.
-  defp actor_opts(opts) do
-    Enum.flat_map([:context, :scope], fn key ->
+  # caller omitted are left out rather than passed as nil. `:on_tool_call`
+  # and `:on_text` go with them, to the tool loop (`Lotus.AI.Tool.run/4`).
+  defp caller_opts(opts) do
+    Enum.flat_map([:context, :scope, :on_tool_call, :on_text], fn key ->
       case Keyword.fetch(opts, key) do
         {:ok, value} -> [{key, value}]
         :error -> []

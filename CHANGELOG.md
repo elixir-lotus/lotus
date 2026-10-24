@@ -58,6 +58,14 @@
   webhook says its fields (URL, and an authorization header, which its
   settings now take as `"authorization"`) and is not available without Req.
 
+- **`:on_tool_call` on the AI functions.** `Lotus.AI.generate_query_with_context/1`,
+  `generate_query/1`, `suggest_optimizations/1` and `explain_query/1` take a
+  function called as each tool the model asks for starts and stops (its
+  name, arguments, result and duration), so an interface can show the work
+  while the request is still going. `explain_query/1` also takes
+  `:on_text`, called with each piece of the explanation as the model
+  writes it (the rounds of its tool loop stream). See `Lotus.AI.Tool.run/4`.
+
 - **Alert conditions of your own, or Lotus Pro's.** A condition registered
   by name (`config :lotus, alerts: [conditions: %{"change" => MyMod}]`,
   behaviour `Lotus.Schedules.Alert.Condition`) can be a rule's `condition`,
@@ -231,6 +239,14 @@
   that reads it is refused (#332).
 
 ### Fixed
+
+- **A conversation that holds an explanation, optimization suggestions or a
+  provider error no longer crashes the next request.**
+  `Lotus.AI.Conversation.build_context_messages/4` raised a `CaseClauseError`
+  on roles other than `:user`, `:assistant` and `:error`, so asking the
+  assistant anything after "Explain query" or a failed call to the provider
+  failed. An explanation is now kept as the assistant's message and the
+  other roles are left out.
 
 - **The AI functions report every round's tokens.** When the model called
   tools before answering, `:usage` counted only the last round. It is now

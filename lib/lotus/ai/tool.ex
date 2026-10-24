@@ -96,6 +96,18 @@ if Code.ensure_loaded?(ReqLLM) do
       Defaults to logging a warning.
     - `:request` - Map of what the request is for, added to the telemetry
       metadata: `:feature`, `:data_source`, `:context`, `:scope`
+    - `:on_tool_call` - Function of one argument, called as each tool runs, so
+      that an interface can show the work while the request is still going.
+      It is called with `%{phase: :start, id: id, tool: name, args: args}`
+      before the tool runs and with the same keys plus `:result` (the text
+      handed back to the model) and `:duration` (native time units) after.
+      It runs in the process that runs the loop; what it raises is logged
+      and does not stop the request.
+    - `:on_text` - Function of one argument. When given, each round streams,
+      and it is called with each piece of the model's text as it arrives, so
+      that an interface can show an answer as it is written. A round that
+      ends in tool calls may have sent some text first. Like
+      `:on_tool_call`, what it raises is logged.
 
     ## Returns
 
@@ -107,11 +119,12 @@ if Code.ensure_loaded?(ReqLLM) do
     def run(model, context, tools, opts \\ []) do
       loop = %{
         model: model,
-        tools: tools,
+        tools: observe_tools(tools, Keyword.get(opts, :on_tool_call)),
         api_key: Keyword.fetch!(opts, :api_key),
         temperature: Keyword.get(opts, :temperature, 0.2),
         max: Keyword.get(opts, :max_iterations, @default_max_iterations),
-        on_max: Keyword.get(opts, :on_max_iterations)
+        on_max: Keyword.get(opts, :on_max_iterations),
+        on_text: Keyword.get(opts, :on_text)
       }
 
       metadata = opts |> Keyword.get(:request, %{}) |> Map.put(:model, model)
@@ -139,11 +152,7 @@ if Code.ensure_loaded?(ReqLLM) do
     defp do_run(loop, context, acc) do
       messages = ReqLLM.Context.to_list(context)
 
-      case ReqLLM.generate_text(loop.model, messages,
-             tools: loop.tools,
-             api_key: loop.api_key,
-             temperature: loop.temperature
-           ) do
+      case request(loop, messages) do
         {:ok, response} ->
           acc = %{
             acc
@@ -175,6 +184,65 @@ if Code.ensure_loaded?(ReqLLM) do
           Logger.error("AI service error: #{inspect(raw_error)}")
           {:error, Error.wrap(raw_error), acc}
       end
+    end
+
+    defp request(loop, messages) do
+      opts = [tools: loop.tools, api_key: loop.api_key, temperature: loop.temperature]
+
+      case loop.on_text do
+        nil ->
+          ReqLLM.generate_text(loop.model, messages, opts)
+
+        on_text ->
+          with {:ok, stream} <- ReqLLM.stream_text(loop.model, messages, opts) do
+            ReqLLM.StreamResponse.process_stream(stream,
+              on_result: &notify(on_text, &1, :on_text)
+            )
+          end
+      end
+    end
+
+    # Each tool's callback, wrapped to tell `:on_tool_call` when the tool
+    # starts and what it returned.
+    defp observe_tools(tools, nil), do: tools
+
+    defp observe_tools(tools, on_tool_call) when is_function(on_tool_call, 1),
+      do: Enum.map(tools, &observe_tool(&1, on_tool_call))
+
+    defp observe_tool(%{name: name, callback: callback} = tool, on_tool_call) do
+      %{
+        tool
+        | callback: fn args ->
+            call = %{id: make_ref(), tool: name, args: args}
+            notify(on_tool_call, Map.put(call, :phase, :start))
+            started = System.monotonic_time()
+            result = call_tool(callback, args)
+
+            notify(
+              on_tool_call,
+              Map.merge(call, %{
+                phase: :stop,
+                result: tool_result(result),
+                duration: System.monotonic_time() - started
+              })
+            )
+
+            result
+          end
+      }
+    end
+
+    defp call_tool(fun, args) when is_function(fun, 1), do: fun.(args)
+    defp call_tool({module, function}, args), do: apply(module, function, [args])
+    defp call_tool({module, function, extra}, args), do: apply(module, function, extra ++ [args])
+
+    defp tool_result({:ok, result}), do: result
+    defp tool_result({:error, reason}), do: {:error, reason}
+
+    defp notify(callback, event, name \\ :on_tool_call) do
+      callback.(event)
+    rescue
+      error -> Logger.warning("#{name} raised: " <> Exception.message(error))
     end
 
     defp add_tool_calls(acc, tool_calls),

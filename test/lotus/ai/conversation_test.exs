@@ -137,6 +137,28 @@ defmodule Lotus.AI.ConversationTest do
   end
 
   describe "build_context_messages/2" do
+    test "keeps an explanation as the assistant's and leaves out what the model has no use for" do
+      conversation = %{
+        Conversation.new()
+        | messages: [
+            %{role: :user, content: "Explain this", timestamp: DateTime.utc_now()},
+            %{role: :explanation, content: "It counts users.", timestamp: DateTime.utc_now()},
+            %{role: :service_error, content: "Rate limited", timestamp: DateTime.utc_now()},
+            %{role: :optimization, content: "", suggestions: [], timestamp: DateTime.utc_now()},
+            %{role: :user, content: "Now by month", timestamp: DateTime.utc_now()}
+          ]
+      }
+
+      messages = Conversation.build_context_messages(conversation, "System")
+
+      assert Enum.map(messages, &{&1.role, &1.content}) == [
+               {:system, "System"},
+               {:user, "Explain this"},
+               {:assistant, "It counts users."},
+               {:user, "Now by month"}
+             ]
+    end
+
     test "includes system prompt as first message" do
       conversation = Conversation.new()
       messages = Conversation.build_context_messages(conversation, "You are a SQL generator")

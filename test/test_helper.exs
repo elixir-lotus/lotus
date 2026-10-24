@@ -32,6 +32,7 @@ Mimic.copy(Lotus.Source)
 Mimic.copy(Lotus.Source.Adapter)
 Mimic.copy(Lotus.Visibility)
 Mimic.copy(ReqLLM)
+Mimic.copy(ReqLLM.StreamResponse)
 
 Sake.Test.start()
 
