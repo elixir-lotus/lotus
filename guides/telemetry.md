@@ -104,6 +104,22 @@ a failed validation — and `stacktrace` is present only when the call raised,
 threw or exited. A reorder emits one span per card it moves, and every card
 shares the outcome of the call.
 
+### AI Requests
+
+| Event                                 | Measurements                                                         | Metadata |
+|---------------------------------------|----------------------------------------------------------------------|----------|
+| `[:lotus, :ai, :request, :start]`     | `system_time`                                                        | `feature`, `model`, `data_source`, `context`, `scope` |
+| `[:lotus, :ai, :request, :stop]`      | `duration`, `prompt_tokens`, `completion_tokens`, `total_tokens`     | the start metadata, `usage`, `tool_calls`, `iterations` |
+| `[:lotus, :ai, :request, :exception]` | `duration`, `prompt_tokens`, `completion_tokens`, `total_tokens`     | the stop metadata, `reason` |
+
+An AI request is one call of a `Lotus.AI` function that reaches the model.
+Every round of its tool loop (the model asks for a table's columns, Lotus
+answers, the model goes on) is one call to the provider, and the tokens are
+summed over all of them. `tool_calls` lists the tools the model called, in
+order. `feature` is `:generation`, `:optimization` or `:explanation`. A
+request a `:before_ai_request` plug refused never reaches the model and emits
+nothing; the statements the model runs emit their own query events.
+
 ## Setup
 
 Attach handlers in your application's `start/2` callback:

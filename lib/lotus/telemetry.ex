@@ -236,6 +236,54 @@ defmodule Lotus.Telemetry do
       refusal, the `Ecto.Changeset` for a failed validation
     * `:stacktrace` - Present when the call raised, threw or exited
 
+  ## AI Events
+
+  An AI request is one call of `Lotus.AI.generate_query/1`,
+  `generate_query_with_context/1`, `suggest_optimizations/1` or
+  `explain_query/1` that reaches the model: every round of its tool loop
+  (the model asks for a table's columns, Lotus answers, the model goes on)
+  belongs to the one request. A request a `:before_ai_request` plug refuses
+  never reaches the model and emits no AI event. The statements and
+  introspection the model asks for emit their own run and schema events,
+  with the same `:context`.
+
+  ### `[:lotus, :ai, :request, :start]`
+
+  **Measurements:** `:system_time`.
+
+  **Metadata:**
+
+    * `:feature` - `:generation`, `:optimization` or `:explanation`
+    * `:model` - The model string, such as `"openai:gpt-4o"`
+    * `:data_source` - The data source name
+    * `:context` - The caller-supplied context (or `nil`)
+    * `:scope` - The caller-supplied scope (or `nil`)
+
+  ### `[:lotus, :ai, :request, :stop]`
+
+  Emitted when the model gives its final answer.
+
+  **Measurements:** `:duration` (native units), `:prompt_tokens`,
+  `:completion_tokens` and `:total_tokens`, summed over every round.
+
+  **Metadata:** the start metadata plus:
+
+    * `:usage` - The summed usage, as the AI functions return it
+    * `:tool_calls` - The names of the tools the model called, in order and
+      with repeats, such as `["list_tables", "describe_table"]`
+    * `:iterations` - The number of rounds, each one call to the provider
+
+  ### `[:lotus, :ai, :request, :exception]`
+
+  Emitted when a call to the provider fails. The rounds before it were
+  billed, so their usage is reported.
+
+  **Measurements:** `:duration`, and the summed tokens as on `:stop`.
+
+  **Metadata:** the stop metadata plus:
+
+    * `:reason` - The error the caller receives
+
   ## Example
 
   Attach a handler in your application's `start/2` callback:
@@ -296,6 +344,10 @@ defmodule Lotus.Telemetry do
   @content_change_stop [:lotus, :content, :change, :stop]
   @content_change_exception [:lotus, :content, :change, :exception]
 
+  @ai_request_start [:lotus, :ai, :request, :start]
+  @ai_request_stop [:lotus, :ai, :request, :stop]
+  @ai_request_exception [:lotus, :ai, :request, :exception]
+
   @doc false
   def events do
     [
@@ -312,7 +364,10 @@ defmodule Lotus.Telemetry do
       @schema_stop,
       @content_change_start,
       @content_change_stop,
-      @content_change_exception
+      @content_change_exception,
+      @ai_request_start,
+      @ai_request_stop,
+      @ai_request_exception
     ]
   end
 
@@ -414,6 +469,34 @@ defmodule Lotus.Telemetry do
       %{duration: duration},
       Map.put_new(metadata, :kind, :error)
     )
+  end
+
+  @doc false
+  def ai_request_start(metadata) do
+    start_time = System.monotonic_time()
+    :telemetry.execute(@ai_request_start, %{system_time: System.system_time()}, metadata)
+    start_time
+  end
+
+  @doc false
+  def ai_request_stop(start_time, metadata) do
+    :telemetry.execute(@ai_request_stop, ai_measurements(start_time, metadata), metadata)
+  end
+
+  @doc false
+  def ai_request_exception(start_time, metadata) do
+    :telemetry.execute(@ai_request_exception, ai_measurements(start_time, metadata), metadata)
+  end
+
+  defp ai_measurements(start_time, metadata) do
+    usage = Map.get(metadata, :usage) || %{}
+
+    %{
+      duration: System.monotonic_time() - start_time,
+      prompt_tokens: Map.get(usage, :prompt_tokens, 0),
+      completion_tokens: Map.get(usage, :completion_tokens, 0),
+      total_tokens: Map.get(usage, :total_tokens, 0)
+    }
   end
 
   @doc false

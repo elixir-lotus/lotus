@@ -19,7 +19,7 @@ defmodule MyApp.AuditMiddleware do
 end
 ```
 
-Each middleware receives a payload map whose contents depend on the pipeline event (see below), and must return either `{:cont, payload}` to continue or `{:halt, reason}` to abort. A halt returns `{:error, reason}` to the caller, except on `:before_content_change`, where it returns `{:error, {:halted, reason}}`.
+Each middleware receives a payload map whose contents depend on the pipeline event (see below), and must return either `{:cont, payload}` to continue or `{:halt, reason}` to abort. A halt returns `{:error, reason}` to the caller, except on `:before_content_change` and `:before_ai_request`, where it returns `{:error, {:halted, reason}}`.
 
 ## Pipeline Events
 
@@ -35,6 +35,7 @@ Each middleware receives a payload map whose contents depend on the pipeline eve
 | `:after_discover` | After any discovery call, following the kind-specific `:after_list_*` event | `:kind`, `:result`, `:source`, `:scope`, `:context` |
 | `:before_content_change` | Before a query, visualization, dashboard, card, filter or filter mapping is created, updated, deleted, shared or reordered | `:op`, `:resource`, `:record`, `:changeset`, `:context` |
 | `:after_content_change` | After that change is written | `:op`, `:resource`, `:record`, `:changes`, `:context` |
+| `:before_ai_request` | Before an AI function sends its request to the model | `:feature`, `:model`, `:data_source`, `:prompt`, `:system_prompt`, `:context`, `:scope` |
 
 `:vars` is the map of bound query variables by name, after defaults and caller-supplied values are merged. It is `%{}` for a raw statement run through `Lotus.run_statement/3`.
 
@@ -47,8 +48,8 @@ What a plug can rely on, release to release:
 - **Payload keys are additive.** A release may add a key to a payload; it does not remove or rename one. Match on the keys you use, not on the whole map.
 - **`:relations` follows one rule.** A list is proven, an empty list means "touches nothing", a tuple means "unknown". `:before_execute` and `:after_query` carry the same value.
 - **`:assigns` belongs to one call.** `:before_execute` starts with `%{}`, and `:after_query` receives what its plugs left, on a cache hit too. It is the only key Lotus reads back from `:before_execute`, and the result cache never stores it. See [Handing a Decision to `:after_query`](#handing-a-decision-to-after_query).
-- **Halting is final.** A halt returns `{:error, reason}` to the caller and later events for that run do not fire. The exception is `:before_content_change`, whose halt returns `{:error, {:halted, reason}}` — see [Refusing and Recording Content Changes](#refusing-and-recording-content-changes).
-- **Observation is telemetry's job.** A plug sees only its own event. To record every run, including refusals and cache-served reads, attach to `[:lotus, :run, :start | :stop | :exception]` — see `Lotus.Telemetry`. For content changes, attach to `[:lotus, :content, :change, :start | :stop | :exception]`.
+- **Halting is final.** A halt returns `{:error, reason}` to the caller and later events for that run do not fire. The exceptions are `:before_content_change` and `:before_ai_request`, whose halt returns `{:error, {:halted, reason}}` — see [Refusing and Recording Content Changes](#refusing-and-recording-content-changes) and [Refusing and Grounding AI Requests](#refusing-and-grounding-ai-requests).
+- **Observation is telemetry's job.** A plug sees only its own event. To record every run, including refusals and cache-served reads, attach to `[:lotus, :run, :start | :stop | :exception]` — see `Lotus.Telemetry`. For content changes, attach to `[:lotus, :content, :change, :start | :stop | :exception]`, and for AI requests to `[:lotus, :ai, :request, :start | :stop | :exception]`.
 
 ### The exact-count run
 
@@ -378,6 +379,79 @@ bracket every content change, refused or not. `:stop` carries the
 too. `:exception` carries the reason the caller receives: `{:halted, reason}` for
 a refusal, the changeset for a failed validation. A consumer that records every
 attempt attaches to these rather than to a plug. See `Lotus.Telemetry`.
+
+## Refusing and Grounding AI Requests
+
+`Lotus.AI.generate_query/1`, `generate_query_with_context/1`,
+`suggest_optimizations/1` and `explain_query/1` fire `:before_ai_request` once,
+before the first call to the model. Pass the actor as you do to
+`Lotus.run_query/2`, and the plug sees it:
+
+```elixir
+Lotus.AI.generate_query(
+  prompt: "Revenue by region last quarter",
+  data_source: "warehouse",
+  context: %{user: current_user},
+  scope: %{tenant_id: current_user.tenant_id}
+)
+```
+
+| Key | Value |
+|-----|-------|
+| `:feature` | `:generation`, `:optimization` or `:explanation` |
+| `:model` | The model string, such as `"openai:gpt-4o"` |
+| `:data_source` | The data source name |
+| `:prompt` | The user message: the person's question for a generation, the statement and its plan or fragment for the other two |
+| `:system_prompt` | The system prompt Lotus built for the source |
+| `:context`, `:scope` | As the caller passed them, or `nil` |
+
+### Refusing a request
+
+A halt refuses the request before anything reaches the model, and the AI
+function returns `{:error, {:halted, reason}}`. A plug here decides who may use
+AI, and how much:
+
+```elixir
+defmodule MyApp.AIQuota do
+  def init(opts), do: opts
+
+  def call(%{context: %{user: user}} = payload, _opts) do
+    if MyApp.Quotas.tokens_left?(user), do: {:cont, payload}, else: {:halt, :ai_quota_reached}
+  end
+end
+```
+
+### Adding to the system prompt
+
+A plug that continues with another `:system_prompt` string has it sent instead.
+It can add instructions or guardrails, or ground the model in what the schema
+does not say: dataset descriptions, metric definitions, a glossary. Anything
+that is not a string is ignored.
+
+```elixir
+defmodule MyApp.AIGlossary do
+  def init(opts), do: opts
+
+  def call(%{feature: :generation, system_prompt: prompt} = payload, _opts) do
+    {:cont, %{payload | system_prompt: prompt <> "\n\n## Glossary\n\n" <> MyApp.Glossary.text()}}
+  end
+
+  def call(payload, _opts), do: {:cont, payload}
+end
+```
+
+The system prompt is trusted text: put nothing there a user typed. The
+statements and introspection the model then asks for go through the query and
+discovery events, with the same actor.
+
+### Observing AI requests
+
+The `[:lotus, :ai, :request, :start | :stop | :exception]` telemetry events
+bracket each request that reaches the model. `:stop` carries the token usage
+summed over every round of the tool loop, the tools the model called and the
+number of rounds; the usage the AI functions return is the same sum. A
+consumer that counts tokens against a quota attaches there. See
+`Lotus.Telemetry`.
 
 ## Configuration
 

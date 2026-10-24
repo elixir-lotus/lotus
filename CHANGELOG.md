@@ -42,6 +42,18 @@
 
 ### Added
 
+- **AI requests can be refused, grounded and observed.**
+  - The new `:before_ai_request` middleware event fires before
+    `Lotus.AI.generate_query/1`, `generate_query_with_context/1`,
+    `suggest_optimizations/1` and `explain_query/1` call the model, with the
+    feature, model, data source, user prompt, system prompt, `:context` and
+    `:scope`. A halt returns `{:error, {:halted, reason}}` and nothing reaches
+    the model. A plug that continues with another `:system_prompt` has it
+    sent, so a host can add instructions or grounding context.
+  - The new `[:lotus, :ai, :request, :start | :stop | :exception]` telemetry
+    events bracket each request, with token counts as measurements and the
+    tools the model called.
+
 - **An adapter can report what a statement cost.** `execute_query/4` may
   return `:cost` with `:bytes_scanned`, `:bytes_billed`, `:rows_scanned`
   and `:credits` (`t:Lotus.Source.Adapter.cost/0`). Lotus puts it in the
@@ -116,6 +128,10 @@
   that reads it is refused (#332).
 
 ### Fixed
+
+- **The AI functions report every round's tokens.** When the model called
+  tools before answering, `:usage` counted only the last round. It is now
+  the sum of every call made to the provider.
 
 - **A variable bound to a column of an unqualified table is typed from the
   table the statement reads.** Lotus looked the column up in the first

@@ -18,6 +18,7 @@ if Code.ensure_loaded?(ReqLLM) do
     alias Lotus.AI.Actions
     alias Lotus.AI.Prompts.AdapterNotes
     alias Lotus.AI.Prompts.Optimization
+    alias Lotus.AI.Request
     alias Lotus.AI.Tool
     alias Lotus.Query.Statement
     alias Lotus.Source.Adapter
@@ -75,12 +76,22 @@ if Code.ensure_loaded?(ReqLLM) do
               AdapterNotes.fence_label(ai_context)
             )
 
-          tools = build_tools(data_source, actor_from(opts))
-          messages = build_messages(system_prompt, user_prompt)
-          context = ReqLLM.Context.new(messages)
+          request =
+            [model: model_string, data_source: data_source, prompt: user_prompt] ++
+              Keyword.take(opts, [:context, :scope])
 
-          Tool.run(model_string, context, tools, api_key: api_key, temperature: temperature)
-          |> handle_response(model_string)
+          with {:ok, system_prompt} <- Request.prepare(:optimization, system_prompt, request) do
+            tools = build_tools(data_source, actor_from(opts))
+            messages = build_messages(system_prompt, user_prompt)
+            context = ReqLLM.Context.new(messages)
+
+            Tool.run(model_string, context, tools,
+              api_key: api_key,
+              temperature: temperature,
+              request: Request.metadata(:optimization, request)
+            )
+            |> handle_response(model_string)
+          end
 
         {:error, :ai_not_supported} ->
           {:error, :ai_not_supported_for_source}
