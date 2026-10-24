@@ -96,6 +96,7 @@ defmodule Lotus.Config do
           visibility_resolver: module(),
           middleware: %{atom() => [{module(), term()}]},
           scheduler: keyword(),
+          delivery: keyword(),
           compiled_visibility: compiled_visibility()
         }
 
@@ -341,6 +342,36 @@ defmodule Lotus.Config do
               actor: {MyApp.Lotus, :schedule_actor, []}
             ]
       """
+    ],
+    delivery: [
+      type: :keyword_list,
+      default: [],
+      keys: [
+        channels: [
+          type: {:map, :string, :atom},
+          default: %{},
+          doc: "Delivery channels by name, next to the built-in `\"webhook\"`."
+        ],
+        formats: [
+          type: {:map, :string, :atom},
+          default: %{},
+          doc:
+            "Delivery formats by name, next to the built-in `\"csv\"`, `\"json\"` and `\"html\"`."
+        ],
+        webhook: [
+          type: :keyword_list,
+          default: [],
+          keys: [
+            allow_http: [
+              type: :boolean,
+              default: false,
+              doc: "Allow plain `http` webhook URLs."
+            ]
+          ],
+          doc: "Settings of the `\"webhook\"` channel."
+        ]
+      ],
+      doc: "Where schedules send their results. See `Lotus.Delivery`."
     ],
     middleware: [
       type: {:or, [:map, nil]},
@@ -732,6 +763,12 @@ defmodule Lotus.Config do
   def get(key) do
     load!()[key]
   end
+
+  @doc """
+  Returns the delivery configuration (see the `:delivery` option).
+  """
+  @spec delivery() :: keyword()
+  def delivery, do: load!()[:delivery] || []
 
   @doc """
   Returns the scheduler configuration (see the `:scheduler` option).

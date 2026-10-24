@@ -33,7 +33,8 @@ defmodule Lotus.Scheduler.Worker do
 
   import Ecto.Query
 
-  alias Lotus.{Config, Dashboards, Result, Telemetry}
+  alias Lotus.{Config, Dashboards, Delivery, Result, Telemetry}
+  alias Lotus.Delivery.Content
   alias Lotus.Storage.{Query, Schedule, ScheduleRun}
 
   @doc """
@@ -84,8 +85,8 @@ defmodule Lotus.Scheduler.Worker do
 
     attrs =
       case outcome do
-        {:ok, row_count, details} ->
-          %{status: "succeeded", row_count: row_count, details: details}
+        {:ok, row_count, details, results} ->
+          deliver(run, schedule, row_count, details, results)
 
         {:error, reason, details} ->
           %{status: "failed", error: describe(reason), details: details}
@@ -120,8 +121,11 @@ defmodule Lotus.Scheduler.Worker do
 
   defp execute(%Schedule{query: %Query{} = query, params: params}, opts) do
     case Lotus.run_query(query, [vars: params || %{}] ++ opts) do
-      {:ok, %Result{num_rows: rows}} -> {:ok, rows || 0, %{}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %Result{num_rows: rows} = result} ->
+        {:ok, rows || 0, %{}, [%{title: query.name, result: result}]}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -140,7 +144,7 @@ defmodule Lotus.Scheduler.Worker do
           do: (acc -> acc + (n || 0))
 
     if failed == %{},
-      do: {:ok, rows, %{"cards" => map_size(results)}},
+      do: {:ok, rows, %{"cards" => map_size(results)}, card_results(id, results)},
       else:
         {:error, "#{map_size(failed)} of #{map_size(results)} cards failed",
          %{"failed_cards" => failed}}
@@ -148,6 +152,38 @@ defmodule Lotus.Scheduler.Worker do
 
   defp execute(%Schedule{}, _opts),
     do: {:error, "the schedule's query or dashboard no longer exists"}
+
+  # The results of the query cards, in the dashboard's order, titled by the
+  # card or else its query.
+  defp card_results(dashboard_id, results) do
+    for card <- Dashboards.list_dashboard_cards(dashboard_id, preload: [:query]),
+        {:ok, %Result{} = result} <- [Map.get(results, card.id)] do
+      %{title: card.title || (card.query && card.query.name) || "Card #{card.id}", result: result}
+    end
+  end
+
+  # After a run succeeds: each delivery that has not succeeded on an earlier
+  # attempt of this run is sent, and its outcome recorded. A failed delivery
+  # fails the run, so a job runner retries it.
+  defp deliver(_run, %Schedule{deliveries: []}, row_count, details, _results),
+    do: %{status: "succeeded", row_count: row_count, details: details}
+
+  defp deliver(run, schedule, row_count, details, results) do
+    content = %Content{title: schedule.name, results: results, schedule: schedule, run: run}
+    previous = get_in(run.details || %{}, ["deliveries"]) || %{}
+    outcomes = Delivery.deliver_all(content, schedule.deliveries, previous)
+    details = Map.put(details, "deliveries", outcomes)
+    failed = Enum.count(outcomes, fn {_id, outcome} -> outcome["status"] == "failed" end)
+
+    if failed == 0,
+      do: %{status: "succeeded", row_count: row_count, details: details},
+      else: %{
+        status: "failed",
+        row_count: row_count,
+        details: details,
+        error: "#{failed} of #{map_size(outcomes)} deliveries failed"
+      }
+  end
 
   defp actor(schedule) do
     case Keyword.get(Config.scheduler(), :actor) do
