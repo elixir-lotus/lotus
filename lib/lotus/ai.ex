@@ -47,6 +47,17 @@ defmodule Lotus.AI do
       #   usage: %{total_tokens: 150}
       # }
 
+  ## Hooks and telemetry
+
+  Every request fires the `:before_ai_request` middleware before it reaches
+  the model. A plug there can refuse it (to limit who may use AI, or how
+  much) or change its system prompt (to add instructions or grounding
+  context). Each request that reaches the model emits the
+  `[:lotus, :ai, :request, ...]` telemetry events, with the token usage
+  summed over the rounds of the tool loop and the tools the model called.
+  The `:usage` the functions return is that sum too. See `Lotus.Middleware`
+  and `Lotus.Telemetry`.
+
   ## Error Handling
 
   The `generate_query/1` function returns structured error tuples that clients can
@@ -58,6 +69,8 @@ defmodule Lotus.AI do
     is not installed
   - `{:error, :api_key_not_configured}` - API key missing or invalid
   - `{:error, {:unable_to_generate, reason}}` - LLM refused (not a data question)
+  - `{:error, {:halted, reason}}` - A `:before_ai_request` middleware plug
+    refused the request (see `Lotus.Middleware`)
   - `{:error, term}` - Other errors (API failures, network issues, etc.)
   """
 
