@@ -3,6 +3,14 @@ defmodule Lotus.Result do
   Represents the result of a query execution.
 
   Contains the columns, rows, and metadata about the query result.
+
+  `:meta` holds what the adapter reported beside the rows, when it did:
+
+    * `:total_count` - The row count before pagination
+    * `:cost` - What the statement cost the engine, such as
+      `%{bytes_scanned: 52_428_800}` (see `t:Lotus.Source.Adapter.cost/0`).
+      A cached result keeps the cost of the run that stored it, though
+      serving it cost nothing.
   """
 
   @enforce_keys [:columns, :rows]

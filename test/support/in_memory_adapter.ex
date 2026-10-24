@@ -91,13 +91,15 @@ defmodule Lotus.Test.InMemoryAdapter do
           second query.
         * `:inline` — Strategy A. `execute_query/4` returns
           `:total_count` directly in its result map.
+    * `:cost` — a map `execute_query/4` returns as the statement's `:cost`.
   """
   @spec dataset(keyword()) :: map()
   def dataset(opts \\ []) do
     %{
       __lotus_adapter__: __MODULE__,
       tables: Keyword.get(opts, :tables, %{}),
-      count_strategy: Keyword.get(opts, :count_strategy, :separate)
+      count_strategy: Keyword.get(opts, :count_strategy, :separate),
+      cost: Keyword.get(opts, :cost)
     }
   end
 
@@ -148,6 +150,8 @@ defmodule Lotus.Test.InMemoryAdapter do
         if state[:count_strategy] == :inline and dsl[:count_mode] == :exact,
           do: Map.put(result, :total_count, total),
           else: result
+
+      result = if state[:cost], do: Map.put(result, :cost, state[:cost]), else: result
 
       {:ok, result}
     end

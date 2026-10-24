@@ -152,6 +152,24 @@ either channel — `Result.meta[:total_count]` ends up `nil` and
 `:total_mode` is `:exact` (honest signal that the caller asked but no
 number was produced).
 
+## Reporting what a statement cost
+
+An engine that bills by the work a statement does (a warehouse that charges
+per byte scanned, or in credits) can say so. `execute_query/4` adds `:cost`
+to its result map:
+
+```elixir
+{:ok, %{columns: [...], rows: [...], num_rows: 3,
+        cost: %{bytes_scanned: 52_428_800, bytes_billed: 52_428_800}}}
+```
+
+The keys are `:bytes_scanned`, `:bytes_billed`, `:rows_scanned` (rows read,
+not returned) and `:credits`, all optional (`t:Lotus.Source.Adapter.cost/0`).
+Lotus keeps those with non-negative values in `Result.meta[:cost]` and adds
+them to the measurements of `[:lotus, :query, :stop]`, so a host sums spend
+per source or per caller from telemetry. A cache hit emits no query event and
+is not counted again. An engine that reports nothing leaves the key out.
+
 ## Default Behaviour
 
 If you are using Ecto repos and static configuration, no changes are needed.
@@ -547,7 +565,7 @@ completely: an adapter cannot implement `apply_filters/3` and forget
 
 | Callback | Purpose |
 |---|---|
-| `execute_query(state, body, params, opts)` | The driver boundary. Returns `{:ok, %{columns:, rows:, num_rows:}}`, optionally with `:total_count`. |
+| `execute_query(state, body, params, opts)` | The driver boundary. Returns `{:ok, %{columns:, rows:, num_rows:}}`, optionally with `:total_count` and `:cost`. |
 | `transaction(state, fun, opts)` | Run `fun` (arity 1, receives `state`) inside a transaction. |
 | `list_tables(state, schemas, opts)` | `{:ok, [{schema_or_nil, table}]}`. `opts` carries `:include_views`. |
 | `describe_table(state, schema, table)` | `{:ok, [column_def]}` — `%{name, type, nullable, default, primary_key}`, plus `:comment` and `:references` (`%{schema, table, column}`, for a foreign key column) where the source has them. |

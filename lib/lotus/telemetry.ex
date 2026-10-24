@@ -86,6 +86,11 @@ defmodule Lotus.Telemetry do
 
     * `:duration` - The query duration (in native time units)
     * `:row_count` - The number of rows returned
+    * `:bytes_scanned`, `:bytes_billed`, `:rows_scanned`, `:credits` - What
+      the statement cost the engine, each present only when the adapter
+      reports it (see `t:Lotus.Source.Adapter.cost/0`). A cache hit emits no
+      query event, so summing these counts each statement the engine ran
+      once.
 
   **Metadata:**
 
@@ -406,11 +411,14 @@ defmodule Lotus.Telemetry do
   def query_stop(start_time, metadata) do
     duration = System.monotonic_time() - start_time
 
-    :telemetry.execute(
-      @query_stop,
-      %{duration: duration, row_count: metadata[:row_count] || 0},
-      metadata
-    )
+    measurements =
+      case metadata do
+        %{result: %{meta: %{cost: cost}}} when is_map(cost) -> cost
+        _ -> %{}
+      end
+      |> Map.merge(%{duration: duration, row_count: metadata[:row_count] || 0})
+
+    :telemetry.execute(@query_stop, measurements, metadata)
   end
 
   @doc false
