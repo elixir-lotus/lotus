@@ -2,6 +2,7 @@ defmodule Lotus.ConfigTest do
   use ExUnit.Case, async: false
 
   alias Lotus.Config
+  alias Lotus.Schedules.Alert
 
   @preserved_keys [
     :cache,
@@ -12,7 +13,10 @@ defmodule Lotus.ConfigTest do
     :default_source,
     :data_source_descriptions,
     :source_adapters,
-    :allow_unrestricted_resources
+    :allow_unrestricted_resources,
+    :scheduler,
+    :delivery,
+    :alerts
   ]
 
   setup do
@@ -31,6 +35,28 @@ defmodule Lotus.ConfigTest do
     end)
 
     :ok
+  end
+
+  describe "scheduling config" do
+    test "the app's scheduler, delivery and alerts settings are read" do
+      Application.put_env(:lotus, :scheduler, enabled: true, interval: 60_000)
+
+      Application.put_env(:lotus, :delivery,
+        channels: %{"email" => Lotus.ConfigTest},
+        webhook: [allow_http: true]
+      )
+
+      Application.put_env(:lotus, :alerts, conditions: %{"change" => Lotus.ConfigTest})
+      Config.reload!()
+
+      assert Config.scheduler()[:enabled] == true
+      assert Config.scheduler()[:interval] == 60_000
+      assert Config.delivery()[:channels] == %{"email" => Lotus.ConfigTest}
+      assert Config.delivery()[:webhook][:allow_http] == true
+      assert Config.alerts()[:conditions] == %{"change" => Lotus.ConfigTest}
+      assert "email" in Map.keys(Lotus.Delivery.channels())
+      assert "change" in Alert.conditions()
+    end
   end
 
   describe "cache_namespace/0" do

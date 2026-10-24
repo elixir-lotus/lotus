@@ -42,6 +42,22 @@
 
 ### Added
 
+- **A Slack channel.** `"slack"` posts each run of a schedule as a message in
+  a Slack channel, through an incoming webhook (`config["webhook_url"]`):
+  the schedule's name, an alert's status, and each result's first ten rows
+  as a table, within Slack's limits. It needs Req, like the webhook.
+
+- **Channels an editor can draw.** `Lotus.Delivery.Channel` has three
+  optional callbacks: `label/0` (the channel's name for people),
+  `settings/0` (the fields of a delivery's settings, with their type: URL,
+  secret, list of addresses, select…) and `available/0` (whether the channel
+  can send in this app, or what it is missing). `Lotus.Delivery.channel_specs/0`
+  lists every channel with them, for Lotus Web to draw a form for each
+  instead of JSON. A delivery to a channel that is not available is refused
+  when the schedule is saved, and fails with the reason when it runs. The
+  webhook says its fields (URL, and an authorization header, which its
+  settings now take as `"authorization"`) and is not available without Req.
+
 - **`:on_tool_call` on the AI functions.** `Lotus.AI.generate_query_with_context/1`,
   `generate_query/1`, `suggest_optimizations/1` and `explain_query/1` take a
   function called as each tool the model asks for starts and stops (its

@@ -23,8 +23,8 @@ defmodule Lotus.Delivery do
 
   ## Channels and formats
 
-  Built in: the `"webhook"` channel, and the `"csv"`, `"json"` and `"html"`
-  formats. Your app or Lotus Pro registers more by name; a name here wins
+  Built in: the `"webhook"` and `"slack"` channels, and the `"csv"`, `"json"`
+  and `"html"` formats. Your app or Lotus Pro registers more by name; a name here wins
   over a built-in one:
 
       config :lotus,
@@ -41,7 +41,7 @@ defmodule Lotus.Delivery do
   alias Lotus.Delivery.{Channels, Content, Formats}
   alias Lotus.Telemetry
 
-  @builtin_channels %{"webhook" => Channels.Webhook}
+  @builtin_channels %{"webhook" => Channels.Webhook, "slack" => Channels.Slack}
 
   @builtin_formats %{
     "csv" => Formats.CSV,
@@ -59,6 +59,51 @@ defmodule Lotus.Delivery do
 
   defp configured(key), do: Lotus.Config.delivery() |> Keyword.get(key) || %{}
 
+  @typedoc "A channel as an editor shows it; see `channel_specs/0`."
+  @type channel_spec :: %{
+          name: String.t(),
+          label: String.t(),
+          settings: [Lotus.Delivery.Channel.setting()] | nil,
+          formats: [String.t()],
+          available: :ok | {:error, String.t()}
+        }
+
+  @doc """
+  Every channel as an editor shows it, sorted by label: its name, its label,
+  the fields of its settings (`nil` for a channel that does not describe
+  them), the formats it sends, and whether it can send in this app
+  (`c:Lotus.Delivery.Channel.available/0`).
+  """
+  @spec channel_specs() :: [channel_spec()]
+  def channel_specs do
+    format_names = formats() |> Map.keys() |> Enum.sort()
+
+    channels()
+    |> Enum.map(fn {name, module} ->
+      Code.ensure_loaded(module)
+
+      %{
+        name: name,
+        label: optional(module, :label, name),
+        settings: optional(module, :settings, nil),
+        formats: channel_formats(module, format_names),
+        available: optional(module, :available, :ok)
+      }
+    end)
+    |> Enum.sort_by(&String.downcase(&1.label))
+  end
+
+  defp optional(module, callback, default) do
+    if function_exported?(module, callback, 0), do: apply(module, callback, []), else: default
+  end
+
+  defp channel_formats(module, format_names) do
+    case module.formats() do
+      :any -> format_names
+      formats -> Enum.filter(format_names, &(&1 in formats))
+    end
+  end
+
   @doc """
   Checks a delivery: a known channel, a known format the channel sends, and
   settings the channel accepts. Returns the field and message of the first
@@ -68,6 +113,7 @@ defmodule Lotus.Delivery do
           :ok | {:error, :channel | :format | :config, String.t()}
   def validate(channel, format, config) do
     with {:ok, channel_module} <- fetch(channels(), channel, :channel),
+         :ok <- available(channel_module),
          {:ok, _format_module} <- fetch(formats(), format, :format),
          :ok <- accepts(channel_module, channel, format) do
       case channel_module.validate_config(config || %{}) do
@@ -81,6 +127,15 @@ defmodule Lotus.Delivery do
     case Map.fetch(registry, name) do
       {:ok, module} -> {:ok, module}
       :error -> {:error, field, "is not a known #{field}: #{inspect(name)}"}
+    end
+  end
+
+  defp available(module) do
+    Code.ensure_loaded(module)
+
+    case optional(module, :available, :ok) do
+      :ok -> :ok
+      {:error, message} -> {:error, :channel, message}
     end
   end
 
@@ -144,6 +199,7 @@ defmodule Lotus.Delivery do
     {result, rendered} =
       try do
         with {:ok, channel} <- fetch(channels(), delivery.channel, :channel),
+             :ok <- available(channel),
              {:ok, format} <- fetch(formats(), delivery.format, :format),
              {:ok, attachments, rendered} <- render(format, delivery.format, content, rendered) do
           {channel.deliver(content, attachments, delivery.config || %{}), rendered}

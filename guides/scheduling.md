@@ -157,13 +157,27 @@ Lotus.Schedules.create_schedule(%{
 ### The webhook channel
 
 `"webhook"` POSTs the attachments as JSON to `config["url"]`, with any
-`config["headers"]`. The URL must be `https`;
+`config["headers"]` (`config["authorization"]` is a shortcut for the
+`authorization` header). The URL must be `https`;
 `config :lotus, delivery: [webhook: [allow_http: true]]` allows `http` for a
 receiver on a private network. A 2xx response is a delivery.
 
 It sends with [Req](https://hex.pm/packages/req), an optional dependency: add
 `{:req, "~> 0.5"}` to your deps. An app with the AI features has it already.
 Without it a webhook delivery is refused when the schedule is saved.
+
+### The Slack channel
+
+`"slack"` posts each run as a message in a Slack channel, through an
+[incoming webhook](https://api.slack.com/messaging/webhooks):
+`config["webhook_url"]`, a `https://hooks.slack.com/…` URL. The message has
+the schedule's name, an alert's status and message, and for each result (three
+at most) its first ten rows as a table. Slack takes no files through an
+incoming webhook, so the delivery's format is not attached.
+
+An incoming webhook is free: in Slack, create an app for the workspace, turn
+on incoming webhooks, and add one to the channel to post in. Like the
+webhook, the channel sends with Req.
 
 ### Your own channels and formats
 
@@ -181,6 +195,31 @@ config :lotus,
 
 A delivery stores the names, never a module: its settings are data people
 enter, so a channel validates them and takes nothing else from them.
+
+A dashboard such as Lotus Web draws a channel from three optional callbacks:
+`label/0` (its name for people), `settings/0` (the fields of its settings:
+a URL, a token, a list of addresses…) and `available/0` (whether it can
+send in this app, or the dependency or setting it is missing).
+`Lotus.Delivery.channel_specs/0` gathers them. A channel that is not
+available is refused when a schedule is saved, and a run's delivery to it
+fails with the reason.
+
+```elixir
+@impl true
+def label, do: "Pager"
+
+@impl true
+def settings do
+  [%{key: "service", label: "Service key", type: :secret, required: true}]
+end
+
+@impl true
+def available do
+  if Application.get_env(:my_app, :pager_url),
+    do: :ok,
+    else: {:error, "set config :my_app, :pager_url to page"}
+end
+```
 
 ### Outcomes and retries
 

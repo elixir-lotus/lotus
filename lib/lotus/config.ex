@@ -598,7 +598,10 @@ defmodule Lotus.Config do
       :trusted_source_adapters,
       :source_resolver,
       :visibility_resolver,
-      :middleware
+      :middleware,
+      :scheduler,
+      :delivery,
+      :alerts
     ])
   end
 
