@@ -42,6 +42,15 @@
 
 ### Added
 
+- **Alert conditions of your own, or Lotus Pro's.** A condition registered
+  by name (`config :lotus, alerts: [conditions: %{"change" => MyMod}]`,
+  behaviour `Lotus.Schedules.Alert.Condition`) can be a rule's `condition`,
+  next to the built-in ones. It checks the rule's settings when the schedule
+  is saved (the new `options` map of `Lotus.Storage.ScheduleRule`), and on
+  each run reads the result and the schedule's `state`, with the last run's
+  value, so it can fire on a change. Status, deliveries and errors work as
+  for the built-in conditions.
+
 - **A dashboard card can be a Lotus Pro card.** `card_type: :pro` is for
   the cards Lotus Pro adds (action buttons, for example). Its `content` names
   which one (`%{"kind" => "action", ...}`, required) and holds its settings,

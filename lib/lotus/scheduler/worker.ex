@@ -184,7 +184,7 @@ defmodule Lotus.Scheduler.Worker do
   defp succeeded(run, schedule, row_count, details, [%{result: result} | _] = results) do
     %Schedule{rule: rule, state: state} = schedule
 
-    case Alert.evaluate(rule, result) do
+    case Alert.evaluate(rule, result, state) do
       {:ok, holds?, value} ->
         {next, change} = Alert.transition(state, rule, holds?, value, now())
 

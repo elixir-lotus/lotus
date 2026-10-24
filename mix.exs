@@ -116,6 +116,7 @@ defmodule Lotus.MixProject do
           Lotus.Schedules,
           Lotus.Schedules.Cron,
           Lotus.Schedules.Alert,
+          Lotus.Schedules.Alert.Condition,
           Lotus.Scheduler,
           ~r/Lotus\.Scheduler\..+/,
           Lotus.Storage.Schedule,
