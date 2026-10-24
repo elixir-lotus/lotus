@@ -162,6 +162,63 @@ defmodule Lotus.Delivery do
     do: %{"status" => status, "value" => value, "message" => message}
 
   @doc """
+  Sends a test to one delivery, as an editor's "Send a test" does: sample
+  results (two rows), titled "Test: " and the `:title` option, to the
+  channel with the format and settings given, now. `alert: true` sends it
+  as an alert that fired, to see how one looks.
+
+  It checks the delivery as `validate/3` does first, so a channel that is not
+  available or settings it refuses are said before anything is sent. Returns
+  `:ok`, or `{:error, message}` with the channel's reason (an answer that is
+  not 2xx, a mailer that refuses), for people to read.
+  """
+  @spec send_test(String.t(), String.t(), map(), keyword()) :: :ok | {:error, String.t()}
+  def send_test(channel, format, config, opts \\ []) do
+    content = test_content(opts)
+
+    with :ok <- test_validate(channel, format, config),
+         {:ok, channel_module} <- fetch(channels(), channel, :channel),
+         {:ok, format_module} <- fetch(formats(), format, :format),
+         {:ok, attachments} <- format_module.render(content),
+         :ok <- channel_module.deliver(content, attachments, config) do
+      :ok
+    else
+      {:error, _field, message} -> {:error, message}
+      {:error, reason} -> {:error, describe(reason)}
+    end
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp test_validate(channel, format, config) do
+    case validate(channel, format, config) do
+      :ok -> :ok
+      {:error, _field, message} -> {:error, message}
+    end
+  end
+
+  defp test_content(opts) do
+    title = "Test: " <> (Keyword.get(opts, :title) || "a Lotus report")
+
+    alert =
+      if Keyword.get(opts, :alert, false),
+        do: %{status: "firing", value: 1_200, message: "total is above 1000 (a test)"}
+
+    %Content{
+      title: title,
+      results: [
+        %{
+          title: "Sample results",
+          result: Lotus.Result.new(["region", "total"], [["North", 1_200], ["South", 980]])
+        }
+      ],
+      schedule: %Lotus.Storage.Schedule{name: title},
+      run: %Lotus.Storage.ScheduleRun{scheduled_for: DateTime.utc_now()},
+      alert: alert
+    }
+  end
+
+  @doc """
   Sends `content` to each delivery that has not succeeded yet in `previous`
   (the outcomes of an earlier attempt of the same run, by delivery id).
   Returns every delivery's outcome, by id: `%{"status" => "delivered"}` or

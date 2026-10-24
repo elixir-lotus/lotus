@@ -42,6 +42,11 @@
 
 ### Added
 
+- **Send a test.** `Lotus.Delivery.send_test/4` sends sample results to one
+  delivery (a channel, a format and its settings) now, after checking it as
+  a save does, and returns `:ok` or the channel's reason, for an editor to
+  show. `alert: true` sends it as an alert that fired.
+
 - **An email channel.** `"email"` emails each run of a schedule through your
   app's own Swoosh mailer (`config :lotus, delivery: [email: [mailer:
   MyApp.Mailer, from: "reports@example.com"]]`), so Lotus sends nothing
