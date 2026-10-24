@@ -375,7 +375,7 @@ makes a useful starting point for a new adapter.
 source needs — `execute_query/4`, `transaction/3`, `list_tables/3`,
 `describe_table/3`, `builtin_denies/1`, `health_check/1`, `disconnect/1`,
 `format_error/2` and `source_type/1`. The rest of the contract is split into
-five capability behaviours. Declare the ones your source supports and
+six capability behaviours. Declare the ones your source supports and
 implement every callback of each; Lotus uses a documented default for the
 ones you leave out (see
 [Core and Capability Behaviours](#core-and-capability-behaviours)). A useful
@@ -536,7 +536,7 @@ A real adapter implements `extract_accessed_resources/2` instead of opting
 out.
 
 ## Core and Capability Behaviours
-The contract is a core behaviour and five capability behaviours, the way
+The contract is a core behaviour and six capability behaviours, the way
 `Ecto.Adapter` is split into `Ecto.Adapter.Queryable`, `Ecto.Adapter.Schema`
 and the rest. Each capability groups callbacks that only make sense
 together, so the compiler checks that a capability is implemented
@@ -577,6 +577,7 @@ MyApp.Adapters.Echo
   binding        not declared
   shaping        declared
   editor         declared
+  session        not declared
 ```
 
 **`Lotus.Source.Adapter.Introspection`**
@@ -633,6 +634,12 @@ MyApp.Adapters.Echo
 | `query_language/1` | `"sql"` | Declare the `family:dialect` identifier for your language. See [Query Language Identifiers](#query-language-identifiers). |
 | `example_query/3` | generic `SELECT` | Source-native example for the query editor's placeholder text. |
 | `ai_context/1` | `{:error, :ai_not_supported}` | Opt into Lotus.AI — language identifier, example query, syntax notes, error patterns, capability gates. |
+
+**`Lotus.Source.Adapter.Session`**
+
+| Callback | Default without the capability | When to implement |
+|---|---|---|
+| `setup_session/3` | a statement with a session is refused | Apply a statement's `:session` settings to the connection, inside its transaction and for it alone, so a policy in the database can filter rows by them. `Lotus.Source.Adapters.Postgres` does it with `set_config(name, value, true)`. Refuse a setting your source cannot apply: running the statement without it would return the rows it was meant to hide. |
 
 **Optional callbacks of `Lotus.Source.Adapter`:**
 

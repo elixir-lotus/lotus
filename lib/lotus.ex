@@ -600,7 +600,7 @@ defmodule Lotus do
         key:
           result_key(
             statement.body,
-            bound_identity(cache_bound || cache_identity, statement.params),
+            bound_identity(cache_bound || cache_identity, statement.params, statement.session),
             adapter.name,
             search_path,
             Keyword.get(opts, :scope)
@@ -616,10 +616,19 @@ defmodule Lotus do
   # The bound values in the key come from the statement that will execute. A
   # plug that filters rows through a parameter rather than through the statement
   # text leaves the body alone, and two callers would otherwise share an entry.
-  defp bound_identity(identity, params) when is_map(identity),
-    do: Map.put(identity, :__params__, params)
+  # So does one that filters through the session settings, which a database
+  # policy reads: they key the entry too.
+  defp bound_identity(identity, params, session) when is_map(identity) do
+    identity
+    |> Map.put(:__params__, params)
+    |> put_session(session)
+  end
 
-  defp bound_identity(_identity, params), do: %{__params__: params}
+  defp bound_identity(_identity, params, session),
+    do: put_session(%{__params__: params}, session)
+
+  defp put_session(identity, session) when session in [nil, %{}], do: identity
+  defp put_session(identity, session), do: Map.put(identity, :__session__, session)
 
   # The execute step of a cached run. Only the execution is cached, and it is
   # stored with the relations preflight found, so the runner can fire
@@ -1206,6 +1215,7 @@ defmodule Lotus do
       window: %{limit: limit, offset: offset},
       total_mode: count_mode,
       count_spec: count_spec,
+      session: statement.session,
       adapter: adapter,
       runner_opts: runner_opts
     }
@@ -1261,8 +1271,17 @@ defmodule Lotus do
   # caller reads, and the count has none. Sanitization, preflight and
   # `:before_execute` do run, with the caller's options, because the count
   # touches the same tables as the page and must be authorised the same way.
-  defp do_count(%{count_spec: %{query: q, params: ps}, adapter: adapter, runner_opts: opts}) do
-    statement = %Statement{adapter: adapter.module, body: q, params: ps}
+  # It keeps the page's session settings, so a database policy filters the
+  # count as it filters the rows.
+  defp do_count(
+         %{count_spec: %{query: q, params: ps}, adapter: adapter, runner_opts: opts} = meta
+       ) do
+    statement = %Statement{
+      adapter: adapter.module,
+      body: q,
+      params: ps,
+      session: Map.get(meta, :session) || %{}
+    }
 
     adapter
     |> Runner.execute_statement(statement, opts)

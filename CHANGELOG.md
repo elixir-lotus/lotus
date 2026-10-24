@@ -34,6 +34,17 @@
 
 ### Added
 
+- **Connection settings for one statement, for row-level security.**
+  `%Lotus.Query.Statement{}` has a `:session` map that a `:before_query`
+  plug fills from the actor, such as `%{"app.tenant_id" => "acme"}`. An
+  adapter that declares the new `Lotus.Source.Adapter.Session` capability
+  applies it inside the statement's transaction, so a database policy reads
+  it with `current_setting/2`. `Lotus.Source.Adapters.Postgres` declares it
+  and takes custom settings (`prefix.name`) only. The settings key the
+  result cache and carry over to the count run of a page. A source that
+  can't apply them refuses the statement instead of returning unfiltered
+  rows.
+
 - **A card can start folded.** A dashboard card's `layout` has `folded`
   (`false` by default): the card starts folded to its title, as Lotus Web
   shows it, and a viewer can open it. Layouts saved before read as open.
