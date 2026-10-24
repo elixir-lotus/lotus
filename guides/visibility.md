@@ -518,7 +518,8 @@ Lotus denies its own and the engine's internals regardless of your rules.
 - Lotus's own storage tables: `lotus_queries`,
   `lotus_query_visualizations`, `lotus_dashboards`,
   `lotus_dashboard_cards`, `lotus_dashboard_filters`,
-  `lotus_dashboard_card_filter_mappings`
+  `lotus_dashboard_card_filter_mappings`, `lotus_schedules`,
+  `lotus_schedule_runs`
 - Lotus Pro's tables, in any schema: `lotus_access_policies`,
   `lotus_pro_migrations`
 - the OAuth tables of Sake, which `Lotus.MCP` signs in with, in any

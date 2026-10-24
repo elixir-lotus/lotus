@@ -589,7 +589,11 @@ defmodule Lotus.Source.Adapter do
     {"public", "lotus_dashboard_filters"},
     {nil, "lotus_dashboard_filters"},
     {"public", "lotus_dashboard_card_filter_mappings"},
-    {nil, "lotus_dashboard_card_filter_mappings"}
+    {nil, "lotus_dashboard_card_filter_mappings"},
+    {"public", "lotus_schedules"},
+    {nil, "lotus_schedules"},
+    {"public", "lotus_schedule_runs"},
+    {nil, "lotus_schedule_runs"}
   ]
 
   @fallback_schema_denies [

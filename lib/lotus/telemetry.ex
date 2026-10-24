@@ -206,7 +206,7 @@ defmodule Lotus.Telemetry do
     * `:op` - `:create`, `:update`, `:delete`, `:enable_sharing` or
       `:disable_sharing`
     * `:resource` - `:query`, `:visualization`, `:dashboard`,
-      `:dashboard_card`, `:dashboard_filter` or `:filter_mapping`
+      `:dashboard_card`, `:dashboard_filter`, `:filter_mapping` or `:schedule`
     * `:record` - The struct as stored, or `nil` on a create
     * `:context` - The caller-supplied context (or `nil`)
 
@@ -287,6 +287,40 @@ defmodule Lotus.Telemetry do
 
     * `:reason` - The error the caller receives
 
+  ## Schedule Events
+
+  A schedule run is one slot of a schedule (`Lotus.Schedules`), performed by
+  `Lotus.Scheduler.Worker`. The query or dashboard it runs emits its own run
+  and query events, with the actor of the run.
+
+  ### `[:lotus, :schedule, :run, :start]`
+
+  **Measurements:** `:system_time`.
+
+  **Metadata:**
+
+    * `:schedule` - The `Lotus.Storage.Schedule`
+    * `:run` - The `Lotus.Storage.ScheduleRun`, `"running"`
+
+  ### `[:lotus, :schedule, :run, :stop]`
+
+  Emitted when the run succeeds.
+
+  **Measurements:** `:duration` (native units), `:row_count`.
+
+  **Metadata:** the start metadata, with `:run` as recorded: `"succeeded"`,
+  its `:row_count` and `:details`.
+
+  ### `[:lotus, :schedule, :run, :exception]`
+
+  Emitted when the run fails: the query or a dashboard card errored, the
+  actor callback refused it, or it raised.
+
+  **Measurements:** `:duration`.
+
+  **Metadata:** the start metadata, with `:run` as recorded: `"failed"` and
+  its `:error`.
+
   ## Example
 
   Attach a handler in your application's `start/2` callback:
@@ -351,6 +385,10 @@ defmodule Lotus.Telemetry do
   @ai_request_stop [:lotus, :ai, :request, :stop]
   @ai_request_exception [:lotus, :ai, :request, :exception]
 
+  @schedule_run_start [:lotus, :schedule, :run, :start]
+  @schedule_run_stop [:lotus, :schedule, :run, :stop]
+  @schedule_run_exception [:lotus, :schedule, :run, :exception]
+
   @doc false
   def events do
     [
@@ -370,7 +408,10 @@ defmodule Lotus.Telemetry do
       @content_change_exception,
       @ai_request_start,
       @ai_request_stop,
-      @ai_request_exception
+      @ai_request_exception,
+      @schedule_run_start,
+      @schedule_run_stop,
+      @schedule_run_exception
     ]
   end
 
@@ -471,6 +512,31 @@ defmodule Lotus.Telemetry do
       @content_change_exception,
       %{duration: duration},
       Map.put_new(metadata, :kind, :error)
+    )
+  end
+
+  @doc false
+  def schedule_run_start(metadata) do
+    start_time = System.monotonic_time()
+    :telemetry.execute(@schedule_run_start, %{system_time: System.system_time()}, metadata)
+    start_time
+  end
+
+  @doc false
+  def schedule_run_stop(start_time, %{run: run} = metadata) do
+    :telemetry.execute(
+      @schedule_run_stop,
+      %{duration: System.monotonic_time() - start_time, row_count: run.row_count || 0},
+      metadata
+    )
+  end
+
+  @doc false
+  def schedule_run_exception(start_time, metadata) do
+    :telemetry.execute(
+      @schedule_run_exception,
+      %{duration: System.monotonic_time() - start_time},
+      metadata
     )
   end
 

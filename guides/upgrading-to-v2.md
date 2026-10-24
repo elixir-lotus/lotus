@@ -191,7 +191,7 @@ Who is affected: code that scanned raw text with it. Use
 
 ---
 
-## 6. Run the v7 migration: an owner and a tenant on content
+## 6. Run the v7 migration: an owner and a tenant on content, and schedules
 
 `lotus_queries` and `lotus_dashboards` gain two nullable columns,
 `owner_id` and `tenant_id`, for ids the host supplies (see "Owner and
@@ -240,3 +240,103 @@ CREATE INDEX lotus_queries_owner_id_index ON lotus_queries (owner_id);
 
 MySQL has no partial indexes, so its name index reads a missing tenant as
 `''`. Lotus stores an empty id as `NULL`, so the two never meet.
+
+### Schedule tables
+
+The v7 migration also creates `lotus_schedules` and `lotus_schedule_runs`, for
+[scheduling](scheduling.md). PostgreSQL gets them with the migration above, and
+a fresh MySQL or SQLite install gets them too. An existing MySQL or SQLite
+install creates them by hand:
+
+```sql
+-- MySQL
+CREATE TABLE lotus_schedules (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  query_id BIGINT UNSIGNED NULL,
+  dashboard_id BIGINT UNSIGNED NULL,
+  cron VARCHAR(255) NOT NULL,
+  time_zone VARCHAR(64) NOT NULL DEFAULT 'Etc/UTC',
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  params JSON NOT NULL DEFAULT ('{}'),
+  deliveries JSON NOT NULL DEFAULT ('[]'),
+  rule JSON NULL,
+  state JSON NOT NULL DEFAULT ('{}'),
+  next_run_at DATETIME(6) NULL,
+  last_run_at DATETIME(6) NULL,
+  owner_id VARCHAR(255) NULL,
+  tenant_id VARCHAR(255) NULL,
+  inserted_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  KEY lotus_schedules_enabled_next_run_at_index (enabled, next_run_at),
+  KEY lotus_schedules_query_id_index (query_id),
+  KEY lotus_schedules_dashboard_id_index (dashboard_id),
+  KEY lotus_schedules_tenant_id_owner_id_index (tenant_id, owner_id),
+  CONSTRAINT lotus_schedules_query_id_fkey FOREIGN KEY (query_id)
+    REFERENCES lotus_queries (id) ON DELETE CASCADE,
+  CONSTRAINT lotus_schedules_dashboard_id_fkey FOREIGN KEY (dashboard_id)
+    REFERENCES lotus_dashboards (id) ON DELETE CASCADE
+);
+
+CREATE TABLE lotus_schedule_runs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  schedule_id BIGINT UNSIGNED NOT NULL,
+  scheduled_for DATETIME(6) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  started_at DATETIME(6) NULL,
+  finished_at DATETIME(6) NULL,
+  row_count INT NULL,
+  error TEXT NULL,
+  details JSON NOT NULL DEFAULT ('{}'),
+  inserted_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  UNIQUE KEY lotus_schedule_runs_slot_index (schedule_id, scheduled_for),
+  KEY lotus_schedule_runs_status_index (status),
+  CONSTRAINT lotus_schedule_runs_schedule_id_fkey FOREIGN KEY (schedule_id)
+    REFERENCES lotus_schedules (id) ON DELETE CASCADE
+);
+
+-- SQLite
+CREATE TABLE lotus_schedules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  query_id INTEGER CONSTRAINT lotus_schedules_query_id_fkey
+    REFERENCES lotus_queries (id) ON DELETE CASCADE,
+  dashboard_id INTEGER CONSTRAINT lotus_schedules_dashboard_id_fkey
+    REFERENCES lotus_dashboards (id) ON DELETE CASCADE,
+  cron TEXT NOT NULL,
+  time_zone TEXT NOT NULL DEFAULT 'Etc/UTC',
+  enabled INTEGER NOT NULL DEFAULT true,
+  params TEXT NOT NULL DEFAULT '{}',
+  deliveries TEXT NOT NULL DEFAULT '[]',
+  rule TEXT,
+  state TEXT NOT NULL DEFAULT '{}',
+  next_run_at TEXT,
+  last_run_at TEXT,
+  owner_id TEXT,
+  tenant_id TEXT,
+  inserted_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX lotus_schedules_enabled_next_run_at_index ON lotus_schedules (enabled, next_run_at);
+CREATE INDEX lotus_schedules_query_id_index ON lotus_schedules (query_id);
+CREATE INDEX lotus_schedules_dashboard_id_index ON lotus_schedules (dashboard_id);
+CREATE INDEX lotus_schedules_tenant_id_owner_id_index ON lotus_schedules (tenant_id, owner_id);
+
+CREATE TABLE lotus_schedule_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  schedule_id INTEGER NOT NULL CONSTRAINT lotus_schedule_runs_schedule_id_fkey
+    REFERENCES lotus_schedules (id) ON DELETE CASCADE,
+  scheduled_for TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  started_at TEXT,
+  finished_at TEXT,
+  row_count INTEGER,
+  error TEXT,
+  details TEXT NOT NULL DEFAULT '{}',
+  inserted_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX lotus_schedule_runs_slot_index ON lotus_schedule_runs (schedule_id, scheduled_for);
+CREATE INDEX lotus_schedule_runs_status_index ON lotus_schedule_runs (status);
+```

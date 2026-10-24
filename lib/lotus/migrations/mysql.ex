@@ -154,11 +154,64 @@ defmodule Lotus.Migrations.MySQL do
       )
     )
 
+    create_if_not_exists table(:lotus_schedules, primary_key: false) do
+      add(:id, :serial, primary_key: true)
+      add(:name, :string, size: 255, null: false)
+      add(:query_id, references(:lotus_queries, type: :serial, on_delete: :delete_all))
+      add(:dashboard_id, references(:lotus_dashboards, type: :serial, on_delete: :delete_all))
+      add(:cron, :string, size: 255, null: false)
+      add(:time_zone, :string, size: 64, null: false, default: "Etc/UTC")
+      add(:enabled, :boolean, null: false, default: true)
+      add(:params, :json, null: false, default: fragment("('{}')"))
+      add(:deliveries, :json, null: false, default: fragment("('[]')"))
+      add(:rule, :json)
+      add(:state, :json, null: false, default: fragment("('{}')"))
+      add(:next_run_at, :utc_datetime_usec)
+      add(:last_run_at, :utc_datetime_usec)
+      add(:owner_id, :string, size: 255)
+      add(:tenant_id, :string, size: 255)
+      add(:inserted_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
+      add(:updated_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
+    end
+
+    create(index(:lotus_schedules, [:enabled, :next_run_at]))
+    create(index(:lotus_schedules, [:query_id]))
+    create(index(:lotus_schedules, [:dashboard_id]))
+    create(index(:lotus_schedules, [:tenant_id, :owner_id]))
+
+    create_if_not_exists table(:lotus_schedule_runs, primary_key: false) do
+      add(:id, :serial, primary_key: true)
+
+      add(:schedule_id, references(:lotus_schedules, type: :serial, on_delete: :delete_all),
+        null: false
+      )
+
+      add(:scheduled_for, :utc_datetime_usec, null: false)
+      add(:status, :string, size: 32, null: false, default: "pending")
+      add(:started_at, :utc_datetime_usec)
+      add(:finished_at, :utc_datetime_usec)
+      add(:row_count, :integer)
+      add(:error, :text)
+      add(:details, :json, null: false, default: fragment("('{}')"))
+      add(:inserted_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
+      add(:updated_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
+    end
+
+    create(
+      unique_index(:lotus_schedule_runs, [:schedule_id, :scheduled_for],
+        name: "lotus_schedule_runs_slot_index"
+      )
+    )
+
+    create(index(:lotus_schedule_runs, [:status]))
+
     :ok
   end
 
   @impl Lotus.Migration
   def down(_opts \\ []) do
+    drop(table(:lotus_schedule_runs))
+    drop(table(:lotus_schedules))
     drop(table(:lotus_dashboard_card_filter_mappings))
     drop(table(:lotus_dashboard_filters))
     drop(table(:lotus_dashboard_cards))

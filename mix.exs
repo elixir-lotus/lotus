@@ -41,6 +41,7 @@ defmodule Lotus.MixProject do
   defp deps do
     [
       {:cachex, "~> 4.0", optional: true},
+      {:crontab, "~> 1.2"},
       {:ecto, "~> 3.10"},
       {:ecto_sql, "~> 3.10"},
       {:ecto_sqlite3, "~> 0.21", optional: true},
@@ -48,9 +49,11 @@ defmodule Lotus.MixProject do
       {:myxql, "~> 0.8", optional: true},
       {:nimble_csv, "~> 1.2"},
       {:nimble_options, "~> 1.0"},
+      {:oban, "~> 2.19", optional: true},
       {:postgrex, "~> 0.20", optional: true},
       {:sake, "~> 0.4", optional: true},
       {:telemetry, "~> 1.0"},
+      {:tz, "~> 0.28"},
 
       # AI/LLM Integration. Optional: the AI features need it in the host's
       # deps (see Lotus.AI.available?/0).
@@ -108,6 +111,14 @@ defmodule Lotus.MixProject do
           ~r/Lotus\.Storage\.Dashboard.*/
         ],
         "Data Export": [Lotus.Export, ~r/Lotus\.Export\..+/],
+        Scheduling: [
+          Lotus.Schedules,
+          Lotus.Schedules.Cron,
+          Lotus.Scheduler,
+          ~r/Lotus\.Scheduler\..+/,
+          Lotus.Storage.Schedule,
+          Lotus.Storage.ScheduleRun
+        ],
         "Data Sources": [
           Lotus.Source,
           Lotus.Source.Adapter,
@@ -121,6 +132,8 @@ defmodule Lotus.MixProject do
           Lotus.Source.Adapter.Binding,
           Lotus.Source.Adapter.Shaping,
           Lotus.Source.Adapter.Editor,
+          Lotus.Source.Adapter.Session,
+          Lotus.Source.Adapter.Streaming,
           Lotus.Query.Statement,
           Lotus.Source.Adapters.Ecto,
           Lotus.Source.Adapters.Ecto.Dialect,
@@ -164,6 +177,7 @@ defmodule Lotus.MixProject do
       "guides/installation.md",
       "guides/getting-started.md",
       "guides/dashboards.md",
+      "guides/scheduling.md",
       "guides/advanced-variables.md",
       "guides/ai_query_generation.md",
       "guides/mcp.md",

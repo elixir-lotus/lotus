@@ -95,6 +95,7 @@ defmodule Lotus.Config do
           source_resolver: module(),
           visibility_resolver: module(),
           middleware: %{atom() => [{module(), term()}]},
+          scheduler: keyword(),
           compiled_visibility: compiled_visibility()
         }
 
@@ -278,6 +279,68 @@ defmodule Lotus.Config do
       default: Lotus.Visibility.Resolvers.Static,
       doc:
         "Module implementing `Lotus.Visibility.Resolver` behaviour. Resolves visibility rules for data sources."
+    ],
+    scheduler: [
+      type: :keyword_list,
+      default: [],
+      keys: [
+        enabled: [
+          type: :boolean,
+          default: false,
+          doc: """
+          Start the built-in ticker (`Lotus.Scheduler`) on this node. Off by
+          default: no process starts. A host that ticks through Oban leaves
+          it off (see `Lotus.Scheduler.Oban`).
+          """
+        ],
+        interval: [
+          type: :pos_integer,
+          default: 30_000,
+          doc: "How often, in milliseconds, the scheduler looks for due schedules."
+        ],
+        actor: [
+          type: {:or, [:mfa, nil]},
+          default: nil,
+          doc: """
+          `{module, function, args}` called with the schedule prepended to
+          `args`, returning `{:ok, keyword()}` with the `:context` and
+          `:scope` the run uses, or `{:error, reason}` to skip it. Without
+          it a run has no actor.
+          """
+        ],
+        executor: [
+          type: :atom,
+          default: Lotus.Scheduler.Executors.Inline,
+          doc: "Module implementing `Lotus.Scheduler.Executor`, which performs a claimed run."
+        ],
+        oban: [
+          type: :keyword_list,
+          default: [],
+          doc: """
+          For `executor: Lotus.Scheduler.Oban`: `:name`, the Oban instance
+          (default `Oban`); `:queue` (default `:default`); `:max_attempts`
+          (default 3).
+          """
+        ],
+        time_zone_database: [
+          type: {:or, [:atom, nil]},
+          default: nil,
+          doc: """
+          The `Calendar.TimeZoneDatabase` schedules use. Defaults to the one
+          the application configures, or the `tz` package's when it
+          configures none.
+          """
+        ]
+      ],
+      doc: """
+      Scheduled runs of saved queries and dashboards. See `Lotus.Schedules`.
+
+          config :lotus,
+            scheduler: [
+              enabled: true,
+              actor: {MyApp.Lotus, :schedule_actor, []}
+            ]
+      """
     ],
     middleware: [
       type: {:or, [:map, nil]},
@@ -669,6 +732,12 @@ defmodule Lotus.Config do
   def get(key) do
     load!()[key]
   end
+
+  @doc """
+  Returns the scheduler configuration (see the `:scheduler` option).
+  """
+  @spec scheduler() :: keyword()
+  def scheduler, do: load!()[:scheduler] || []
 
   @doc """
   Returns the cache configuration.

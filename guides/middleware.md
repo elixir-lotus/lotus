@@ -250,7 +250,7 @@ The existing arities still work, with a `nil` context.
 | Key | Value |
 |-----|-------|
 | `:op` | `:create`, `:update`, `:delete`, `:enable_sharing` or `:disable_sharing` |
-| `:resource` | `:query`, `:visualization`, `:dashboard`, `:dashboard_card`, `:dashboard_filter` or `:filter_mapping` |
+| `:resource` | `:query`, `:visualization`, `:dashboard`, `:dashboard_card`, `:dashboard_filter`, `:filter_mapping` or `:schedule` |
 | `:record` | `:before_content_change`: the struct as stored, `nil` on a create. `:after_content_change`: the struct as written |
 | `:changeset` | `:before_content_change` only. The `Ecto.Changeset` Lotus is about to write; no changes on a delete |
 | `:changes` | `:after_content_change` only. Each changed field with its written value, embedded fields included; `%{}` on a delete |
