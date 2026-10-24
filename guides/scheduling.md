@@ -252,6 +252,17 @@ def available do
 end
 ```
 
+### Sending a test
+
+`Lotus.Delivery.send_test/4` sends sample results to one delivery now, to
+check a channel's settings before the first run (Lotus Web's "Send a
+test"). It checks the delivery as a save does, then returns `:ok` or the
+channel's reason: a URL that answers 404, a mailer that refuses.
+
+```elixir
+Lotus.Delivery.send_test("email", "csv", %{"to" => ["team@example.com"]}, title: "Weekly revenue")
+```
+
 ### Outcomes and retries
 
 Each delivery's outcome is recorded on the run, in `details["deliveries"]` by
