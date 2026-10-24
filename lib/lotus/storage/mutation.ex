@@ -13,7 +13,8 @@ defmodule Lotus.Storage.Mutation do
     :dashboard,
     :dashboard_card,
     :dashboard_filter,
-    :filter_mapping
+    :filter_mapping,
+    :schedule
   ]
 
   @type op :: :create | :update | :delete | :enable_sharing | :disable_sharing
@@ -24,6 +25,7 @@ defmodule Lotus.Storage.Mutation do
           | :dashboard_card
           | :dashboard_filter
           | :filter_mapping
+          | :schedule
   @type change :: {Changeset.t() | struct(), op(), resource()}
 
   @spec run(Changeset.t() | struct(), op(), resource(), keyword()) ::

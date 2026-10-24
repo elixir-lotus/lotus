@@ -149,11 +149,63 @@ defmodule Lotus.Migrations.SQLite do
       )
     )
 
+    create_if_not_exists table(:lotus_schedules, primary_key: false) do
+      add(:id, :serial, primary_key: true)
+      add(:name, :string, null: false)
+      add(:query_id, references(:lotus_queries, type: :integer, on_delete: :delete_all))
+      add(:dashboard_id, references(:lotus_dashboards, type: :integer, on_delete: :delete_all))
+      add(:cron, :string, null: false)
+      add(:time_zone, :string, null: false, default: "Etc/UTC")
+      add(:enabled, :boolean, null: false, default: true)
+      add(:params, :map, null: false, default: "{}")
+      add(:deliveries, :map, null: false, default: "[]")
+      add(:rule, :map)
+      add(:state, :map, null: false, default: "{}")
+      add(:next_run_at, :utc_datetime_usec)
+      add(:last_run_at, :utc_datetime_usec)
+      add(:owner_id, :string)
+      add(:tenant_id, :string)
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create_if_not_exists(index(:lotus_schedules, [:enabled, :next_run_at]))
+    create_if_not_exists(index(:lotus_schedules, [:query_id]))
+    create_if_not_exists(index(:lotus_schedules, [:dashboard_id]))
+    create_if_not_exists(index(:lotus_schedules, [:tenant_id, :owner_id]))
+
+    create_if_not_exists table(:lotus_schedule_runs, primary_key: false) do
+      add(:id, :serial, primary_key: true)
+
+      add(:schedule_id, references(:lotus_schedules, type: :integer, on_delete: :delete_all),
+        null: false
+      )
+
+      add(:scheduled_for, :utc_datetime_usec, null: false)
+      add(:status, :string, null: false, default: "pending")
+      add(:started_at, :utc_datetime_usec)
+      add(:finished_at, :utc_datetime_usec)
+      add(:row_count, :integer)
+      add(:error, :text)
+      add(:details, :map, null: false, default: "{}")
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create_if_not_exists(
+      unique_index(:lotus_schedule_runs, [:schedule_id, :scheduled_for],
+        name: "lotus_schedule_runs_slot_index"
+      )
+    )
+
+    create_if_not_exists(index(:lotus_schedule_runs, [:status]))
+
     :ok
   end
 
   @impl Lotus.Migration
   def down(_opts \\ []) do
+    drop_if_exists(table(:lotus_schedule_runs))
+    drop_if_exists(table(:lotus_schedules))
+
     drop_if_exists(
       index(:lotus_dashboard_card_filter_mappings, [:card_id, :filter_id, :variable_name],
         name: "lotus_dashboard_card_filter_mappings_card_filter_variable_index"

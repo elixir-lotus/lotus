@@ -24,7 +24,7 @@
     (#287).
 
 - **Run the v7 migration: `owner_id` and `tenant_id` on queries and
-  dashboards, and names unique per tenant.** Lotus reads every column of a
+  dashboards, names unique per tenant, and the schedule tables.** Lotus reads every column of a
   query and a dashboard, so an app must migrate before it deploys v2.0.
   PostgreSQL migrates with `mix ecto.migrate`
   (`Lotus.Migrations.Postgres.V7`); an existing MySQL or SQLite install runs
@@ -41,6 +41,23 @@
   `mix deps.update req_llm` if your lock holds an older one.
 
 ### Added
+
+- **Schedules: run a saved query or a dashboard on a cron expression, in a
+  time zone, once per cluster.** `Lotus.Schedules` creates, lists and
+  updates them and lists their runs. `cron` is read as the wall clock of
+  `time_zone`, so "08:00 Lisbon" stays 08:00 through daylight saving.
+  - With Oban, its cron plugin runs `Lotus.Scheduler.Oban.TickWorker`
+    every minute, and each run is an Oban job with retries
+    (`executor: Lotus.Scheduler.Oban`).
+  - Without Oban, `scheduler: [enabled: true]` starts `Lotus.Scheduler`.
+  - Either way a node claims a run by inserting it into
+    `lotus_schedule_runs`, unique per schedule and slot, so each slot runs
+    once on PostgreSQL, MySQL and SQLite with no other coordination.
+  - Runs refresh the cache, have no actor unless the `:actor` callback
+    gives one, and emit `[:lotus, :schedule, :run, ...]` telemetry.
+  - Nothing runs unless configured. New dependencies: `crontab` and `tz`
+    (time zone rules, used per call, without setting the global
+    database); Oban is optional. See the Scheduling guide.
 
 - **Stream a query's rows instead of holding them.**
   `Lotus.stream_query/3` and `Lotus.stream_statement/4` hand a function an

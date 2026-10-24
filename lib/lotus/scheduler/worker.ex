@@ -1,0 +1,178 @@
+defmodule Lotus.Scheduler.Worker do
+  @moduledoc """
+  Performs one claimed run of a schedule: what an executor calls.
+
+  The run moves from `"pending"` to `"running"` in one conditional update, so
+  an executor that hands the same run over twice (a job runner retrying it)
+  performs it once. It then runs the schedule's query with `Lotus.run_query/2`
+  (its `params` as `:vars`) or its dashboard with `Lotus.run_dashboard/2`
+  (its `params` as `:filter_values`), with `cache: :refresh` when a cache is
+  configured, and records the outcome: `"succeeded"` with the rows returned,
+  or `"failed"` with the error. A dashboard run fails when any of its query
+  cards fails; `details` names each failed card.
+
+  ## The actor
+
+  A run has no `:context` or `:scope` by default: it runs as the app, and
+  middleware and visibility see it that way. The `:actor` option of the
+  scheduler config gives it one:
+
+      config :lotus, scheduler: [enabled: true, actor: {MyApp.Lotus, :schedule_actor, []}]
+
+      def schedule_actor(%Lotus.Storage.Schedule{} = schedule) do
+        {:ok, context: %{system: :scheduler}, scope: %{tenant_id: schedule.tenant_id}}
+      end
+
+  It is called with the schedule first, then the configured arguments, and
+  returns `{:ok, keyword}` with `:context` and `:scope`, or `{:error, reason}`
+  to fail the run without running anything.
+
+  `[:lotus, :schedule, :run, :start | :stop | :exception]` telemetry brackets
+  each run; see `Lotus.Telemetry`.
+  """
+
+  import Ecto.Query
+
+  alias Lotus.{Config, Dashboards, Result, Telemetry}
+  alias Lotus.Storage.{Query, Schedule, ScheduleRun}
+
+  @doc """
+  Performs the run `run_id`. Returns `{:ok, run}` with the run as recorded,
+  `{:error, :not_found}`, or `{:error, :not_pending}` for a run that was
+  already taken.
+
+  With `retry: true` a `"failed"` run is taken again too, and a `"running"`
+  one left by an attempt that died: a job runner that retries a run, and
+  runs one attempt at a time, passes it. The run records its last attempt.
+  """
+  @spec perform(term(), keyword()) ::
+          {:ok, ScheduleRun.t()} | {:error, :not_found | :not_pending}
+  def perform(run_id, opts \\ []) do
+    repo = Lotus.repo()
+    started_at = now()
+
+    takeable =
+      if Keyword.get(opts, :retry, false),
+        do: ["pending", "running", "failed"],
+        else: ["pending"]
+
+    {taken, _} =
+      repo.update_all(
+        from(r in ScheduleRun, where: r.id == ^run_id and r.status in ^takeable),
+        set: [status: "running", started_at: started_at, error: nil, updated_at: started_at]
+      )
+
+    case {taken, repo.get(ScheduleRun, run_id)} do
+      {_taken, nil} -> {:error, :not_found}
+      {0, _run} -> {:error, :not_pending}
+      {1, run} -> run |> repo.preload(schedule: [:query]) |> perform_run()
+    end
+  end
+
+  defp perform_run(%ScheduleRun{schedule: schedule} = run) do
+    metadata = %{schedule: schedule, run: run}
+    start_time = Telemetry.schedule_run_start(metadata)
+
+    outcome =
+      try do
+        execute(schedule)
+      rescue
+        e -> {:error, Exception.message(e)}
+      end
+
+    finished_at = now()
+
+    attrs =
+      case outcome do
+        {:ok, row_count, details} ->
+          %{status: "succeeded", row_count: row_count, details: details}
+
+        {:error, reason, details} ->
+          %{status: "failed", error: describe(reason), details: details}
+
+        {:error, reason} ->
+          %{status: "failed", error: describe(reason)}
+      end
+
+    {:ok, run} =
+      run
+      |> ScheduleRun.update_changeset(Map.put(attrs, :finished_at, finished_at))
+      |> Lotus.repo().update()
+
+    Lotus.repo().update_all(
+      from(s in Schedule, where: s.id == ^schedule.id),
+      set: [last_run_at: run.scheduled_for]
+    )
+
+    if run.status == "succeeded",
+      do: Telemetry.schedule_run_stop(start_time, %{metadata | run: run}),
+      else: Telemetry.schedule_run_exception(start_time, %{metadata | run: run})
+
+    {:ok, run}
+  end
+
+  defp execute(%Schedule{} = schedule) do
+    with {:ok, actor} <- actor(schedule) do
+      opts = actor ++ cache_opts()
+      execute(schedule, opts)
+    end
+  end
+
+  defp execute(%Schedule{query: %Query{} = query, params: params}, opts) do
+    case Lotus.run_query(query, [vars: params || %{}] ++ opts) do
+      {:ok, %Result{num_rows: rows}} -> {:ok, rows || 0, %{}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp execute(%Schedule{dashboard_id: id, params: params}, opts) when not is_nil(id) do
+    results =
+      Dashboards.run_dashboard(id, [filter_values: params || %{}, parallel: false] ++ opts)
+
+    failed =
+      for {card_id, {:error, reason}} <- results,
+          into: %{},
+          do: {to_string(card_id), describe(reason)}
+
+    rows =
+      for {_card_id, {:ok, %Result{num_rows: n}}} <- results,
+          reduce: 0,
+          do: (acc -> acc + (n || 0))
+
+    if failed == %{},
+      do: {:ok, rows, %{"cards" => map_size(results)}},
+      else:
+        {:error, "#{map_size(failed)} of #{map_size(results)} cards failed",
+         %{"failed_cards" => failed}}
+  end
+
+  defp execute(%Schedule{}, _opts),
+    do: {:error, "the schedule's query or dashboard no longer exists"}
+
+  defp actor(schedule) do
+    case Keyword.get(Config.scheduler(), :actor) do
+      nil ->
+        {:ok, []}
+
+      {module, function, args} ->
+        case apply(module, function, [schedule | args]) do
+          {:ok, actor} when is_list(actor) -> {:ok, Keyword.take(actor, [:context, :scope])}
+          {:error, reason} -> {:error, {:actor, reason}}
+        end
+    end
+  end
+
+  defp cache_opts do
+    case Config.cache_adapter() do
+      {:ok, _adapter} -> [cache: :refresh]
+      :error -> []
+    end
+  end
+
+  defp describe(reason) when is_binary(reason), do: reason
+  defp describe({:actor, reason}), do: "the actor callback refused the run: #{describe(reason)}"
+  defp describe(reason) when is_exception(reason), do: Exception.message(reason)
+  defp describe(reason), do: inspect(reason)
+
+  defp now, do: DateTime.utc_now()
+end

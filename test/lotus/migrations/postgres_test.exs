@@ -30,6 +30,11 @@ defmodule Lotus.Migrations.PostgresTest do
       assert column_exists?(table, "tenant_id")
     end
 
+    assert table_exists?("lotus_schedules")
+    assert table_exists?("lotus_schedule_runs")
+    assert column_exists?("lotus_schedules", "next_run_at")
+    assert column_exists?("lotus_schedule_runs", "scheduled_for")
+
     # A name is unique within a tenant, and among the rows without one.
     assert {:ok, _} = insert_query("Revenue", "acme")
     assert {:ok, _} = insert_query("Revenue", "globex")

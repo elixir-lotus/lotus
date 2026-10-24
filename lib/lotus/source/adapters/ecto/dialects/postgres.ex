@@ -177,7 +177,9 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
       {prefix, "lotus_dashboards"},
       {prefix, "lotus_dashboard_cards"},
       {prefix, "lotus_dashboard_filters"},
-      {prefix, "lotus_dashboard_card_filter_mappings"}
+      {prefix, "lotus_dashboard_card_filter_mappings"},
+      {prefix, "lotus_schedules"},
+      {prefix, "lotus_schedule_runs"}
     ]
   end
 

@@ -27,8 +27,9 @@ defmodule Lotus.Supervisor do
 
   In start order: `Lotus.Notifier`, the task supervisor, the cache adapter's
   children (`Lotus.Cache.ETS` when no adapter is configured),
-  `Lotus.Cache.Relay`, and `Lotus.Source.Supervisor`. The notifier
-  starts first because the relay and the source reconciler listen on it.
+  `Lotus.Cache.Relay`, `Lotus.Source.Supervisor`, and `Lotus.Scheduler`
+  when `scheduler: [enabled: true]`. The notifier starts first because the
+  relay and the source reconciler listen on it.
   """
 
   use Supervisor
@@ -65,7 +66,8 @@ defmodule Lotus.Supervisor do
       [Lotus.Notifier, {Task.Supervisor, name: task_sup_name}] ++
         default_ets_child(cache_conf) ++
         cache_children ++
-        [{Lotus.Cache.Relay, task_supervisor: task_sup_name}, Lotus.Source.Supervisor]
+        [{Lotus.Cache.Relay, task_supervisor: task_sup_name}, Lotus.Source.Supervisor] ++
+        scheduler_child(task_sup_name)
 
     Supervisor.init(children, strategy: :one_for_one)
   end
@@ -77,6 +79,16 @@ defmodule Lotus.Supervisor do
   # start next to it.
   defp default_ets_child(%{adapter: _adapter}), do: []
   defp default_ets_child(_no_adapter), do: [{Lotus.Cache.ETS, []}]
+
+  # Only with `scheduler: [enabled: true]`, and only for the built-in ticker:
+  # a host that ticks through its job runner starts nothing here.
+  defp scheduler_child(task_sup_name) do
+    scheduler = Lotus.Config.scheduler()
+
+    if Keyword.get(scheduler, :enabled, false),
+      do: [{Lotus.Scheduler, task_supervisor: task_sup_name}],
+      else: []
+  end
 
   @doc false
   def child_spec(opts) do

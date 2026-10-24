@@ -142,8 +142,9 @@ mix ecto.migrate
 ```
 
 This creates the `lotus_queries`, `lotus_query_visualizations`,
-`lotus_dashboards`, `lotus_dashboard_cards`, `lotus_dashboard_filters` and
-`lotus_dashboard_card_filter_mappings` tables in your storage repo.
+`lotus_dashboards`, `lotus_dashboard_cards`, `lotus_dashboard_filters`,
+`lotus_dashboard_card_filter_mappings`, `lotus_schedules` and
+`lotus_schedule_runs` tables in your storage repo.
 
 `Lotus.Migrations.up/1` and `down/1` dispatch on the storage repo's adapter and
 accept a `:prefix` option if you keep Lotus tables in another schema:

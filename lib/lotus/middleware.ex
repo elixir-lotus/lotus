@@ -175,7 +175,7 @@ defmodule Lotus.Middleware do
     * `:op` is `:create`, `:update`, `:delete`, `:enable_sharing` or
       `:disable_sharing`.
     * `:resource` is `:query`, `:visualization`, `:dashboard`,
-      `:dashboard_card`, `:dashboard_filter` or `:filter_mapping`.
+      `:dashboard_card`, `:dashboard_filter`, `:filter_mapping` or `:schedule`.
     * `:record` is the struct as stored on `:before_content_change`, or `nil`
       on a create, and the struct as written on `:after_content_change`.
     * `:changeset` is the `Ecto.Changeset` Lotus is about to write. On a delete
