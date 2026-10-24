@@ -75,6 +75,9 @@ defmodule Lotus.AI do
 
   See `Lotus.AI.Tool.run/4` for the events.
 
+  `explain_query/1` also takes `:on_text`, called with each piece of the
+  explanation as the model writes it.
+
   ## Error Handling
 
   The `generate_query/1` function returns structured error tuples that clients can
@@ -496,9 +499,9 @@ defmodule Lotus.AI do
   # access-control plug or a scoped visibility resolver sees the same actor
   # for an AI-initiated action as for one the user made directly. Keys the
   # caller omitted are left out rather than passed as nil. `:on_tool_call`
-  # goes with them, to the tool loop (`Lotus.AI.Tool.run/4`).
+  # and `:on_text` go with them, to the tool loop (`Lotus.AI.Tool.run/4`).
   defp caller_opts(opts) do
-    Enum.flat_map([:context, :scope, :on_tool_call], fn key ->
+    Enum.flat_map([:context, :scope, :on_tool_call, :on_text], fn key ->
       case Keyword.fetch(opts, key) do
         {:ok, value} -> [{key, value}]
         :error -> []

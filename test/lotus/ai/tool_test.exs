@@ -84,4 +84,39 @@ defmodule Lotus.AI.ToolTest do
       assert {:ok, _json} = tool.callback.(%{"hallucinated_param" => "value"})
     end
   end
+
+  describe "run/4 with :on_text" do
+    test "streams the round and hands on each piece of text" do
+      answer = ReqLLM.Context.assistant("Counts users.")
+
+      response = %ReqLLM.Response{
+        id: "mock",
+        message: answer,
+        context: ReqLLM.Context.new([answer]),
+        finish_reason: :stop,
+        usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2},
+        model: "gpt-4o"
+      }
+
+      reject(&ReqLLM.generate_text/3)
+      stub(ReqLLM, :stream_text, fn _model, _messages, _opts -> {:ok, :stream} end)
+
+      stub(ReqLLM.StreamResponse, :process_stream, fn :stream, opts ->
+        Enum.each(["Counts ", "users."], opts[:on_result])
+        {:ok, response}
+      end)
+
+      test_pid = self()
+      context = ReqLLM.Context.new([ReqLLM.Context.user("Explain")])
+
+      assert {:ok, %ReqLLM.Response{}} =
+               Tool.run("openai:gpt-4o", context, [],
+                 api_key: "sk-test",
+                 on_text: &send(test_pid, {:text, &1})
+               )
+
+      assert_received {:text, "Counts "}
+      assert_received {:text, "users."}
+    end
+  end
 end

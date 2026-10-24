@@ -103,6 +103,11 @@ if Code.ensure_loaded?(ReqLLM) do
       handed back to the model) and `:duration` (native time units) after.
       It runs in the process that runs the loop; what it raises is logged
       and does not stop the request.
+    - `:on_text` - Function of one argument. When given, each round streams,
+      and it is called with each piece of the model's text as it arrives, so
+      that an interface can show an answer as it is written. A round that
+      ends in tool calls may have sent some text first. Like
+      `:on_tool_call`, what it raises is logged.
 
     ## Returns
 
@@ -118,7 +123,8 @@ if Code.ensure_loaded?(ReqLLM) do
         api_key: Keyword.fetch!(opts, :api_key),
         temperature: Keyword.get(opts, :temperature, 0.2),
         max: Keyword.get(opts, :max_iterations, @default_max_iterations),
-        on_max: Keyword.get(opts, :on_max_iterations)
+        on_max: Keyword.get(opts, :on_max_iterations),
+        on_text: Keyword.get(opts, :on_text)
       }
 
       metadata = opts |> Keyword.get(:request, %{}) |> Map.put(:model, model)
@@ -146,11 +152,7 @@ if Code.ensure_loaded?(ReqLLM) do
     defp do_run(loop, context, acc) do
       messages = ReqLLM.Context.to_list(context)
 
-      case ReqLLM.generate_text(loop.model, messages,
-             tools: loop.tools,
-             api_key: loop.api_key,
-             temperature: loop.temperature
-           ) do
+      case request(loop, messages) do
         {:ok, response} ->
           acc = %{
             acc
@@ -181,6 +183,22 @@ if Code.ensure_loaded?(ReqLLM) do
         {:error, raw_error} ->
           Logger.error("AI service error: #{inspect(raw_error)}")
           {:error, Error.wrap(raw_error), acc}
+      end
+    end
+
+    defp request(loop, messages) do
+      opts = [tools: loop.tools, api_key: loop.api_key, temperature: loop.temperature]
+
+      case loop.on_text do
+        nil ->
+          ReqLLM.generate_text(loop.model, messages, opts)
+
+        on_text ->
+          with {:ok, stream} <- ReqLLM.stream_text(loop.model, messages, opts) do
+            ReqLLM.StreamResponse.process_stream(stream,
+              on_result: &notify(on_text, &1, :on_text)
+            )
+          end
       end
     end
 
@@ -221,10 +239,10 @@ if Code.ensure_loaded?(ReqLLM) do
     defp tool_result({:ok, result}), do: result
     defp tool_result({:error, reason}), do: {:error, reason}
 
-    defp notify(on_tool_call, event) do
-      on_tool_call.(event)
+    defp notify(callback, event, name \\ :on_tool_call) do
+      callback.(event)
     rescue
-      error -> Logger.warning("on_tool_call raised: " <> Exception.message(error))
+      error -> Logger.warning("#{name} raised: " <> Exception.message(error))
     end
 
     defp add_tool_calls(acc, tool_calls),

@@ -46,7 +46,9 @@
   `generate_query/1`, `suggest_optimizations/1` and `explain_query/1` take a
   function called as each tool the model asks for starts and stops (its
   name, arguments, result and duration), so an interface can show the work
-  while the request is still going. See `Lotus.AI.Tool.run/4`.
+  while the request is still going. `explain_query/1` also takes
+  `:on_text`, called with each piece of the explanation as the model
+  writes it (the rounds of its tool loop stream). See `Lotus.AI.Tool.run/4`.
 
 - **Alert conditions of your own, or Lotus Pro's.** A condition registered
   by name (`config :lotus, alerts: [conditions: %{"change" => MyMod}]`,
