@@ -7,6 +7,10 @@ defmodule Lotus.Storage.DashboardCard do
   - `:text` - Displays markdown text content
   - `:link` - Displays a clickable link
   - `:heading` - Displays a section heading
+  - `:pro` - A card of Lotus Pro. Its `content` names which one
+    (`%{"kind" => "action", ...}`) and holds its settings; Lotus Web asks Pro
+    to draw it. It may read a query (`query_id`). Lotus never runs it: running
+    and exporting a dashboard take its `:query` cards only
 
   Each card has a layout that determines its position and size in the dashboard's
   12-column grid system.
@@ -21,7 +25,7 @@ defmodule Lotus.Storage.DashboardCard do
 
   @type t :: %__MODULE__{
           id: term(),
-          card_type: :query | :text | :link | :heading,
+          card_type: :query | :text | :link | :heading | :pro,
           title: String.t() | nil,
           visualization_config: map() | nil,
           content: map(),
@@ -57,7 +61,7 @@ defmodule Lotus.Storage.DashboardCard do
            ]}
 
   schema "lotus_dashboard_cards" do
-    field(:card_type, Ecto.Enum, values: [:query, :text, :link, :heading])
+    field(:card_type, Ecto.Enum, values: [:query, :text, :link, :heading, :pro])
     field(:title, :string)
     field(:visualization_config, :map)
     field(:content, :map, default: %{})
@@ -171,6 +175,9 @@ defmodule Lotus.Storage.DashboardCard do
     end
   end
 
+  defp pro_kind?(%{"kind" => kind}) when is_binary(kind) and kind != "", do: true
+  defp pro_kind?(_content), do: false
+
   defp validate_card_type(changeset) do
     card_type = get_field(changeset, :card_type)
     query_id = get_field(changeset, :query_id)
@@ -181,6 +188,9 @@ defmodule Lotus.Storage.DashboardCard do
 
       card_type in [:text, :link, :heading] and not is_nil(query_id) ->
         add_error(changeset, :query_id, "must be nil for non-query cards")
+
+      card_type == :pro and not pro_kind?(get_field(changeset, :content)) ->
+        add_error(changeset, :content, "must name the kind of a Pro card")
 
       true ->
         changeset

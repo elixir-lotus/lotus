@@ -42,6 +42,13 @@
 
 ### Added
 
+- **A dashboard card can be a Lotus Pro card.** `card_type: :pro` is for
+  the cards Lotus Pro adds (action buttons, for example). Its `content` names
+  which one (`%{"kind" => "action", ...}`, required) and holds its settings,
+  and it may read a query. Lotus Web asks Pro to draw it. Running and
+  exporting a dashboard take its `:query` cards only, so a Pro card is never
+  run. No migration: `card_type` is a string column.
+
 - **Alerts on query results.** A query schedule with a `rule` checks one
   value of the result on each run and sends its deliveries when the status
   changes (`Lotus.Schedules.Alert`).

@@ -153,6 +153,33 @@ defmodule Lotus.Storage.DashboardTest do
       assert %{query_id: ["must be nil for non-query cards"]} = errors_on(changeset)
     end
 
+    test "a Pro card names its kind, and may read a query" do
+      changeset =
+        DashboardCard.new(%{
+          dashboard_id: 1,
+          card_type: :pro,
+          content: %{"kind" => "action", "label" => "Approve"},
+          position: 0
+        })
+
+      assert changeset.valid?
+
+      assert DashboardCard.new(%{
+               dashboard_id: 1,
+               card_type: :pro,
+               content: %{kind: "chart"},
+               query_id: 1,
+               position: 0
+             }).valid?
+
+      for content <- [%{}, %{"kind" => ""}, %{"kind" => 1}] do
+        changeset =
+          DashboardCard.new(%{dashboard_id: 1, card_type: :pro, content: content, position: 0})
+
+        assert %{content: ["must name the kind of a Pro card"]} = errors_on(changeset)
+      end
+    end
+
     test "validates position is non-negative" do
       changeset =
         DashboardCard.new(%{

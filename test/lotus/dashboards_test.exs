@@ -636,6 +636,18 @@ defmodule Lotus.DashboardsTest do
     test "returns error when card not found" do
       assert {:error, :not_found} = Dashboards.run_dashboard_card(999_999)
     end
+
+    test "a Pro card is not run: running the dashboard takes its query cards" do
+      dashboard = dashboard_fixture()
+      query = query_fixture(%{statement: "SELECT 1 AS n"})
+      query_card = dashboard_card_fixture(dashboard, %{card_type: :query, query_id: query.id})
+
+      pro_card =
+        dashboard_card_fixture(dashboard, %{card_type: :pro, content: %{"kind" => "action"}})
+
+      assert {:error, :not_a_query_card} = Dashboards.run_dashboard_card(pro_card)
+      assert [query_card.id] == Map.keys(Dashboards.run_dashboard(dashboard.id))
+    end
   end
 
   describe "card_variables/4" do
