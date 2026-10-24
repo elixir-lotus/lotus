@@ -166,6 +166,19 @@ It sends with [Req](https://hex.pm/packages/req), an optional dependency: add
 `{:req, "~> 0.5"}` to your deps. An app with the AI features has it already.
 Without it a webhook delivery is refused when the schedule is saved.
 
+### The Slack channel
+
+`"slack"` posts each run as a message in a Slack channel, through an
+[incoming webhook](https://api.slack.com/messaging/webhooks):
+`config["webhook_url"]`, a `https://hooks.slack.com/…` URL. The message has
+the schedule's name, an alert's status and message, and for each result (three
+at most) its first ten rows as a table. Slack takes no files through an
+incoming webhook, so the delivery's format is not attached.
+
+An incoming webhook is free: in Slack, create an app for the workspace, turn
+on incoming webhooks, and add one to the channel to post in. Like the
+webhook, the channel sends with Req.
+
 ### Your own channels and formats
 
 A channel implements `Lotus.Delivery.Channel` (`formats/0`, `validate_config/1`,

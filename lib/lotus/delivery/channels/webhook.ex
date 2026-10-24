@@ -43,7 +43,7 @@ defmodule Lotus.Delivery.Channels.Webhook do
 
   @behaviour Lotus.Delivery.Channel
 
-  @timeout 15_000
+  alias Lotus.Delivery.HTTP
 
   @impl true
   def formats, do: :any
@@ -73,11 +73,11 @@ defmodule Lotus.Delivery.Channels.Webhook do
   end
 
   @impl true
-  def available, do: ensure_req()
+  def available, do: HTTP.ensure_req("webhook")
 
   @impl true
   def validate_config(config) do
-    with :ok <- ensure_req(),
+    with :ok <- HTTP.ensure_req("webhook"),
          {:ok, url} <- fetch_url(config),
          :ok <- validate_url(url),
          :ok <- validate_authorization(Map.get(config, "authorization")) do
@@ -88,16 +88,6 @@ defmodule Lotus.Delivery.Channels.Webhook do
   defp validate_authorization(nil), do: :ok
   defp validate_authorization(value) when is_binary(value), do: :ok
   defp validate_authorization(_value), do: {:error, "the authorization must be a string"}
-
-  # The module an app without Req does not have; a setting only so that the
-  # tests can stand for such an app.
-  defp req, do: Application.get_env(:lotus, :__req_dependency__, Req)
-
-  defp ensure_req do
-    if Code.ensure_loaded?(req()),
-      do: :ok,
-      else: {:error, ~s(the webhook channel needs Req: add {:req, "~> 0.5"} to your deps)}
-  end
 
   defp fetch_url(config) do
     case Map.get(config, "url") do
@@ -135,17 +125,13 @@ defmodule Lotus.Delivery.Channels.Webhook do
   @impl true
   def deliver(content, attachments, config) do
     with :ok <- validate_config(config) do
-      options =
-        [
-          json: envelope(content, attachments),
-          headers: headers(config),
-          receive_timeout: @timeout,
-          connect_options: [timeout: @timeout],
-          retry: false
-        ]
-        |> Keyword.merge(Keyword.get(host_settings(), :req_options, []))
+      options = [headers: headers(config)] ++ Keyword.get(host_settings(), :req_options, [])
 
-      post(config["url"], options)
+      case HTTP.post_json(config["url"], envelope(content, attachments), options) do
+        {:ok, status, _body} when status in 200..299 -> :ok
+        {:ok, status, body} -> {:error, "the webhook answered #{status}: #{body}"}
+        {:error, message} -> {:error, "the webhook could not be reached: #{message}"}
+      end
     end
   end
 
@@ -178,21 +164,4 @@ defmodule Lotus.Delivery.Channels.Webhook do
       alert -> Map.put(envelope, "alert", Lotus.Delivery.alert_json(alert))
     end
   end
-
-  # Req is optional: called through a variable, so Lotus compiles without it.
-  defp post(url, options) do
-    case req().post(url, options) do
-      {:ok, %{status: status}} when status in 200..299 ->
-        :ok
-
-      {:ok, %{status: status, body: body}} ->
-        {:error, "the webhook answered #{status}: #{String.slice(to_string_body(body), 0, 200)}"}
-
-      {:error, exception} ->
-        {:error, "the webhook could not be reached: #{Exception.message(exception)}"}
-    end
-  end
-
-  defp to_string_body(body) when is_binary(body), do: body
-  defp to_string_body(body), do: inspect(body)
 end
