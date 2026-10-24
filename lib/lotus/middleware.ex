@@ -30,6 +30,7 @@ defmodule Lotus.Middleware do
   | `:after_discover` | After any discovery call, following the kind-specific `:after_list_*` event | `:kind`, `:result`, `:source`, `:scope`, `:context` |
   | `:before_content_change` | Before a query, visualization, dashboard, card, filter or filter mapping is created, updated, deleted, shared or reordered | `:op`, `:resource`, `:record`, `:changeset`, `:context` |
   | `:after_content_change` | After that change is written | `:op`, `:resource`, `:record`, `:changes`, `:context` |
+  | `:before_ai_request` | Before an AI function sends its request to the model | `:feature`, `:model`, `:data_source`, `:prompt`, `:system_prompt`, `:context`, `:scope` |
 
   ### Query event ordering
 
@@ -241,6 +242,32 @@ defmodule Lotus.Middleware do
   `{:halted, reason}` for a refusal, the changeset for a failed validation.
   See `Lotus.Telemetry`.
 
+  ### AI request events
+
+  `Lotus.AI.generate_query/1`, `generate_query_with_context/1`,
+  `suggest_optimizations/1` and `explain_query/1` fire `:before_ai_request`
+  once, before the first call to the model, with `:context` and `:scope`
+  as the caller passed them.
+
+    * `:feature` is `:generation`, `:optimization` or `:explanation`.
+    * `:prompt` is the user message of this request: the person's question
+      for a generation, the statement and its plan or fragment for the other
+      two.
+    * `:system_prompt` is the system prompt Lotus built for the source.
+
+  A halt refuses the request before anything reaches the model, and the AI
+  function returns `{:error, {:halted, reason}}`: a plug enforces who may use
+  AI and how much. A plug that continues with another `:system_prompt`
+  string has it sent instead, so it can add instructions, guardrails or
+  grounding the schema does not give (dataset descriptions, metric
+  definitions, a glossary), or replace sections. Anything that is not a
+  string is ignored. What the model's tools then read and run goes through
+  the discovery and query events, with the same actor.
+
+  The `[:lotus, :ai, :request, :start | :stop | :exception]` telemetry events
+  bracket each request that reaches the model, with its token usage and the
+  tools the model called. See `Lotus.Telemetry`.
+
   ## Configuration
 
       config :lotus,
@@ -276,6 +303,7 @@ defmodule Lotus.Middleware do
           | :after_discover
           | :before_content_change
           | :after_content_change
+          | :before_ai_request
 
   @typedoc """
   The error reason a mutation function returns when a `:before_content_change`

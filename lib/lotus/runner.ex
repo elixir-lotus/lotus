@@ -550,6 +550,7 @@ defmodule Lotus.Runner do
           raw
           |> Map.take([:connection_id, :messages])
           |> maybe_put_total_count(raw)
+          |> maybe_put_cost(raw)
 
         {:ok,
          Result.new(final_cols, final_rows,
@@ -573,6 +574,23 @@ defmodule Lotus.Runner do
     do: Map.put(meta, :total_count, n)
 
   defp maybe_put_total_count(meta, _raw), do: meta
+
+  @cost_counts [:bytes_scanned, :bytes_billed, :rows_scanned]
+
+  # The cost keys Lotus knows, with non-negative values; an adapter's other
+  # keys and bad values are dropped.
+  defp maybe_put_cost(meta, %{cost: cost}) when is_map(cost) do
+    known =
+      for {key, value} <- cost,
+          (key in @cost_counts and is_integer(value) and value >= 0) or
+            (key == :credits and is_number(value) and value >= 0),
+          into: %{},
+          do: {key, value}
+
+    if known == %{}, do: meta, else: Map.put(meta, :cost, known)
+  end
+
+  defp maybe_put_cost(meta, _raw), do: meta
 
   defp normalize_command(nil), do: nil
   defp normalize_command(cmd) when is_atom(cmd), do: Atom.to_string(cmd)

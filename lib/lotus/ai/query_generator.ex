@@ -14,6 +14,7 @@ if Code.ensure_loaded?(ReqLLM) do
     alias Lotus.AI.Conversation
     alias Lotus.AI.Prompts.AdapterNotes
     alias Lotus.AI.Prompts.QueryGeneration
+    alias Lotus.AI.Request
     alias Lotus.AI.Tool
     alias Lotus.Query.Statement
     alias Lotus.Source
@@ -88,13 +89,23 @@ if Code.ensure_loaded?(ReqLLM) do
           system_prompt =
             QueryGeneration.system_prompt(ai_context, table_names, read_only: read_only)
 
-          tools = build_tools(data_source, actor)
-          fence = AdapterNotes.fence_label(ai_context)
-          messages = build_messages(conversation, prompt, system_prompt, query_context, fence)
-          context = build_context(messages)
+          request =
+            [model: model_string, data_source: data_source, prompt: prompt] ++
+              Keyword.take(opts, [:context, :scope])
 
-          Tool.run(model_string, context, tools, api_key: api_key, temperature: temperature)
-          |> handle_response(model_string, data_source)
+          with {:ok, system_prompt} <- Request.prepare(:generation, system_prompt, request) do
+            tools = build_tools(data_source, actor)
+            fence = AdapterNotes.fence_label(ai_context)
+            messages = build_messages(conversation, prompt, system_prompt, query_context, fence)
+            context = build_context(messages)
+
+            Tool.run(model_string, context, tools,
+              api_key: api_key,
+              temperature: temperature,
+              request: Request.metadata(:generation, request)
+            )
+            |> handle_response(model_string, data_source)
+          end
 
         {:error, :ai_not_supported} ->
           {:error, :ai_not_supported_for_source}

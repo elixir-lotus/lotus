@@ -22,6 +22,7 @@ if Code.ensure_loaded?(ReqLLM) do
     """
 
     alias Lotus.AI.Error
+    alias Lotus.Telemetry
 
     require Logger
 
@@ -82,6 +83,10 @@ if Code.ensure_loaded?(ReqLLM) do
     repeats. Stops when the LLM produces a text response or the iteration
     limit is reached.
 
+    The loop is one AI request: it emits the `[:lotus, :ai, :request, ...]`
+    telemetry events (see `Lotus.Telemetry`), and the final response's usage
+    is the sum of every round's, as each round is a call the provider bills.
+
     ## Options
 
     - `:api_key` (required) - API key for the LLM provider
@@ -89,6 +94,8 @@ if Code.ensure_loaded?(ReqLLM) do
     - `:max_iterations` - Maximum number of tool-call rounds (default: `10`)
     - `:on_max_iterations` - Callback `(response -> term)` called when limit is hit.
       Defaults to logging a warning.
+    - `:request` - Map of what the request is for, added to the telemetry
+      metadata: `:feature`, `:data_source`, `:context`, `:scope`
 
     ## Returns
 
@@ -98,58 +105,99 @@ if Code.ensure_loaded?(ReqLLM) do
     @spec run(String.t(), struct(), [map()], keyword()) ::
             {:ok, struct()} | {:error, term()}
     def run(model, context, tools, opts \\ []) do
-      api_key = Keyword.fetch!(opts, :api_key)
-      temperature = Keyword.get(opts, :temperature, 0.2)
-      max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
-      on_max = Keyword.get(opts, :on_max_iterations)
+      loop = %{
+        model: model,
+        tools: tools,
+        api_key: Keyword.fetch!(opts, :api_key),
+        temperature: Keyword.get(opts, :temperature, 0.2),
+        max: Keyword.get(opts, :max_iterations, @default_max_iterations),
+        on_max: Keyword.get(opts, :on_max_iterations)
+      }
 
-      do_run(model, context, tools, api_key, temperature, max_iterations, on_max, 1)
+      metadata = opts |> Keyword.get(:request, %{}) |> Map.put(:model, model)
+      start_time = Telemetry.ai_request_start(metadata)
+      acc = %{iterations: 0, usage: nil, tool_calls: []}
+
+      case do_run(loop, context, acc) do
+        {:ok, response, acc} ->
+          response = %{response | usage: acc.usage}
+          Telemetry.ai_request_stop(start_time, Map.merge(metadata, finished(acc)))
+          {:ok, response}
+
+        {:error, error, acc} ->
+          Telemetry.ai_request_exception(
+            start_time,
+            metadata |> Map.merge(finished(acc)) |> Map.put(:reason, error)
+          )
+
+          {:error, error}
+      end
     end
 
     # --- Private: Loop ---
 
-    defp do_run(model, context, tools, api_key, temperature, max, on_max, iteration) do
+    defp do_run(loop, context, acc) do
       messages = ReqLLM.Context.to_list(context)
 
-      case ReqLLM.generate_text(model, messages,
-             tools: tools,
-             api_key: api_key,
-             temperature: temperature
+      case ReqLLM.generate_text(loop.model, messages,
+             tools: loop.tools,
+             api_key: loop.api_key,
+             temperature: loop.temperature
            ) do
         {:ok, response} ->
-          case ReqLLM.Response.classify(response) do
-            %{type: :tool_calls, tool_calls: tool_calls} when iteration < max ->
-              updated_context =
-                ReqLLM.Context.execute_and_append_tools(response.context, tool_calls, tools)
+          acc = %{
+            acc
+            | iterations: acc.iterations + 1,
+              usage: add_usage(acc.usage, ReqLLM.Response.usage(response))
+          }
 
-              do_run(
-                model,
-                updated_context,
-                tools,
-                api_key,
-                temperature,
-                max,
-                on_max,
-                iteration + 1
-              )
+          case ReqLLM.Response.classify(response) do
+            %{type: :tool_calls, tool_calls: tool_calls} when acc.iterations < loop.max ->
+              updated_context =
+                ReqLLM.Context.execute_and_append_tools(response.context, tool_calls, loop.tools)
+
+              do_run(loop, updated_context, add_tool_calls(acc, tool_calls))
 
             %{type: :tool_calls} ->
-              if on_max do
-                on_max.(response)
+              if loop.on_max do
+                loop.on_max.(response)
               else
-                Logger.warning("Tool loop reached max iterations (#{max})")
+                Logger.warning("Tool loop reached max iterations (#{loop.max})")
               end
 
-              {:ok, response}
+              {:ok, response, acc}
 
             _ ->
-              {:ok, response}
+              {:ok, response, acc}
           end
 
         {:error, raw_error} ->
           Logger.error("AI service error: #{inspect(raw_error)}")
-          {:error, Error.wrap(raw_error)}
+          {:error, Error.wrap(raw_error), acc}
       end
+    end
+
+    defp add_tool_calls(acc, tool_calls),
+      do: %{acc | tool_calls: acc.tool_calls ++ Enum.map(tool_calls, & &1.name)}
+
+    # Every numeric field of the usage is summed across rounds: tokens, and
+    # the costs some providers report.
+    defp add_usage(total, nil), do: total
+    defp add_usage(nil, usage), do: usage
+
+    defp add_usage(total, usage) do
+      Map.merge(total, usage, fn
+        _key, a, b when is_number(a) and is_number(b) -> a + b
+        _key, _a, b -> b
+      end)
+    end
+
+    defp finished(acc) do
+      %{
+        usage: normalize_usage(acc.usage),
+        tool_calls: acc.tool_calls,
+        iterations: acc.iterations
+      }
     end
 
     # --- Usage Normalization ---
