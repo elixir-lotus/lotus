@@ -42,6 +42,19 @@
 
 ### Added
 
+- **Alerts on query results.** A query schedule with a `rule` checks one
+  value of the result on each run and sends its deliveries when the status
+  changes (`Lotus.Schedules.Alert`).
+  - Conditions: `"above"`, `"below"` or `"equals"` a threshold, for a column
+    of the first row or the row count, and `"any_rows"` / `"no_rows"`.
+  - It sends when the condition starts holding, and when it stops unless
+    `notify_recovery: false`; not on every run while it holds.
+  - The schedule's `state` keeps the status, the last value, and when it
+    fired and recovered. A run that fails records the error and leaves the
+    status as it was.
+  - Deliveries get the change as `alert` on `Lotus.Delivery.Content`; the
+    `"json"` and `"html"` formats and the webhook include it.
+
 - **Schedules deliver their results.** A schedule's `deliveries` each name
   a channel, a format and the channel's settings.
   - Formats: `"csv"` (a file per result), `"json"` and `"html"` (a table

@@ -1,6 +1,8 @@
 defmodule Lotus.Migrations.MySQLTest do
   use Lotus.Case, async: true
 
+  alias Lotus.Storage.{Query, Schedule}
+
   defmodule MigrationRepo do
     @moduledoc false
 
@@ -50,6 +52,8 @@ defmodule Lotus.Migrations.MySQLTest do
     assert {:error, %{mysql: %{name: :ER_DUP_ENTRY}}} = insert_query("Revenue", "acme")
     assert {:error, %{mysql: %{name: :ER_DUP_ENTRY}}} = insert_query("Revenue", nil)
 
+    assert_schedule_round_trip()
+
     assert :ok = Ecto.Migrator.down(MigrationRepo, 1, Lotus.Migrations)
     refute table_exists?("lotus_queries")
   after
@@ -70,6 +74,30 @@ defmodule Lotus.Migrations.MySQLTest do
     {:ok, %{rows: [[exists]]}} = MigrationRepo.query(query)
 
     exists != 0
+  end
+
+  # An alert's rule (a decimal threshold in an embed) and the state its runs
+  # write read back as they were stored.
+  defp assert_schedule_round_trip do
+    query = MigrationRepo.insert!(%Query{name: "Open tickets", statement: "SELECT 1"})
+
+    {:ok, schedule} =
+      %Schedule{}
+      |> Schedule.changeset(%{
+        name: "Open tickets",
+        query_id: query.id,
+        cron: "* * * * *",
+        rule: %{condition: "above", column: "open", threshold: "2.5"}
+      })
+      |> MigrationRepo.insert()
+
+    MigrationRepo.update_all(from(s in Schedule, where: s.id == ^schedule.id),
+      set: [state: %{"status" => "firing", "value" => 3}]
+    )
+
+    loaded = MigrationRepo.get!(Schedule, schedule.id)
+    assert Decimal.equal?(loaded.rule.threshold, Decimal.new("2.5"))
+    assert loaded.state == %{"status" => "firing", "value" => 3}
   end
 
   defp table_exists?(table_name) do

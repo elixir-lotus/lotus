@@ -6,6 +6,8 @@ defmodule Lotus.Delivery.Formats.JSON do
 
       {"title": "Weekly revenue",
        "results": [{"title": "Revenue", "columns": ["region", "total"], "rows": [["north", 120]]}]}
+
+  An alert's has `"alert"` too: `{"status": "firing", "value": 512, "message": "open is 512, above 500"}`.
   """
 
   @behaviour Lotus.Delivery.Format
@@ -13,7 +15,7 @@ defmodule Lotus.Delivery.Formats.JSON do
   alias Lotus.Delivery.Formats.Filename
 
   @impl true
-  def render(%{title: title, results: results}) do
+  def render(%{title: title, results: results} = content) do
     body = %{
       "title" => title,
       "results" =>
@@ -25,6 +27,12 @@ defmodule Lotus.Delivery.Formats.JSON do
           }
         end)
     }
+
+    body =
+      case Map.get(content, :alert) do
+        nil -> body
+        alert -> Map.put(body, "alert", Lotus.Delivery.alert_json(alert))
+      end
 
     {:ok,
      [

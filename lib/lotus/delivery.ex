@@ -96,6 +96,12 @@ defmodule Lotus.Delivery do
     end
   end
 
+  @doc false
+  # The alert of a content as JSON has it, for the formats and channels that
+  # send JSON.
+  def alert_json(%{status: status, value: value, message: message}),
+    do: %{"status" => status, "value" => value, "message" => message}
+
   @doc """
   Sends `content` to each delivery that has not succeeded yet in `previous`
   (the outcomes of an earlier attempt of the same run, by delivery id).

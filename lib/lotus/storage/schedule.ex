@@ -2,13 +2,16 @@ defmodule Lotus.Storage.Schedule do
   @moduledoc """
   A schedule: a saved query or a dashboard run on a cron expression in a time
   zone. See `Lotus.Schedules`.
+
+  A query schedule with a `rule` is an alert, and keeps its status in
+  `state`; see `Lotus.Schedules.Alert`. `state` is written by the runs only.
   """
 
   use Ecto.Schema
   import Ecto.Changeset
 
   alias Lotus.Schedules.Cron
-  alias Lotus.Storage.{Dashboard, Query, ScheduleDelivery, ScheduleRun}
+  alias Lotus.Storage.{Dashboard, Query, ScheduleDelivery, ScheduleRule, ScheduleRun}
 
   @type t :: %__MODULE__{
           id: term(),
@@ -20,6 +23,8 @@ defmodule Lotus.Storage.Schedule do
           enabled: boolean(),
           params: map(),
           deliveries: [ScheduleDelivery.t()],
+          rule: ScheduleRule.t() | nil,
+          state: map(),
           next_run_at: DateTime.t() | nil,
           last_run_at: DateTime.t() | nil,
           owner_id: String.t() | nil,
@@ -44,6 +49,8 @@ defmodule Lotus.Storage.Schedule do
              :enabled,
              :params,
              :deliveries,
+             :rule,
+             :state,
              :next_run_at,
              :last_run_at,
              :owner_id,
@@ -62,8 +69,10 @@ defmodule Lotus.Storage.Schedule do
     field(:last_run_at, :utc_datetime_usec)
     field(:owner_id, :string)
     field(:tenant_id, :string)
+    field(:state, :map, default: %{})
 
     embeds_many(:deliveries, ScheduleDelivery, on_replace: :delete)
+    embeds_one(:rule, ScheduleRule, on_replace: :delete)
 
     belongs_to(:query, Query)
     belongs_to(:dashboard, Dashboard)
@@ -80,11 +89,13 @@ defmodule Lotus.Storage.Schedule do
     schedule
     |> cast(attrs, @permitted)
     |> cast_embed(:deliveries, with: &ScheduleDelivery.changeset/2)
+    |> cast_embed(:rule, with: &ScheduleRule.changeset/2)
     |> validate_required(@required)
     |> validate_length(:name, min: 1, max: 255)
     |> validate_target()
     |> validate_cron()
     |> validate_time_zone()
+    |> validate_rule()
     |> foreign_key_constraint(:query_id)
     |> foreign_key_constraint(:dashboard_id)
   end
@@ -104,6 +115,19 @@ defmodule Lotus.Storage.Schedule do
       {_query, _dashboard} ->
         add_error(changeset, :dashboard_id, "a schedule runs a query or a dashboard, not both")
     end
+  end
+
+  # An alert reads a value from one result, so it watches a query. A new
+  # rule starts from "ok".
+  defp validate_rule(changeset) do
+    changeset =
+      if get_field(changeset, :rule) && is_nil(get_field(changeset, :query_id)),
+        do: add_error(changeset, :rule, "an alert watches a query, not a dashboard"),
+        else: changeset
+
+    if Map.has_key?(changeset.changes, :rule),
+      do: put_change(changeset, :state, %{}),
+      else: changeset
   end
 
   defp validate_cron(changeset) do

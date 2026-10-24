@@ -190,6 +190,47 @@ the retry sends only the deliveries that failed, so nobody gets the same email
 twice. `[:lotus, :delivery, :start | :stop | :exception]` telemetry brackets
 each delivery.
 
+## Alerts
+
+A query schedule with a `rule` is an alert. Each run reads one value from the
+result and checks the condition; the deliveries are sent only when the
+outcome changes:
+
+```elixir
+Lotus.Schedules.create_schedule(%{
+  name: "Open tickets",
+  query_id: query.id,
+  cron: "*/15 * * * *",
+  rule: %{condition: "above", column: "open", threshold: 500},
+  deliveries: [
+    %{channel: "webhook", format: "json", config: %{"url" => "https://hooks.example.com/lotus"}}
+  ]
+})
+```
+
+- `"above"`, `"below"` and `"equals"` compare a number with `threshold`: the
+  `column` of the first row, or the number of rows without a `column`.
+- `"any_rows"` and `"no_rows"` hold when the query returns rows, or none.
+
+When the condition starts holding the status goes from `"ok"` to `"firing"`
+and the deliveries are sent. While it holds, runs send nothing. When it stops
+holding the status goes back to `"ok"` and the deliveries are sent again,
+unless the rule has `notify_recovery: false`. A new alert, or one whose rule
+changed, starts from `"ok"`.
+
+The schedule's `state` keeps the `"status"`, the last `"value"`, and when it
+last fired and recovered. A run that cannot read the value (the query fails,
+the column is missing, the value is not a number) fails as any run does and
+records the error in `state`, but leaves the status as it was: one bad run
+does not send a recovery and then a new alert. A run whose deliveries fail
+does not change the state either, so the retry, or the next run, sends the
+change again.
+
+Deliveries get the change as `alert` on `Lotus.Delivery.Content`: the status,
+the value and a sentence such as `"open is 512, above 500"`. The `"json"`
+format and the webhook include it as `"alert"`, and the `"html"` format says
+it above the tables. Alert runs read fresh data, as every run does.
+
 ## Observing runs
 
 `[:lotus, :schedule, :run, :start | :stop | :exception]` telemetry brackets
