@@ -13,6 +13,7 @@ defmodule Lotus.Application do
 
   def start(_type, _args) do
     :ok = warn_without_sake()
+    :ok = Lotus.Delivery.Channels.Email.warn_if_misconfigured()
     Lotus.Supervisor.start_link([])
   end
 

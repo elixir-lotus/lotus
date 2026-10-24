@@ -9,11 +9,21 @@ defmodule Lotus.DeliveryTest do
   import Lotus.Fixtures
 
   alias Lotus.{Config, Delivery, Result, Schedules}
-  alias Lotus.Delivery.Channels.{Slack, Webhook}
+  alias Lotus.Delivery.Channels.{Email, Slack, Webhook}
   alias Lotus.Delivery.Content
   alias Lotus.Delivery.Formats.{CSV, HTML, JSON}
   alias Lotus.Scheduler.Worker
   alias Lotus.Storage.ScheduleRun
+
+  defmodule TestMailer do
+    @moduledoc false
+    use Swoosh.Mailer, otp_app: :lotus, adapter: Swoosh.Adapters.Test
+  end
+
+  defmodule DownMailer do
+    @moduledoc false
+    def deliver(_email), do: {:error, {401, "the API key is not valid"}}
+  end
 
   defmodule PigeonChannel do
     @moduledoc false
@@ -55,7 +65,8 @@ defmodule Lotus.DeliveryTest do
       [
         channels: %{"send" => SendChannel, "pigeon" => PigeonChannel},
         webhook: [req_options: [plug: {Req.Test, __MODULE__}]] ++ extra,
-        slack: [req_options: [plug: {Req.Test, __MODULE__}]]
+        slack: [req_options: [plug: {Req.Test, __MODULE__}]],
+        email: [mailer: TestMailer, from: {"Lotus", "reports@example.com"}]
       ]
     end)
   end
@@ -116,7 +127,7 @@ defmodule Lotus.DeliveryTest do
     end
 
     test "says each channel as an editor draws it, sorted by label" do
-      assert ["Carrier pigeon", "send", "Slack", "Webhook"] =
+      assert ["Carrier pigeon", "Email", "send", "Slack", "Webhook"] =
                Enum.map(Delivery.channel_specs(), & &1.label)
 
       assert %{
@@ -398,6 +409,127 @@ defmodule Lotus.DeliveryTest do
 
       assert %{available: {:error, message}} = spec("slack")
       assert message =~ "the slack channel needs Req"
+    end
+  end
+
+  defp email_config(email) do
+    stub(Config, :delivery, fn -> [email: email] end)
+  end
+
+  describe "the email channel" do
+    setup do
+      delivery_config()
+      :ok
+    end
+
+    test "sends through the app's mailer, with the format attached" do
+      rows = for n <- 1..25, do: ["north <#{n}>", n]
+      content = content([result("Revenue", ["region", "total"], rows)])
+      {:ok, files} = CSV.render(content)
+
+      assert :ok =
+               Email.deliver(content, files, %{
+                 "to" => ["team@example.com", " ops@example.com ", "team@example.com"],
+                 "subject" => "Monday numbers"
+               })
+
+      assert_received {:email, email}
+
+      assert email.from == {"Lotus", "reports@example.com"}
+      assert email.to == [{"", "team@example.com"}, {"", "ops@example.com"}]
+      assert email.subject == "Monday numbers"
+      assert [%{filename: "revenue.csv", content_type: "text/csv"}] = email.attachments
+      assert email.html_body =~ "north &lt;1&gt;"
+      assert email.html_body =~ "the first 20 of 25 rows"
+      refute email.html_body =~ "north &lt;21&gt;"
+      assert email.text_body =~ "region | total"
+    end
+
+    test "an alert's subject says it fired or recovered" do
+      content = %{
+        content([])
+        | alert: %{status: "firing", value: 12, message: "total is above 10"}
+      }
+
+      assert :ok = Email.deliver(content, [], %{"to" => ["team@example.com"]})
+      assert_received {:email, %{subject: "[Alert] Weekly <revenue>", html_body: html}}
+      assert html =~ "total is above 10"
+
+      recovered = %{content | alert: %{status: "ok", value: 3, message: "back under 10"}}
+      assert :ok = Email.deliver(recovered, [], %{"to" => ["team@example.com"]})
+      assert_received {:email, %{subject: "[Recovered] Weekly <revenue>"}}
+    end
+
+    test "leaves out attachments over the limit, and says so" do
+      email_config(mailer: TestMailer, from: "reports@example.com", max_attachment_bytes: 10)
+      {:ok, files} = CSV.render(content([result("Revenue", ["n"], [[123_456_789_012]])]))
+
+      assert :ok = Email.deliver(content([]), files, %{"to" => ["team@example.com"]})
+      assert_received {:email, %{attachments: [], html_body: html, text_body: text}}
+      assert html =~ "was left out"
+      assert text =~ "was left out"
+    end
+
+    test "checks the recipients and the subject" do
+      ok = %{"to" => ["team@example.com"]}
+      assert :ok = Delivery.validate("email", "csv", ok)
+
+      for {config, message} <- [
+            {%{}, "an email needs one recipient at least"},
+            {%{"to" => [" "]}, "an email needs one recipient at least"},
+            {%{"to" => "team@example.com"}, "the recipients must be a list of addresses"},
+            {%{"to" => ["not an address"]}, ~s("not an address" is not an email address)},
+            {%{"to" => for(n <- 1..51, do: "p#{n}@example.com")},
+             "an email takes 50 recipients at most"},
+            {Map.put(ok, "subject", "two\nlines"), "the subject must be one line"},
+            {Map.put(ok, "subject", String.duplicate("x", 201)),
+             "the subject takes 200 characters at most"}
+          ] do
+        assert {:error, :config, ^message} = Delivery.validate("email", "csv", config)
+      end
+    end
+
+    test "a mailer that fails is the delivery's failure, with its reason" do
+      email_config(mailer: DownMailer, from: "reports@example.com")
+
+      assert {:error, "the mailer could not send it: the API key is not valid"} =
+               Email.deliver(content([]), [], %{"to" => ["team@example.com"]})
+    end
+
+    test "is not available until the app names its mailer and from address" do
+      for {settings, message} <- [
+            {[], "email is not set up: name your app's mailer"},
+            {[mailer: TestMailer], "email is not set up: give the address it is sent from"},
+            {[mailer: NoSuchMailer, from: "r@example.com"],
+             "the email mailer NoSuchMailer is not a module with deliver/1"},
+            {[mailer: TestMailer, from: "nope"],
+             ~s(the email from address is not an address: "nope")}
+          ] do
+        email_config(settings)
+        assert {:error, got} = Email.available()
+        assert got =~ message
+
+        assert {:error, :channel, ^got} =
+                 Delivery.validate("email", "csv", %{"to" => ["a@example.com"]})
+      end
+    end
+
+    test "without Swoosh, email is not available" do
+      Application.put_env(:lotus, :__swoosh_dependency__, Lotus.DeliveryTest.NoSwoosh)
+      on_exit(fn -> Application.delete_env(:lotus, :__swoosh_dependency__) end)
+
+      assert %{available: {:error, message}} = spec("email")
+      assert message =~ ~s({:swoosh, "~> 1.16"})
+    end
+
+    test "an app that set email up but cannot send is told why when it starts" do
+      email_config(mailer: TestMailer)
+
+      log = ExUnit.CaptureLog.capture_log(fn -> Email.warn_if_misconfigured() end)
+      assert log =~ "Lotus email deliveries cannot be sent: email is not set up"
+
+      email_config([])
+      assert ExUnit.CaptureLog.capture_log(fn -> Email.warn_if_misconfigured() end) == ""
     end
   end
 

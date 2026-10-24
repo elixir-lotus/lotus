@@ -179,6 +179,37 @@ An incoming webhook is free: in Slack, create an app for the workspace, turn
 on incoming webhooks, and add one to the channel to post in. Like the
 webhook, the channel sends with Req.
 
+### The email channel
+
+`"email"` emails each run through your app's own
+[Swoosh](https://hex.pm/packages/swoosh) mailer: Lotus builds the email
+and your mailer sends it, through the service your app already uses. Name
+the mailer and the address the emails come from:
+
+```elixir
+config :lotus,
+  delivery: [
+    email: [
+      mailer: MyApp.Mailer,
+      from: {"Lotus", "reports@example.com"},
+      # optional, 10 MB by default
+      max_attachment_bytes: 10_000_000
+    ]
+  ]
+```
+
+A delivery takes its recipients, `config["to"]` (one to 50 addresses), and
+an optional `config["subject"]` (the schedule's name otherwise; an alert's
+starts with `[Alert]` or `[Recovered]`). The body has an alert's message and
+each result's first 20 rows; the delivery's format is attached, unless it
+is over `max_attachment_bytes`, when the body says it was left out.
+
+Without Swoosh, a `mailer` or a `from`, the channel is not available: it is
+not offered, a schedule that emails is refused when it is saved, and its
+runs' emails fail with what is missing. When the app starts with the `email`
+settings but cannot send, Lotus logs why. A mailer that fails (refused
+credentials, a provider down) fails the delivery with its reason.
+
 ### Your own channels and formats
 
 A channel implements `Lotus.Delivery.Channel` (`formats/0`, `validate_config/1`,

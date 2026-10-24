@@ -52,6 +52,7 @@ defmodule Lotus.MixProject do
       {:oban, "~> 2.19", optional: true},
       {:postgrex, "~> 0.20", optional: true},
       {:req, "~> 0.5", optional: true},
+      {:swoosh, "~> 1.16", optional: true},
       {:sake, "~> 0.4", optional: true},
       {:telemetry, "~> 1.0"},
       {:tz, "~> 0.28"},

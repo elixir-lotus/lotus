@@ -42,6 +42,18 @@
 
 ### Added
 
+- **An email channel.** `"email"` emails each run of a schedule through your
+  app's own Swoosh mailer (`config :lotus, delivery: [email: [mailer:
+  MyApp.Mailer, from: "reports@example.com"]]`), so Lotus sends nothing
+  itself and needs no email service of its own. The email has the
+  schedule's name (or the delivery's subject), an alert's status, and each
+  result's first rows, with the delivery's format attached; attachments
+  over `max_attachment_bytes` (10 MB) are left out, and the body says so.
+  Up to 50 recipients, each checked. Without Swoosh, a mailer or a from
+  address, the channel is not available and says what is missing; the app
+  logs it at start when email is set up but cannot send. Swoosh is a new
+  optional dependency.
+
 - **A Slack channel.** `"slack"` posts each run of a schedule as a message in
   a Slack channel, through an incoming webhook (`config["webhook_url"]`):
   the schedule's name, an alert's status, and each result's first ten rows
