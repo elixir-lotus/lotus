@@ -15,24 +15,6 @@ defmodule Lotus.Variables do
   alias Lotus.Query.Tokenizer
   alias Lotus.Query.Tokenizer.Profile
 
-  @variable_regex ~r/\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}/
-
-  @doc deprecated:
-         "The pipeline tokenizes with Lotus.Query.Tokenizer; this regex is kept for callers that match raw text."
-  @doc """
-  Returns the compiled regex for matching `{{variable}}` placeholders.
-
-  Captures the variable name (without braces) in group 1. The regex is not
-  aware of comments or literals; prefer `extract_names/2`.
-
-  ## Examples
-
-      iex> Regex.scan(Lotus.Variables.regex(), "WHERE id = {{user_id}}")
-      [["{{user_id}}", "user_id"]]
-  """
-  @spec regex() :: Regex.t()
-  def regex, do: @variable_regex
-
   @doc """
   Extracts variable names from a string containing `{{variable}}` placeholders.
 

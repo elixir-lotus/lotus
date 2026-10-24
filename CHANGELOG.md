@@ -14,6 +14,15 @@
   whether the dependency is loaded; `Lotus.AI.enabled?/0` reads the config
   on each call. See the v2 upgrade guide.
 
+- **Removed what 1.x deprecated** (#301). See the v2 upgrade guide.
+  - The `Lotus.Source.Adapters.Ecto.SQL.*` delegates: use `Lotus.SQL.*`
+    (#294).
+  - `Lotus.Preflight.Relations.put/1`, `get/0`, `take/0` and `clear/0`:
+    read the `:relations` key of the middleware payload, or call
+    `Lotus.Preflight.analyze/4` (#296).
+  - `Lotus.Variables.regex/0`: use `Lotus.Variables.extract_names/2`
+    (#287).
+
 ### Security
 
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
