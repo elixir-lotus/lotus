@@ -15,6 +15,17 @@ defmodule Lotus.DeliveryTest do
   alias Lotus.Scheduler.Worker
   alias Lotus.Storage.ScheduleRun
 
+  defmodule PigeonChannel do
+    @moduledoc false
+    @behaviour Lotus.Delivery.Channel
+    def formats, do: :any
+    def label, do: "Carrier pigeon"
+    def settings, do: [%{key: "loft", label: "Loft", type: :text, required: true}]
+    def available, do: {:error, "the pigeons are not set up"}
+    def validate_config(_config), do: :ok
+    def deliver(_content, _attachments, _config), do: :ok
+  end
+
   defmodule SendChannel do
     @moduledoc false
     @behaviour Lotus.Delivery.Channel
@@ -42,7 +53,7 @@ defmodule Lotus.DeliveryTest do
   defp delivery_config(extra \\ []) do
     stub(Config, :delivery, fn ->
       [
-        channels: %{"send" => SendChannel},
+        channels: %{"send" => SendChannel, "pigeon" => PigeonChannel},
         webhook: [req_options: [plug: {Req.Test, __MODULE__}]] ++ extra
       ]
     end)
@@ -95,6 +106,46 @@ defmodule Lotus.DeliveryTest do
     end
   end
 
+  defp spec(name), do: Enum.find(Delivery.channel_specs(), &(&1.name == name))
+
+  describe "channel_specs/0" do
+    setup do
+      delivery_config()
+      :ok
+    end
+
+    test "says each channel as an editor draws it, sorted by label" do
+      assert ["Carrier pigeon", "send", "Webhook"] =
+               Enum.map(Delivery.channel_specs(), & &1.label)
+
+      assert %{
+               label: "Webhook",
+               available: :ok,
+               formats: ["csv", "html", "json"],
+               settings: [
+                 %{key: "url", type: :url, required: true},
+                 %{key: "authorization", type: :secret}
+               ]
+             } = spec("webhook")
+    end
+
+    test "a channel without the optional callbacks: its name, no fields, available" do
+      assert %{label: "send", settings: nil, available: :ok, formats: ["csv"]} = spec("send")
+    end
+
+    test "a run's delivery to a channel that is not available fails with its reason" do
+      delivery = %{id: "d1", channel: "pigeon", format: "csv", config: %{}}
+
+      assert %{"d1" => %{"status" => "failed", "error" => "the pigeons are not set up"}} =
+               Delivery.deliver_all(content([result("Revenue", ["n"], [[1]])]), [delivery])
+    end
+
+    test "says a channel that is not available, and why" do
+      assert %{available: {:error, "the pigeons are not set up"}, settings: [%{key: "loft"}]} =
+               spec("pigeon")
+    end
+  end
+
   describe "validate/3" do
     setup do
       delivery_config()
@@ -132,14 +183,20 @@ defmodule Lotus.DeliveryTest do
       assert :ok = Delivery.validate("webhook", "csv", %{"url" => "http://hooks.internal"})
     end
 
-    test "without Req, a webhook delivery is refused" do
+    test "without Req, the webhook is not available, and a delivery to it is refused" do
       Application.put_env(:lotus, :__req_dependency__, Lotus.DeliveryTest.NoReq)
       on_exit(fn -> Application.delete_env(:lotus, :__req_dependency__) end)
 
-      assert {:error, :config, message} =
+      assert {:error, :channel, message} =
                Delivery.validate("webhook", "csv", %{"url" => "https://x.io"})
 
       assert message =~ ~s({:req, "~> 0.5"})
+      assert %{available: {:error, ^message}} = spec("webhook")
+    end
+
+    test "a channel that is not available is refused, with its reason" do
+      assert {:error, :channel, "the pigeons are not set up"} =
+               Delivery.validate("pigeon", "csv", %{})
     end
 
     test "a schedule refuses a delivery that does not validate" do
@@ -194,6 +251,35 @@ defmodule Lotus.DeliveryTest do
                  }
                ]
              } = Lotus.JSON.decode!(body)
+    end
+
+    test "sends the authorization setting as the authorization header" do
+      pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(pid, {:authorization, Plug.Conn.get_req_header(conn, "authorization")})
+        Req.Test.json(conn, %{})
+      end)
+
+      assert :ok =
+               Webhook.deliver(content([]), [], %{
+                 "url" => "https://hooks.example.com/lotus",
+                 "authorization" => "Bearer s3cret"
+               })
+
+      assert_received {:authorization, ["Bearer s3cret"]}
+
+      assert :ok =
+               Delivery.validate("webhook", "csv", %{
+                 "url" => "https://x.io",
+                 "authorization" => "t"
+               })
+
+      assert {:error, :config, "the authorization must be a string"} =
+               Delivery.validate("webhook", "csv", %{
+                 "url" => "https://x.io",
+                 "authorization" => 1
+               })
     end
 
     test "a response that is not 2xx is an error" do

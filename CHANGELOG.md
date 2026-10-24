@@ -42,6 +42,17 @@
 
 ### Added
 
+- **Channels an editor can draw.** `Lotus.Delivery.Channel` has three
+  optional callbacks: `label/0` (the channel's name for people),
+  `settings/0` (the fields of a delivery's settings, with their type: URL,
+  secret, list of addresses, select…) and `available/0` (whether the channel
+  can send in this app, or what it is missing). `Lotus.Delivery.channel_specs/0`
+  lists every channel with them, for Lotus Web to draw a form for each
+  instead of JSON. A delivery to a channel that is not available is refused
+  when the schedule is saved, and fails with the reason when it runs. The
+  webhook says its fields (URL, and an authorization header, which its
+  settings now take as `"authorization"`) and is not available without Req.
+
 - **Alert conditions of your own, or Lotus Pro's.** A condition registered
   by name (`config :lotus, alerts: [conditions: %{"change" => MyMod}]`,
   behaviour `Lotus.Schedules.Alert.Condition`) can be a rule's `condition`,
