@@ -34,6 +34,10 @@
 
 ### Added
 
+- **A card can start folded.** A dashboard card's `layout` has `folded`
+  (`false` by default): the card starts folded to its title, as Lotus Web
+  shows it, and a viewer can open it. Layouts saved before read as open.
+
 - **`Lotus.MCP.Host`**, a Sake middleware with which the server that
   serves `Lotus.MCP` says who may use Lotus and as which actor
   (`authorize:` and `actor:`), instead of `config :lotus, :mcp`. Lotus Web's

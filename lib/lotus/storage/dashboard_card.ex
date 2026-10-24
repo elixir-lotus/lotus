@@ -72,19 +72,22 @@ defmodule Lotus.Storage.DashboardCard do
       - `y` - Row position (0+)
       - `w` - Width in columns (1-12)
       - `h` - Height in rows (minimum 1)
+      - `folded` - Whether the card starts folded to its title
       """
 
       @type t :: %__MODULE__{
               x: non_neg_integer(),
               y: non_neg_integer(),
               w: pos_integer(),
-              h: pos_integer()
+              h: pos_integer(),
+              folded: boolean()
             }
 
       field(:x, :integer, default: 0)
       field(:y, :integer, default: 0)
       field(:w, :integer, default: 6)
       field(:h, :integer, default: 4)
+      field(:folded, :boolean, default: false)
     end
 
     belongs_to(:dashboard, Dashboard, references: :id, type: :id)
@@ -129,7 +132,7 @@ defmodule Lotus.Storage.DashboardCard do
 
   defp layout_changeset(layout, attrs) do
     layout
-    |> cast(attrs, [:x, :y, :w, :h])
+    |> cast(attrs, [:x, :y, :w, :h, :folded])
     |> validate_number(:x, greater_than_or_equal_to: 0, less_than: 12)
     |> validate_number(:y, greater_than_or_equal_to: 0)
     |> validate_number(:w, greater_than: 0, less_than_or_equal_to: 12)
