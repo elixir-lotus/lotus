@@ -359,6 +359,24 @@ defmodule Lotus.DashboardsTest do
       assert Dashboards.get_dashboard_card!(folded.id).layout.folded
     end
 
+    test "a layout is on the first tab, and keeps its tab" do
+      dashboard = dashboard_fixture()
+
+      {:ok, card} =
+        Dashboards.create_dashboard_card(dashboard, %{
+          card_type: :text,
+          position: 0,
+          layout: %{x: 0, y: 0, w: 6, h: 2}
+        })
+
+      assert card.layout.tab == nil
+
+      {:ok, moved} =
+        Dashboards.update_dashboard_card(card, %{layout: %{x: 0, y: 0, w: 6, h: 2, tab: "sales"}})
+
+      assert Dashboards.get_dashboard_card!(moved.id).layout.tab == "sales"
+    end
+
     test "updates layout" do
       dashboard = dashboard_fixture()
       card = dashboard_card_fixture(dashboard)
