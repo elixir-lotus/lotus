@@ -167,6 +167,23 @@ def down, do: Lotus.Migrations.down(prefix: "analytics")
 > time. Fresh installs are unaffected on every database. The exact SQL is in
 > [Upgrading to v1.0](upgrading-to-v1.md).
 
+### Upgrading an existing install
+
+Ecto runs each migration once, so the migration above never runs again. When
+a Lotus release adds a version, generate a new migration that pins it:
+
+```elixir
+defmodule MyApp.Repo.Migrations.UpgradeLotusToV7 do
+  use Ecto.Migration
+
+  def up, do: Lotus.Migrations.up(version: 7)
+  def down, do: Lotus.Migrations.down(version: 7)
+end
+```
+
+The upgrade guide of each release names the version. See
+[Upgrading to v2.0](upgrading-to-v2.md).
+
 ## Step 4: Configure Caching (Optional)
 
 Lotus is an OTP application — its supervisor starts automatically with your app, so you do not need to add `Lotus` to your application's supervision tree.
