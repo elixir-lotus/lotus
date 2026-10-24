@@ -35,6 +35,15 @@ defmodule Lotus.Dashboards do
   Deleting a filter also sets `depends_on_filter_id` to `nil` on the filters
   that depend on it, with no event for those either. See `Lotus.Middleware`.
 
+  ## Owner and tenant
+
+  A dashboard has an `owner_id` and a `tenant_id`, as a query does: given as
+  the `:owner_id` and `:tenant_id` options of `create_dashboard/2` and
+  `update_dashboard/3`, never as attributes, and filtered on by
+  `list_dashboards_by/1`. A dashboard's name is unique within its tenant. Its
+  cards, filters and filter mappings belong to it and have none of their own.
+  See "Owner and tenant" in `Lotus.Storage`.
+
   ## Cascading filters
 
   A filter can get its select options from a saved query, and that query can
@@ -53,7 +62,8 @@ defmodule Lotus.Dashboards do
     DashboardCard,
     DashboardCardFilterMapping,
     DashboardFilter,
-    Mutation
+    Mutation,
+    Ownership
   }
 
   @type id :: integer() | binary()
@@ -94,6 +104,9 @@ defmodule Lotus.Dashboards do
 
     * `:search` - Search term to match against dashboard names (case insensitive)
     * `:preload` - A list of associations to preload (e.g., `[:cards]`)
+    * `:owner_id` - Only the dashboards of this owner: an id, `nil` for the
+      dashboards without one, or a list of either
+    * `:tenant_id` - Only the dashboards of this tenant, as `:owner_id`
 
   ## Examples
 
@@ -107,7 +120,9 @@ defmodule Lotus.Dashboards do
   @spec list_dashboards_by(keyword()) :: [Dashboard.t()]
   def list_dashboards_by(opts \\ []) do
     preloads = Keyword.get(opts, :preload, [])
-    q = from(d in Dashboard, order_by: [asc: d.name], preload: ^preloads)
+
+    q =
+      from(d in Ownership.filter(Dashboard, opts), order_by: [asc: d.name], preload: ^preloads)
 
     q =
       case Keyword.get(opts, :search) do
@@ -156,6 +171,12 @@ defmodule Lotus.Dashboards do
   @doc """
   Creates a new dashboard.
 
+  ## Options
+
+    * `:context` - Caller data for the content change middleware
+    * `:owner_id`, `:tenant_id` - The dashboard's owner and tenant (see
+      "Owner and tenant" above)
+
   ## Examples
 
       iex> create_dashboard(%{name: "Sales Dashboard"})
@@ -170,11 +191,15 @@ defmodule Lotus.Dashboards do
   def create_dashboard(attrs, opts \\ []) do
     attrs
     |> Dashboard.new()
+    |> Ownership.put(opts)
     |> Mutation.run(:create, :dashboard, opts)
   end
 
   @doc """
   Updates a dashboard.
+
+  Takes the options of `create_dashboard/2`. An `:owner_id` or `:tenant_id`
+  that is not given stays as it is; `nil` clears it.
 
   ## Examples
 
@@ -187,6 +212,7 @@ defmodule Lotus.Dashboards do
   def update_dashboard(%Dashboard{} = dashboard, attrs, opts \\ []) do
     dashboard
     |> Dashboard.update(attrs)
+    |> Ownership.put(opts)
     |> Mutation.run(:update, :dashboard, opts)
   end
 

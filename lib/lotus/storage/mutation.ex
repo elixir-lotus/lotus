@@ -43,10 +43,13 @@ defmodule Lotus.Storage.Mutation do
     context = Keyword.get(opts, :context)
     pending = Enum.map(changes, &start(&1, context))
 
-    result =
+    # `pending` holds the changesets as the plugs leave them, so `finish/2`
+    # reports what was written.
+    {pending, result} =
       try do
-        with :ok <- run_before_events(pending) do
-          write_all(pending)
+        case run_before_events(pending) do
+          {:ok, pending} -> {pending, write_all(pending)}
+          {:error, _reason} = error -> {pending, error}
         end
       catch
         kind, reason ->
@@ -90,15 +93,31 @@ defmodule Lotus.Storage.Mutation do
   defp stored_record(_op, %Changeset{data: record}), do: record
 
   defp run_before_events(pending) do
-    Enum.reduce_while(pending, :ok, fn change, :ok ->
+    pending
+    |> Enum.reduce_while([], fn change, done ->
       payload = Map.put(change.metadata, :changeset, change.changeset)
 
       case Middleware.run(:before_content_change, payload) do
-        {:cont, _payload} -> {:cont, :ok}
+        {:cont, payload} -> {:cont, [carry_changeset(change, payload) | done]}
         {:halt, reason} -> {:halt, {:error, {:halted, reason}}}
       end
     end)
+    |> case do
+      {:error, _reason} = error -> error
+      done -> {:ok, Enum.reverse(done)}
+    end
   end
+
+  # A plug that continues with a changeset of the same record has its version
+  # written, so it can put fields the caller does not set (an owner, a
+  # tenant). Anything else is ignored rather than trusted, as a statement
+  # `:before_query` returns is.
+  defp carry_changeset(%{changeset: %Changeset{data: data}} = change, %{
+         changeset: %Changeset{data: data} = changeset
+       }),
+       do: %{change | changeset: changeset}
+
+  defp carry_changeset(change, _payload), do: change
 
   defp write_all([change]) do
     with {:ok, record} <- write(change), do: {:ok, [record]}

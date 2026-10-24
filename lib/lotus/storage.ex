@@ -12,6 +12,20 @@ defmodule Lotus.Storage do
   halts makes the function return `{:error, {:halted, reason}}` and nothing is
   written.
 
+  ## Owner and tenant
+
+  A query has an `owner_id` and a `tenant_id`: ids the host supplies, as
+  strings, `nil` when it has none. Lotus stores them and filters lists by
+  them; it does not decide them. They are not attributes, so a host that
+  passes form params as `attrs` does not let a user set them: they are given
+  as the `:owner_id` and `:tenant_id` options of `create_query/2` and
+  `update_query/3`, or put on the changeset by a `:before_content_change`
+  plug. A name is unique within a tenant. `list_queries_by/1` filters by both.
+
+  Nothing in Lotus reads them to allow or refuse access: `get_query/1` finds a
+  query of any tenant. A host or package that isolates tenants checks the
+  record it gets.
+
   Deleting a query also deletes its visualizations, sets `query_id` to `nil`
   on the dashboard cards that showed it and sets `source_query_id` to `nil` on
   the dashboard filters that got their options from it. Those changes fire no event; the
@@ -22,7 +36,7 @@ defmodule Lotus.Storage do
   import Lotus.Helpers, only: [escape_like: 1]
 
   alias Lotus.{Middleware, Result}
-  alias Lotus.Storage.{Mutation, Query}
+  alias Lotus.Storage.{Mutation, Ownership, Query}
 
   @type id :: integer() | binary()
   @type attrs :: map()
@@ -45,16 +59,24 @@ defmodule Lotus.Storage do
   ## Options
 
     * `:search` - Search term to match against query names (case insensitive)
+    * `:owner_id` - Only the queries of this owner: an id, `nil` for the
+      queries without one, or a list of either
+    * `:tenant_id` - Only the queries of this tenant, as `:owner_id`.
+      `tenant_id: ["acme", nil]` lists the tenant's queries and those of no
+      tenant
 
   ## Examples
 
       iex> list_queries_by(search: "user")
       [%Query{}, ...]
 
+      iex> list_queries_by(tenant_id: "acme", owner_id: "42")
+      [%Query{tenant_id: "acme", owner_id: "42"}, ...]
+
   """
   @spec list_queries_by(keyword()) :: [Query.t()]
   def list_queries_by(opts \\ []) do
-    q = from(Query)
+    q = Ownership.filter(Query, opts)
 
     q =
       case Keyword.get(opts, :search) do
@@ -92,6 +114,12 @@ defmodule Lotus.Storage do
   @doc """
   Creates a new query.
 
+  ## Options
+
+    * `:context` - Caller data for the content change middleware
+    * `:owner_id`, `:tenant_id` - The query's owner and tenant (see
+      "Owner and tenant" above)
+
   ## Examples
 
       iex> create_query(%{name: "Users", statement: "SELECT * FROM users"})
@@ -105,11 +133,15 @@ defmodule Lotus.Storage do
   def create_query(attrs, opts \\ []) do
     attrs
     |> Query.new()
+    |> Ownership.put(opts)
     |> Mutation.run(:create, :query, opts)
   end
 
   @doc """
   Updates a query.
+
+  Takes the options of `create_query/2`. An `:owner_id` or `:tenant_id` that
+  is not given stays as it is; `nil` clears it.
 
   ## Examples
 
@@ -124,6 +156,7 @@ defmodule Lotus.Storage do
   def update_query(%Query{} = query, attrs, opts \\ []) do
     query
     |> Query.update(attrs)
+    |> Ownership.put(opts)
     |> Mutation.run(:update, :query, opts)
   end
 

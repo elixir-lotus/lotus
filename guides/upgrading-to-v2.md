@@ -186,3 +186,55 @@ Who is affected: code that scanned raw text with it. Use
 -  names = Regex.scan(Lotus.Variables.regex(), sql, capture: :all_but_first) |> List.flatten()
 +  names = Lotus.Variables.extract_names(sql)
 ```
+
+---
+
+## 6. Run the v7 migration: an owner and a tenant on content
+
+`lotus_queries` and `lotus_dashboards` gain two nullable columns,
+`owner_id` and `tenant_id`, for ids the host supplies (see "Owner and
+tenant" in `Lotus.Storage`). Lotus reads every column of a query and a
+dashboard, so run the migration before you deploy v2.0. Every existing row
+keeps `NULL` in both and nothing else changes for it.
+
+A name was unique across the table. It is now unique within a tenant, and
+among the rows without one, so two tenants can each have a query called
+"Revenue".
+
+Who is affected: every app.
+
+**PostgreSQL:** generate a migration whose `up/0` calls
+`Lotus.Migrations.up()` and whose `down/0` calls
+`Lotus.Migrations.down(version: 7)`, then run `mix ecto.migrate`. Lotus
+migrates from the version the database is on and applies
+`Lotus.Migrations.Postgres.V7`. Rolling it back restores the
+table-wide name index, and fails if two tenants then hold the same name.
+
+**MySQL and SQLite:** these migrations have no versions. A fresh install
+gets the columns. An existing install runs this SQL by hand before it
+deploys v2.0:
+
+```sql
+-- MySQL: run for lotus_queries, then again for lotus_dashboards
+ALTER TABLE lotus_queries
+  ADD COLUMN owner_id VARCHAR(255) NULL,
+  ADD COLUMN tenant_id VARCHAR(255) NULL;
+DROP INDEX lotus_queries_name_index ON lotus_queries;
+CREATE UNIQUE INDEX lotus_queries_name_index
+  ON lotus_queries ((COALESCE(tenant_id, '')), name);
+CREATE INDEX lotus_queries_tenant_id_index ON lotus_queries (tenant_id);
+CREATE INDEX lotus_queries_owner_id_index ON lotus_queries (owner_id);
+
+-- SQLite: run for lotus_queries, then again for lotus_dashboards
+ALTER TABLE lotus_queries ADD COLUMN owner_id TEXT;
+ALTER TABLE lotus_queries ADD COLUMN tenant_id TEXT;
+DROP INDEX lotus_queries_name_index;
+CREATE UNIQUE INDEX lotus_queries_name_index
+  ON lotus_queries (name) WHERE tenant_id IS NULL;
+CREATE UNIQUE INDEX lotus_queries_tenant_id_name_index
+  ON lotus_queries (tenant_id, name);
+CREATE INDEX lotus_queries_owner_id_index ON lotus_queries (owner_id);
+```
+
+MySQL has no partial indexes, so its name index reads a missing tenant as
+`''`. Lotus stores an empty id as `NULL`, so the two never meet.
