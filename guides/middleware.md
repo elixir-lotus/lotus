@@ -268,8 +268,36 @@ end
 ```
 
 The event fires whether or not the changeset is valid, so a refusal does not
-first tell the caller what is wrong with the input. A plug may not change the
-changeset: Lotus writes the changeset it built.
+first tell the caller what is wrong with the input.
+
+### Changing what is written
+
+A plug may change the changeset: Lotus writes the changeset the last plug
+continued with. A plug can put a field the caller does not set, such as the
+owner or the tenant of a query or a dashboard, from the `:context`:
+
+```elixir
+defmodule MyApp.StampOwner do
+  def init(opts), do: opts
+
+  def call(%{op: :create, resource: resource, changeset: cs, context: %{user: user}} = payload, _opts)
+      when resource in [:query, :dashboard] do
+    cs =
+      cs
+      |> Ecto.Changeset.put_change(:owner_id, to_string(user.id))
+      |> Ecto.Changeset.put_change(:tenant_id, to_string(user.tenant_id))
+
+    {:cont, %{payload | changeset: cs}}
+  end
+
+  def call(payload, _opts), do: {:cont, payload}
+end
+```
+
+A changeset of another record, or a payload without one, is ignored and Lotus
+writes the changeset it had. A field the plug puts is not validated again, and
+an invalid changeset is still not written. `:after_content_change` reports what
+was written.
 
 ### Public sharing
 

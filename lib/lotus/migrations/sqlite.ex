@@ -18,10 +18,12 @@ defmodule Lotus.Migrations.SQLite do
       add(:data_source, :string)
       add(:search_path, :string)
       add(:query_language, :string, size: 32)
+      add(:owner_id, :string)
+      add(:tenant_id, :string)
       timestamps(type: :utc_datetime_usec)
     end
 
-    create_if_not_exists(unique_index(:lotus_queries, [:name], name: "lotus_queries_name_index"))
+    create_tenant_indexes(:lotus_queries)
 
     create_if_not_exists table(:lotus_query_visualizations, primary_key: false) do
       add(:id, :serial, primary_key: true)
@@ -52,12 +54,12 @@ defmodule Lotus.Migrations.SQLite do
       add(:settings, :map, null: false, default: "{}")
       add(:public_token, :string)
       add(:auto_refresh_seconds, :integer)
+      add(:owner_id, :string)
+      add(:tenant_id, :string)
       timestamps(type: :utc_datetime_usec)
     end
 
-    create_if_not_exists(
-      unique_index(:lotus_dashboards, [:name], name: "lotus_dashboards_name_index")
-    )
+    create_tenant_indexes(:lotus_dashboards)
 
     create_if_not_exists(
       unique_index(:lotus_dashboards, [:public_token],
@@ -180,7 +182,7 @@ defmodule Lotus.Migrations.SQLite do
       index(:lotus_dashboards, [:public_token], name: "lotus_dashboards_public_token_index")
     )
 
-    drop_if_exists(index(:lotus_dashboards, [:name], name: "lotus_dashboards_name_index"))
+    drop_tenant_indexes(:lotus_dashboards)
     drop_if_exists(table(:lotus_dashboards))
 
     drop_if_exists(
@@ -192,7 +194,7 @@ defmodule Lotus.Migrations.SQLite do
     drop_if_exists(index(:lotus_query_visualizations, [:query_id, :position]))
     drop_if_exists(table(:lotus_query_visualizations))
 
-    drop_if_exists(index(:lotus_queries, [:name], name: "lotus_queries_name_index"))
+    drop_tenant_indexes(:lotus_queries)
     drop_if_exists(table(:lotus_queries))
 
     :ok
@@ -200,6 +202,26 @@ defmodule Lotus.Migrations.SQLite do
 
   @impl Lotus.Migration
   def migrated_version(_opts), do: 0
+
+  # A name is unique within a tenant: one index for the rows without a tenant,
+  # one for the rows of each tenant.
+  defp create_tenant_indexes(table) do
+    create_if_not_exists(
+      unique_index(table, [:name], name: "#{table}_name_index", where: "tenant_id IS NULL")
+    )
+
+    create_if_not_exists(
+      unique_index(table, [:tenant_id, :name], name: "#{table}_tenant_id_name_index")
+    )
+
+    create_if_not_exists(index(table, [:owner_id]))
+  end
+
+  defp drop_tenant_indexes(table) do
+    drop_if_exists(index(table, [:owner_id]))
+    drop_if_exists(index(table, [:tenant_id, :name], name: "#{table}_tenant_id_name_index"))
+    drop_if_exists(index(table, [:name], name: "#{table}_name_index"))
+  end
 
   # SQLite migrations are single-file and unversioned, so there is no V4-style
   # compensating migration (as on Postgres) to rename `data_repo` →
