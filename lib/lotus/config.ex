@@ -97,6 +97,7 @@ defmodule Lotus.Config do
           middleware: %{atom() => [{module(), term()}]},
           scheduler: keyword(),
           delivery: keyword(),
+          alerts: keyword(),
           compiled_visibility: compiled_visibility()
         }
 
@@ -377,6 +378,20 @@ defmodule Lotus.Config do
         ]
       ],
       doc: "Where schedules send their results. See `Lotus.Delivery`."
+    ],
+    alerts: [
+      type: :keyword_list,
+      default: [],
+      keys: [
+        conditions: [
+          type: {:map, :string, :atom},
+          default: %{},
+          doc:
+            "Alert conditions by name (`Lotus.Schedules.Alert.Condition`), next to the " <>
+              "built-in `\"above\"`, `\"below\"`, `\"equals\"`, `\"any_rows\"` and `\"no_rows\"`."
+        ]
+      ],
+      doc: "The conditions of alert rules. See `Lotus.Schedules.Alert`."
     ],
     middleware: [
       type: {:or, [:map, nil]},
@@ -780,6 +795,12 @@ defmodule Lotus.Config do
   """
   @spec scheduler() :: keyword()
   def scheduler, do: load!()[:scheduler] || []
+
+  @doc """
+  Returns the alerts configuration (see the `:alerts` option).
+  """
+  @spec alerts() :: keyword()
+  def alerts, do: load!()[:alerts] || []
 
   @doc """
   Returns the cache configuration.

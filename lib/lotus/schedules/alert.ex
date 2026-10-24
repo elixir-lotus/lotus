@@ -37,6 +37,15 @@ defmodule Lotus.Schedules.Alert do
 
   The content of the deliveries has `alert` (`Lotus.Delivery.Content`): the
   status, the value and a sentence saying what happened.
+
+  ## More conditions
+
+  Lotus Pro or your app adds conditions by name, such as one that fires when
+  a value changes by more than a share since the last run; see
+  `Lotus.Schedules.Alert.Condition`. A rule names it as its `condition` and
+  keeps its settings in `options`. It reads the schedule's `state` too, with
+  the last run's `"value"`. The status, the deliveries and the errors work
+  as for the built-in conditions.
   """
 
   alias Lotus.Result
@@ -44,22 +53,50 @@ defmodule Lotus.Schedules.Alert do
 
   @type status :: String.t()
 
+  @builtin ~w(above below equals any_rows no_rows)
+
+  @doc """
+  The names a rule's `condition` may take: the built-in ones and those
+  registered under `config :lotus, alerts: [conditions: %{...}]`
+  (`Lotus.Schedules.Alert.Condition`).
+  """
+  @spec conditions() :: [String.t()]
+  def conditions, do: Enum.uniq(@builtin ++ Map.keys(configured()))
+
+  @doc false
+  # The module of a registered condition, or nil for a built-in one.
+  @spec registered(String.t() | nil) :: module() | nil
+  def registered(condition), do: Map.get(configured(), condition)
+
+  defp configured, do: Keyword.get(Lotus.Config.alerts(), :conditions) || %{}
+
   @doc """
   Reads the rule's value from `result` and checks the condition. Returns
   `{:ok, holds?, value}`, the value as JSON has it, or `{:error, message}`.
   """
-  @spec evaluate(ScheduleRule.t(), Result.t()) :: {:ok, boolean(), term()} | {:error, String.t()}
-  def evaluate(%ScheduleRule{condition: "any_rows"}, result) do
+  @spec evaluate(ScheduleRule.t(), Result.t(), map()) ::
+          {:ok, boolean(), term()} | {:error, String.t()}
+  def evaluate(rule, result, state \\ %{})
+
+  def evaluate(%ScheduleRule{condition: condition} = rule, result, state) do
+    case registered(condition) do
+      nil when condition in @builtin -> evaluate_builtin(rule, result)
+      nil -> {:error, "the condition #{inspect(condition)} is not registered"}
+      module -> module.evaluate(rule, result, state || %{})
+    end
+  end
+
+  defp evaluate_builtin(%ScheduleRule{condition: "any_rows"}, result) do
     count = row_count(result)
     {:ok, count > 0, count}
   end
 
-  def evaluate(%ScheduleRule{condition: "no_rows"}, result) do
+  defp evaluate_builtin(%ScheduleRule{condition: "no_rows"}, result) do
     count = row_count(result)
     {:ok, count == 0, count}
   end
 
-  def evaluate(%ScheduleRule{condition: condition, threshold: threshold} = rule, result) do
+  defp evaluate_builtin(%ScheduleRule{condition: condition, threshold: threshold} = rule, result) do
     with {:ok, value} <- value(rule, result),
          {:ok, number} <- to_decimal(value, rule) do
       {:ok, compare(condition, number, threshold), Lotus.Value.for_json(value)}
@@ -134,8 +171,15 @@ defmodule Lotus.Schedules.Alert do
   is 480, no longer above 500"`, `"the query returned 3 rows"`.
   """
   @spec describe(ScheduleRule.t(), status(), term()) :: String.t()
-  def describe(%ScheduleRule{condition: condition}, _status, count)
-      when condition in ["any_rows", "no_rows"] do
+  def describe(%ScheduleRule{condition: condition} = rule, status, value) do
+    case registered(condition) do
+      nil -> describe_builtin(rule, status, value)
+      module -> module.describe(rule, status, value)
+    end
+  end
+
+  defp describe_builtin(%ScheduleRule{condition: condition}, _status, count)
+       when condition in ["any_rows", "no_rows"] do
     case count do
       0 -> "the query returned no rows"
       1 -> "the query returned 1 row"
@@ -143,7 +187,11 @@ defmodule Lotus.Schedules.Alert do
     end
   end
 
-  def describe(%ScheduleRule{condition: condition, threshold: threshold} = rule, status, value) do
+  defp describe_builtin(
+         %ScheduleRule{condition: condition, threshold: threshold} = rule,
+         status,
+         value
+       ) do
     still = if status == "firing", do: "", else: "no longer "
 
     "#{label(rule)} is #{Lotus.Value.to_display_string(value)}, #{still}#{condition} " <>

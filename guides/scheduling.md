@@ -231,6 +231,27 @@ the value and a sentence such as `"open is 512, above 500"`. The `"json"`
 format and the webhook include it as `"alert"`, and the `"html"` format says
 it above the tables. Alert runs read fresh data, as every run does.
 
+### More conditions
+
+Lotus Pro or your app adds conditions by name, such as one that fires when a
+value moves by more than a share since the last run. A condition implements
+`Lotus.Schedules.Alert.Condition` (`validate/1`, `evaluate/3`, `describe/3`)
+and is registered in the config:
+
+```elixir
+config :lotus, alerts: [conditions: %{"change" => MyApp.Alerts.Change}]
+```
+
+A rule names it as its `condition` and keeps its settings in `options`:
+
+```elixir
+rule: %{condition: "change", column: "revenue", options: %{"percent" => 20}}
+```
+
+It is checked when the schedule is saved, and on each run it gets the
+result and the schedule's `state`, with the last run's `"value"`. The
+status, the deliveries and the errors work as for the built-in conditions.
+
 ## Observing runs
 
 `[:lotus, :schedule, :run, :start | :stop | :exception]` telemetry brackets
