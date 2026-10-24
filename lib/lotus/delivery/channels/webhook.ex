@@ -19,6 +19,14 @@ defmodule Lotus.Delivery.Channels.Webhook do
   seconds, is a failure the run records. `"headers"` are sent as given, for
   a token the receiver checks.
 
+  ## Req
+
+  The webhook sends with [Req](https://hex.pm/packages/req), an optional
+  dependency of Lotus: add `{:req, "~> 0.5"}` to your deps to use it. An app
+  that has the AI features has it already. Without it, a webhook delivery is
+  refused when the schedule is saved. `config :lotus, delivery: [webhook:
+  [req_options: [...]]]` passes options to every request, such as a proxy.
+
   ## Settings
 
   The URL is entered by people, so it must be `https`: the certificate is
@@ -38,10 +46,21 @@ defmodule Lotus.Delivery.Channels.Webhook do
 
   @impl true
   def validate_config(config) do
-    with {:ok, url} <- fetch_url(config),
+    with :ok <- ensure_req(),
+         {:ok, url} <- fetch_url(config),
          :ok <- validate_url(url) do
       validate_headers(Map.get(config, "headers", %{}))
     end
+  end
+
+  # The module an app without Req does not have; a setting only so that the
+  # tests can stand for such an app.
+  defp req, do: Application.get_env(:lotus, :__req_dependency__, Req)
+
+  defp ensure_req do
+    if Code.ensure_loaded?(req()),
+      do: :ok,
+      else: {:error, ~s(the webhook channel needs Req: add {:req, "~> 0.5"} to your deps)}
   end
 
   defp fetch_url(config) do
@@ -72,23 +91,24 @@ defmodule Lotus.Delivery.Channels.Webhook do
 
   defp validate_headers(_headers), do: {:error, "headers must map names to strings"}
 
-  defp allow_http? do
-    Lotus.Config.delivery()
-    |> Keyword.get(:webhook, [])
-    |> Keyword.get(:allow_http, false)
-  end
+  defp allow_http?, do: Keyword.get(settings(), :allow_http, false)
+
+  defp settings, do: Keyword.get(Lotus.Config.delivery(), :webhook, [])
 
   @impl true
   def deliver(content, attachments, config) do
     with :ok <- validate_config(config) do
-      body = Lotus.JSON.encode!(envelope(content, attachments))
+      options =
+        [
+          json: envelope(content, attachments),
+          headers: Map.get(config, "headers", %{}),
+          receive_timeout: @timeout,
+          connect_options: [timeout: @timeout],
+          retry: false
+        ]
+        |> Keyword.merge(Keyword.get(settings(), :req_options, []))
 
-      headers =
-        config
-        |> Map.get("headers", %{})
-        |> Enum.map(fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
-
-      post(config["url"], headers, body)
+      post(config["url"], options)
     end
   end
 
@@ -108,31 +128,20 @@ defmodule Lotus.Delivery.Channels.Webhook do
     }
   end
 
-  defp post(url, headers, body) do
-    {:ok, _} = Application.ensure_all_started(:inets)
-    {:ok, _} = Application.ensure_all_started(:ssl)
-
-    request = {String.to_charlist(url), headers, ~c"application/json", body}
-    http_options = [timeout: @timeout, connect_timeout: @timeout, ssl: ssl_options()]
-
-    case :httpc.request(:post, request, http_options, body_format: :binary) do
-      {:ok, {{_version, status, _reason}, _headers, _body}} when status in 200..299 ->
+  # Req is optional: called through a variable, so Lotus compiles without it.
+  defp post(url, options) do
+    case req().post(url, options) do
+      {:ok, %{status: status}} when status in 200..299 ->
         :ok
 
-      {:ok, {{_version, status, _reason}, _headers, response}} ->
-        {:error, "the webhook answered #{status}: #{String.slice(to_string(response), 0, 200)}"}
+      {:ok, %{status: status, body: body}} ->
+        {:error, "the webhook answered #{status}: #{String.slice(to_string_body(body), 0, 200)}"}
 
-      {:error, reason} ->
-        {:error, "the webhook could not be reached: #{inspect(reason)}"}
+      {:error, exception} ->
+        {:error, "the webhook could not be reached: #{Exception.message(exception)}"}
     end
   end
 
-  defp ssl_options do
-    [
-      verify: :verify_peer,
-      cacerts: :public_key.cacerts_get(),
-      depth: 3,
-      customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
-    ]
-  end
+  defp to_string_body(body) when is_binary(body), do: body
+  defp to_string_body(body), do: inspect(body)
 end

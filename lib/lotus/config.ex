@@ -366,6 +366,11 @@ defmodule Lotus.Config do
               type: :boolean,
               default: false,
               doc: "Allow plain `http` webhook URLs."
+            ],
+            req_options: [
+              type: :keyword_list,
+              default: [],
+              doc: "Options passed to every `Req.post/2`, such as a proxy."
             ]
           ],
           doc: "Settings of the `\"webhook\"` channel."
