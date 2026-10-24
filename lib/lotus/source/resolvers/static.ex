@@ -36,6 +36,7 @@ defmodule Lotus.Source.Resolvers.Static do
   @behaviour Lotus.Source.Resolver
 
   alias Lotus.Config
+  alias Lotus.Source.Adapter
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
 
   # ---------------------------------------------------------------------------
@@ -113,10 +114,12 @@ defmodule Lotus.Source.Resolvers.Static do
     end
   end
 
+  defp wrap_entry(name, entry), do: name |> wrap_raw(entry) |> Adapter.with_capabilities()
+
   # An entry may name its adapter outright — `%{adapter: MyAdapter, ...}` —
   # which is the canonical form: no `can_handle?/1` probing, no ambiguity,
   # and the whole entry is handed to the adapter as its state.
-  defp wrap_entry(name, %{adapter: adapter_mod} = entry) when is_atom(adapter_mod) do
+  defp wrap_raw(name, %{adapter: adapter_mod} = entry) when is_atom(adapter_mod) do
     if module_name?(adapter_mod) do
       wrap_named_adapter(name, adapter_mod, entry)
     else
@@ -124,7 +127,7 @@ defmodule Lotus.Source.Resolvers.Static do
     end
   end
 
-  defp wrap_entry(name, entry), do: wrap_by_probing(name, entry)
+  defp wrap_raw(name, entry), do: wrap_by_probing(name, entry)
 
   defp wrap_named_adapter(name, adapter_mod, entry) do
     unless Code.ensure_loaded?(adapter_mod) and function_exported?(adapter_mod, :wrap, 2) do

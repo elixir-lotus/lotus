@@ -371,13 +371,17 @@ implementation in its own test suite at
 an in-memory DSL-map adapter that exercises the full contract. A copy of it
 makes a useful starting point for a new adapter.
 
-The compiler only demands the nine callbacks that have no default —
-`execute_query/4`, `transaction/3`, `list_tables/3`, `describe_table/3`,
-`builtin_denies/1`, `health_check/1`, `disconnect/1`, `format_error/2` and
-`source_type/1`. Everything else is optional with a documented default (see
-[Required vs Optional Callbacks](#required-vs-optional-callbacks)), but a
-useful adapter implements well beyond the minimum — in particular
-`extract_accessed_resources/2`, without which every statement is blocked by
+`Lotus.Source.Adapter` is the core behaviour: nine callbacks that every
+source needs — `execute_query/4`, `transaction/3`, `list_tables/3`,
+`describe_table/3`, `builtin_denies/1`, `health_check/1`, `disconnect/1`,
+`format_error/2` and `source_type/1`. The rest of the contract is split into
+five capability behaviours. Declare the ones your source supports and
+implement every callback of each; Lotus uses a documented default for the
+ones you leave out (see
+[Core and Capability Behaviours](#core-and-capability-behaviours)). A useful
+adapter declares well beyond the core — in particular
+`Lotus.Source.Adapter.Preflight`, whose `extract_accessed_resources/2` is
+what lets visibility rules apply. Without it, every statement is blocked by
 preflight unless the operator opts the source out of visibility enforcement.
 
 Below is an abbreviated stub — see the in-memory adapter for full
@@ -386,6 +390,9 @@ implementations and the DSL-to-rows executor.
 ```elixir
 defmodule MyApp.Adapters.Echo do
   @behaviour Lotus.Source.Adapter
+  @behaviour Lotus.Source.Adapter.Introspection
+  @behaviour Lotus.Source.Adapter.Shaping
+  @behaviour Lotus.Source.Adapter.Editor
 
   # -- Registration -----------------------------------------------------------
   # `wrap/2` receives the whole `data_sources` entry and returns the struct.
@@ -423,10 +430,7 @@ defmodule MyApp.Adapters.Echo do
   @impl true
   def transaction(state, fun, _opts), do: {:ok, fun.(state)}
 
-  # -- Introspection ----------------------------------------------------------
-  @impl true
-  def list_schemas(_state), do: {:ok, []}
-
+  # -- The rest of the core ---------------------------------------------------
   @impl true
   def list_tables(_state, _schemas, _opts),
     do: {:ok, [{nil, "messages"}]}
@@ -435,9 +439,46 @@ defmodule MyApp.Adapters.Echo do
   def describe_table(_state, _schema, _table), do: {:ok, []}
 
   @impl true
+  def builtin_denies(_state), do: []
+
+  @impl true
+  def health_check(_state), do: :ok
+
+  @impl true
+  def disconnect(_state), do: :ok
+
+  @impl true
+  def format_error(_state, error), do: inspect(error)
+
+  @impl true
+  def source_type(_state), do: :echo
+
+  @impl true
+  def supports_feature?(_state, _feature), do: false
+
+  # -- Introspection: a flat source, one unnamed namespace --------------------
+  @impl true
+  def list_schemas(_state), do: {:ok, []}
+
+  @impl true
   def resolve_table_namespace(_state, _table, _schemas), do: {:ok, nil}
 
-  # -- Pipeline (filters / sorts / pagination on the statement) ---------------
+  @impl true
+  def default_schemas(_state), do: []
+
+  @impl true
+  def builtin_schema_denies(_state), do: []
+
+  @impl true
+  def hierarchy_label(_state), do: "Messages"
+
+  @impl true
+  def parse_qualified_name(_state, name), do: {:ok, [name]}
+
+  @impl true
+  def validate_identifier(_state, _kind, _value), do: :ok
+
+  # -- Shaping: filters, sorts and pagination on the statement ---------------
   @impl true
   def quote_identifier(_state, id), do: id
 
@@ -448,36 +489,15 @@ defmodule MyApp.Adapters.Echo do
   def apply_sorts(_state, statement, _sorts), do: statement
 
   @impl true
-  def query_plan(_state, _statement, _opts), do: {:ok, nil}
-
-  # -- Safety & visibility ----------------------------------------------------
-  @impl true
-  def builtin_denies(_state), do: []
+  def apply_pagination(_state, statement, _opts), do: statement
 
   @impl true
-  def builtin_schema_denies(_state), do: []
+  def limit_query(_state, statement, _limit), do: statement
 
   @impl true
-  def default_schemas(_state), do: []
+  def supported_filter_operators(_state), do: [:eq, :neq]
 
-  # -- Lifecycle --------------------------------------------------------------
-  @impl true
-  def health_check(_state), do: :ok
-
-  @impl true
-  def disconnect(_state), do: :ok
-
-  # -- Error handling ---------------------------------------------------------
-  @impl true
-  def format_error(_state, error), do: inspect(error)
-
-  # -- Identity & presentation ------------------------------------------------
-  @impl true
-  def source_type(_state), do: :echo
-
-  @impl true
-  def supports_feature?(_state, _feature), do: false
-
+  # -- Editor -----------------------------------------------------------------
   @impl true
   def query_language(_state), do: "echo:dsl"
 
@@ -486,7 +506,10 @@ defmodule MyApp.Adapters.Echo do
     do: %{language: "echo:dsl", keywords: [], types: [], functions: [], context_boundaries: []}
 
   @impl true
-  def db_type_to_lotus_type(_state, _db_type), do: :text
+  def example_query(_state, table, _schema), do: "echo #{table}"
+
+  @impl true
+  def ai_context(_state), do: {:error, :ai_not_supported}
 end
 ```
 
@@ -512,13 +535,15 @@ config :lotus,
 A real adapter implements `extract_accessed_resources/2` instead of opting
 out.
 
-## Required vs Optional Callbacks
+## Core and Capability Behaviours
+The contract is a core behaviour and five capability behaviours, the way
+`Ecto.Adapter` is split into `Ecto.Adapter.Queryable`, `Ecto.Adapter.Schema`
+and the rest. Each capability groups callbacks that only make sense
+together, so the compiler checks that a capability is implemented
+completely: an adapter cannot implement `apply_filters/3` and forget
+`supported_filter_operators/1`.
 
-The full `Lotus.Source.Adapter` contract is 41 callbacks, nine of which are
-required. Most non-SQL adapters implement far more than the minimum; the
-optional list is for adapters that legitimately cannot support a feature.
-
-**Required** — no default; the compiler warns if you omit one:
+**Core** — `Lotus.Source.Adapter`, no default; the compiler warns if you omit one:
 
 | Callback | Purpose |
 |---|---|
@@ -532,51 +557,98 @@ optional list is for adapters that legitimately cannot support a feature.
 | `format_error(state, error)` | Driver error → human-readable string. |
 | `source_type(state)` | The source-type atom. Open — any atom your adapter declares. |
 
-**Optional with documented defaults** — omit when not applicable. This table
-mirrors `@optional_callbacks` in `Lotus.Source.Adapter`:
+**Capabilities** — declare a behaviour to get its capability, and
+implement every callback of it (`table_stats/3` and `table_row_estimates/2`
+are optional within `Lotus.Source.Adapter.Introspection`). For a capability
+you don't declare, `Lotus.Source.Adapter` uses the default in each table.
 
-| Callback | Default | When to implement |
+Lotus decides what an adapter can do by the behaviours it declares, not by
+the functions it exports. An adapter that exports `apply_filters/3` without
+`@behaviour Lotus.Source.Adapter.Shaping` gets no filtering, and Lotus logs
+a warning the first time it sees it. Run `mix lotus.adapter.check` on your
+module to see what it declares:
+
+```
+$ mix lotus.adapter.check MyApp.Adapters.Echo
+MyApp.Adapters.Echo
+  core           declared
+  introspection  declared
+  preflight      not declared
+  binding        not declared
+  shaping        declared
+  editor         declared
+```
+
+**`Lotus.Source.Adapter.Introspection`**
+
+| Callback | Default without the capability | When to implement |
 |---|---|---|
-| `sanitize_query/3` | `:ok` | When you need to block specific statement shapes (read-only enforcement, destructive-op blocking). `opts` carries `:read_only`. |
-| `transform_statement/2` | statement unchanged | Language-specific rewrites of the stored template, applied **before** `{{var}}` placeholders are extracted (`params` is still `[]`). |
-| `transform_bound_query/3` | statement unchanged | Rewrites applied **after** variable binding (when values are visible). |
-| `apply_pagination/3` | statement unchanged | Page a statement in your source's native syntax. `opts` carries `:limit` (required), `:offset`, `:count` and `:search_path`. |
-| `needs_preflight?/2` | `true` | Skip preflight for read-only introspection statements (`EXPLAIN`, `SHOW`, `PRAGMA`, etc.). |
-| `substitute_variable/5` | `{:error, :unsupported}` | Support `{{var}}` in stored queries. **Security boundary — see below.** |
-| `substitute_list_variable/5` | `{:error, :unsupported}` | Support list variables. |
-| `validate_statement/3` | `:ok` (trust-on-execute) | Validate a draft via an engine's `_validate` endpoint without executing. |
-| `parse_qualified_name/2` | `{:ok, [name]}` | Adapters with a two-level namespace (`schema.table`, `db.collection`). See [Relations are two-level](#relations-are-two-level). |
-| `validate_identifier/3` | `:ok` (permissive) | Enforce your query language's identifier grammar. |
-| `supported_filter_operators/1` | all of `Lotus.Query.Filter.operators/0` | Declare the subset of filter operators your `apply_filters/3` actually handles. |
-| `extract_accessed_resources/2` | `{:unrestricted, reason}` | Return `{:ok, MapSet}` of accessed `{schema, table}` tuples so visibility rules apply. **See below.** |
-| `ai_context/1` | `{:error, :ai_not_supported}` | Opt into Lotus.AI — language identifier, example query, syntax notes, error patterns, capability gates. |
-| `prepare_for_analysis/2` | `{:error, :unsupported}` | Produce a runnable statement for `query_plan/3` analysis — strips `[[ ... ]]`, neutralizes `{{var}}`. |
-| `hierarchy_label/1` | `"Tables"` | UI label for the top-level hierarchy (e.g. `"Indices"` for Elasticsearch). |
-| `example_query/3` | generic `SELECT` | Source-native example for the query editor's placeholder text. |
-| `table_stats/3` | `{:error, :unsupported}` | Relation statistics. Without it, core falls back to `SELECT COUNT(*)`, which only suits SQL sources. |
-| `table_row_estimates/2` | `{:error, :unsupported}` | Estimated row counts of every relation in the given schemas, from the engine's statistics, in one cheap call: `{:ok, %{{schema, table} => rows}}`. Leave out a relation without an estimate; never count every table. |
-| `limit_query/3` | statement unchanged | Cap a statement at a row limit for the UI's preview affordance — `%Statement{}` in, `%Statement{}` out. |
-| `list_schemas/1` | `{:ok, []}` | Sources with a namespace level. Flat sources omit it. |
+| `list_schemas/1` | `{:ok, []}` | Sources with a namespace level. Flat sources return `{:ok, []}`. |
 | `resolve_table_namespace/3` | `{:ok, nil}` | Resolve which namespace holds a table. |
 | `default_schemas/1` | `[]` | Namespaces browsed when the caller names none. |
 | `builtin_schema_denies/1` | `[]` | Namespaces always hidden (system catalogues). |
-| `quote_identifier/2` | identifier unchanged | Quote an identifier. Languages without quoting omit it. |
+| `hierarchy_label/1` | `"Tables"` | UI label for the top-level hierarchy (e.g. `"Indices"` for Elasticsearch). |
+| `parse_qualified_name/2` | `{:ok, [name]}` | Adapters with a two-level namespace (`schema.table`, `db.collection`). See [Relations are two-level](#relations-are-two-level). |
+| `validate_identifier/3` | `:ok` (permissive) | Enforce your query language's identifier grammar. |
+| `table_stats/3` | `{:error, :unsupported}` | Relation statistics. Without it, core falls back to `SELECT COUNT(*)`, which only suits SQL sources. |
+| `table_row_estimates/2` | `{:error, :unsupported}` | Estimated row counts of every relation in the given schemas, from the engine's statistics, in one cheap call: `{:ok, %{{schema, table} => rows}}`. Leave out a relation without an estimate; never count every table. |
+
+**`Lotus.Source.Adapter.Preflight`**
+
+| Callback | Default without the capability | When to implement |
+|---|---|---|
+| `extract_accessed_resources/2` | `{:unrestricted, reason}` | Return `{:ok, MapSet}` of accessed `{schema, table}` tuples so visibility rules apply. **See below.** |
+| `needs_preflight?/2` | `true` | Skip preflight for read-only introspection statements (`EXPLAIN`, `SHOW`, `PRAGMA`, etc.). |
+| `sanitize_query/3` | `:ok` | When you need to block specific statement shapes (read-only enforcement, destructive-op blocking). `opts` carries `:read_only`. |
+| `query_plan/3` | `{:ok, nil}` | Execution plan, when the engine exposes one. Takes `(state, %Statement{}, opts)` — the statement carries its own bound values in `:params`, there is no separate params argument. Returning `{:ok, nil}` is legitimate for an engine with no plan. |
+| `validate_statement/3` | `:ok` (trust-on-execute) | Validate a draft via an engine's `_validate` endpoint without executing. |
+| `prepare_for_analysis/2` | `{:error, :unsupported}` | Produce a runnable statement for `query_plan/3` analysis — strips `[[ ... ]]`, neutralizes `{{var}}`. |
+
+**`Lotus.Source.Adapter.Binding`**
+
+| Callback | Default without the capability | When to implement |
+|---|---|---|
+| `transform_statement/2` | statement unchanged | Language-specific rewrites of the stored template, applied **before** `{{var}}` placeholders are extracted (`params` is still `[]`). |
+| `substitute_variable/5` | `{:error, :unsupported}` | Support `{{var}}` in stored queries. **Security boundary — see below.** |
+| `substitute_list_variable/5` | `{:error, :unsupported}` | Support list variables. |
+| `transform_bound_query/3` | statement unchanged | Rewrites applied **after** variable binding (when values are visible). |
+| `db_type_to_lotus_type/2` | `:text` | Map engine column types onto Lotus value types. |
+
+**`Lotus.Source.Adapter.Shaping`**
+
+| Callback | Default without the capability | When to implement |
+|---|---|---|
 | `apply_filters/3` | statement unchanged | Bake runtime filters into the statement. |
 | `apply_sorts/3` | statement unchanged | Bake runtime sorts into the statement. |
-| `query_plan/3` | `{:ok, nil}` | Execution plan, when the engine exposes one. Takes `(state, %Statement{}, opts)` — the statement carries its own bound values in `:params`, there is no separate params argument. Returning `{:ok, nil}` is legitimate for an engine with no plan. |
-| `supports_feature?/2` | `false` | Declare capabilities. See `t:Lotus.Source.Adapter.feature/0`. |
-| `db_type_to_lotus_type/2` | `:text` | Map engine column types onto Lotus value types. |
+| `apply_pagination/3` | statement unchanged | Page a statement in your source's native syntax. `opts` carries `:limit` (required), `:offset`, `:count` and `:search_path`. |
+| `limit_query/3` | statement unchanged | Cap a statement at a row limit for the UI's preview affordance — `%Statement{}` in, `%Statement{}` out. |
+| `supported_filter_operators/1` | all of `Lotus.Query.Filter.operators/0` | Declare the subset of filter operators your `apply_filters/3` actually handles. |
+| `quote_identifier/2` | identifier unchanged | Quote an identifier. Languages without quoting return it unchanged. |
+
+**`Lotus.Source.Adapter.Editor`**
+
+| Callback | Default without the capability | When to implement |
+|---|---|---|
 | `editor_config/1` | empty editor shape | Keywords, types and functions for editor completions. |
 | `query_language/1` | `"sql"` | Declare the `family:dialect` identifier for your language. See [Query Language Identifiers](#query-language-identifiers). |
+| `example_query/3` | generic `SELECT` | Source-native example for the query editor's placeholder text. |
+| `ai_context/1` | `{:error, :ai_not_supported}` | Opt into Lotus.AI — language identifier, example query, syntax notes, error patterns, capability gates. |
+
+**Optional callbacks of `Lotus.Source.Adapter`:**
+
+| Callback | Default without the capability | When to implement |
+|---|---|---|
+| `supports_feature?/2` | `false` | Declare capabilities. See `t:Lotus.Source.Adapter.feature/0`. |
 | `can_handle?/1` | not consulted | Claim a `data_sources` entry that does not name your module. |
 | `wrap/2` | — | Build the `%Adapter{}` from a `data_sources` entry. Required in practice: the resolver calls it for every entry it routes to your adapter. |
 
-Two notes on that table. `can_handle?/1` and `wrap/2` are optional to the
+Two notes on these tables. `can_handle?/1` and `wrap/2` are optional to the
 compiler because an adapter can be constructed by hand (or by a custom
 resolver), but any adapter registered through `:data_sources` needs `wrap/2`.
 And a default that returns "nothing" is not always the safe choice:
 `extract_accessed_resources/2` defaulting to `{:unrestricted, _}` means an
-adapter that omits it enforces no visibility at all.
+adapter without `Lotus.Source.Adapter.Preflight` enforces no visibility at
+all.
 
 ## Universal Callbacks
 
@@ -586,7 +658,8 @@ instead of being special-cased in core:
 - **`validate_statement(state, statement, opts)`** — can the engine parse and
   prepare this statement without running it? SQL adapters implement it with
   `EXPLAIN`; Elasticsearch uses `_validate`; an engine with no such endpoint
-  omits the callback and inherits `:ok` (trust-on-execute). Callers
+  returns `:ok` (trust-on-execute), which is also the default without
+  `Lotus.Source.Adapter.Preflight`. Callers
   neutralize unbound `{{var}}` placeholders first — adapters see the
   statement as-is.
 - **`parse_qualified_name(state, name)`** — `{:ok, [component]}`, coarsest

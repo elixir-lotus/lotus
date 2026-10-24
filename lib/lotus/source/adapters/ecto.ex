@@ -44,13 +44,20 @@ defmodule Lotus.Source.Adapters.Ecto do
         use Lotus.Source.Adapters.Ecto, dialect: LotusMSSql.Dialect
       end
 
-  The `use` macro injects default implementations for all
-  `Lotus.Source.Adapter` callbacks, delegating shared Ecto logic to helper
+  The `use` macro declares `Lotus.Source.Adapter` and every capability
+  behaviour (`Lotus.Source.Adapter.Introspection`, `Preflight`, `Binding`,
+  `Shaping` and `Editor`) and injects default implementations for all their
+  callbacks, delegating shared Ecto logic to helper
   functions in this module and dialect-specific callbacks to the provided
   `:dialect` module. All callbacks are `defoverridable`.
   """
 
   @behaviour Lotus.Source.Adapter
+  @behaviour Lotus.Source.Adapter.Introspection
+  @behaviour Lotus.Source.Adapter.Preflight
+  @behaviour Lotus.Source.Adapter.Binding
+  @behaviour Lotus.Source.Adapter.Shaping
+  @behaviour Lotus.Source.Adapter.Editor
 
   alias Lotus.Query.Filter
   alias Lotus.Query.OptionalClause
@@ -136,6 +143,11 @@ defmodule Lotus.Source.Adapters.Ecto do
 
     quote do
       @behaviour Lotus.Source.Adapter
+      @behaviour Lotus.Source.Adapter.Introspection
+      @behaviour Lotus.Source.Adapter.Preflight
+      @behaviour Lotus.Source.Adapter.Binding
+      @behaviour Lotus.Source.Adapter.Shaping
+      @behaviour Lotus.Source.Adapter.Editor
 
       @dialect unquote(dialect)
 
@@ -155,6 +167,11 @@ defmodule Lotus.Source.Adapters.Ecto do
       unquote(type_mapping_callbacks())
 
       defoverridable Lotus.Source.Adapter
+      defoverridable Lotus.Source.Adapter.Introspection
+      defoverridable Lotus.Source.Adapter.Preflight
+      defoverridable Lotus.Source.Adapter.Binding
+      defoverridable Lotus.Source.Adapter.Shaping
+      defoverridable Lotus.Source.Adapter.Editor
     end
   end
 
@@ -172,12 +189,12 @@ defmodule Lotus.Source.Adapters.Ecto do
 
       @impl true
       def wrap(name, state) when is_binary(name) do
-        %Adapter{
+        Adapter.with_capabilities(%Adapter{
           name: name,
           module: __MODULE__,
           state: EctoAdapter.validate_state!(state),
           source_type: @dialect.source_type()
-        }
+        })
       end
     end
   end
@@ -496,12 +513,12 @@ defmodule Lotus.Source.Adapters.Ecto do
                   "this source, or pass an `Ecto.Repo` module."
         end
 
-        %Adapter{
+        Adapter.with_capabilities(%Adapter{
           name: name,
           module: __MODULE__,
           state: state,
           source_type: @default_dialect.source_type()
-        }
+        })
 
       adapter_mod ->
         adapter_mod.wrap(name, state)
@@ -824,6 +841,9 @@ defmodule Lotus.Source.Adapters.Ecto do
       do: @default_dialect.example_query(table, schema),
       else: "SELECT value_column FROM #{table}"
   end
+
+  @impl true
+  def transform_statement(_repo, statement), do: statement
 
   @impl true
   def db_type_to_lotus_type(_repo, db_type), do: @default_dialect.db_type_to_lotus_type(db_type)

@@ -12,6 +12,7 @@ defmodule Lotus.Storage.SchemaCacheTest do
   # allowing per-test control.
   defmodule MockAdapterModule do
     @behaviour Lotus.Source.Adapter
+    use Lotus.Test.AdapterDefaults, [:introspection, :preflight, :binding, :shaping, :editor]
 
     def describe_table(state, schema, table) do
       apply(Process.get(:mock_describe_table), [state, schema, table])

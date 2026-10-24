@@ -116,6 +116,11 @@ defmodule Lotus.MixProject do
           Lotus.Source.Registry
         ],
         "Adapter Authoring": [
+          Lotus.Source.Adapter.Introspection,
+          Lotus.Source.Adapter.Preflight,
+          Lotus.Source.Adapter.Binding,
+          Lotus.Source.Adapter.Shaping,
+          Lotus.Source.Adapter.Editor,
           Lotus.Query.Statement,
           Lotus.Source.Adapters.Ecto,
           Lotus.Source.Adapters.Ecto.Dialect,

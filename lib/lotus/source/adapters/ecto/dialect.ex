@@ -156,7 +156,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialect do
 
   @doc """
   Row count estimates for the relations in `schemas`, from the engine's
-  statistics (see `c:Lotus.Source.Adapter.table_row_estimates/2`).
+  statistics (see `c:Lotus.Source.Adapter.Introspection.table_row_estimates/2`).
   """
   @callback table_row_estimates(repo, schemas :: [String.t()]) ::
               %{{String.t() | nil, String.t()} => non_neg_integer()}

@@ -14,6 +14,7 @@ defmodule Lotus.Source.Adapters.PluggableRegistryTest do
   # A custom adapter that handles a specific module
   defmodule CustomAdapter do
     @behaviour Lotus.Source.Adapter
+    use Lotus.Test.AdapterDefaults, [:introspection, :preflight, :binding, :shaping, :editor]
 
     @impl true
     @custom_source Lotus.Source.Adapters.PluggableRegistryTest.CustomSource
@@ -159,6 +160,7 @@ defmodule Lotus.Source.Adapters.PluggableRegistryTest do
   # Ecto anywhere.
   defmodule EchoAdapter do
     @behaviour Lotus.Source.Adapter
+    use Lotus.Test.AdapterDefaults, [:introspection, :preflight, :binding, :shaping, :editor]
 
     @impl true
     def can_handle?(:echo_source), do: true

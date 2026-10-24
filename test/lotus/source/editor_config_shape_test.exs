@@ -18,6 +18,7 @@ defmodule Lotus.Source.EditorConfigShapeTest do
     defmacro __using__(_opts) do
       quote do
         @behaviour Lotus.Source.Adapter
+        use Lotus.Test.AdapterDefaults, [:introspection, :preflight, :binding, :shaping, :editor]
 
         @impl true
         def execute_query(_state, _sql, _params, _opts),

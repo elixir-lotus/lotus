@@ -364,7 +364,7 @@ statement will touch, then checks each of them against the rules. For
 SQL sources this uses the engine's own planner, so a denied table reached
 through a view or a subquery is still caught.
 
-`c:Lotus.Source.Adapter.extract_accessed_resources/2` returns one of
+`c:Lotus.Source.Adapter.Preflight.extract_accessed_resources/2` returns one of
 three things:
 
 | Return | Meaning |
@@ -380,7 +380,7 @@ A blocked query returns:
 ```
 
 Whether preflight runs at all is the adapter's decision, via
-`c:Lotus.Source.Adapter.needs_preflight?/2`. The built-in Ecto adapter
+`c:Lotus.Source.Adapter.Preflight.needs_preflight?/2`. The built-in Ecto adapter
 skips it for `EXPLAIN` / `SHOW` / `PRAGMA` statements. Lotus core no
 longer sniffs SQL prefixes itself.
 
