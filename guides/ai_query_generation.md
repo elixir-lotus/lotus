@@ -846,6 +846,57 @@ case Lotus.AI.suggest_optimizations(statement: statement, data_source: repo) do
 end
 ```
 
+## Showing the Work as It Happens
+
+A request runs a loop of tool calls before the model answers, which takes a
+few seconds. Two options let an interface show it instead of a spinner.
+
+### `:on_tool_call`
+
+Every AI function takes `:on_tool_call`, a function of one argument called
+as each tool the model asks for starts and stops:
+
+```elixir
+parent = self()
+
+Lotus.AI.generate_query_with_context(
+  prompt: "Revenue by month",
+  data_source: "postgres",
+  on_tool_call: &send(parent, {:ai_tool_call, &1})
+)
+
+# Then, in order:
+# {:ai_tool_call, %{phase: :start, id: ref, tool: "describe_table", args: %{"table_name" => "orders"}}}
+# {:ai_tool_call, %{phase: :stop, id: ref, tool: "describe_table", args: %{...},
+#                   result: ~s({"table":"orders","columns":[...]}), duration: native_time}}
+```
+
+`:id` pairs a stop with its start. `:result` is the text handed back to the
+model (JSON; an `"error"` key when the tool failed). `:duration` is in
+native time units. The function runs in the process that runs the loop, and
+what it raises is logged without stopping the request.
+
+### `:on_text`
+
+`explain_query/1` also takes `:on_text`. With it, each round of the loop
+streams, and the function is called with each piece of the explanation as
+the model writes it:
+
+```elixir
+Lotus.AI.explain_query(
+  statement: "SELECT ...",
+  data_source: "postgres",
+  on_text: &send(parent, {:ai_text, &1})
+)
+```
+
+A round that ends in tool calls may send some text first (the model saying
+what it will look at). An interface that shows the answer clears that text
+when a tool call starts. The function still returns the whole explanation.
+
+Lotus Web uses both: its assistant lists each step while it answers and
+shows an explanation as it is written.
+
 ## Limitations
 
 - **English prompts recommended** - Other languages may work but aren't tested
@@ -870,6 +921,7 @@ Generates a statement from natural language (single-turn).
 - `:data_source` (required) - Data source name
 - `:read_only` (optional) - Restrict generation to read-only queries (default: `true`)
 - `:context` / `:scope` (optional) - Actor threaded into every query and discovery call
+- `:on_tool_call` (optional) - Called as each tool starts and stops (see [Showing the Work as It Happens](#showing-the-work-as-it-happens))
 
 **Returns:**
 
@@ -888,6 +940,7 @@ Generates a statement with conversation context for multi-turn refinement.
 - `:query_context` (optional) - `%{statement: ..., variables: [...]}` describing the query already in the user's editor
 - `:read_only` (optional) - Restrict generation to read-only queries (default: `true`)
 - `:context` / `:scope` (optional) - Actor threaded into every query and discovery call
+- `:on_tool_call` (optional) - Called as each tool starts and stops (see [Showing the Work as It Happens](#showing-the-work-as-it-happens))
 
 **Returns:**
 
@@ -909,6 +962,11 @@ plain map, not a struct, and every message carries `:statement` — never
 - `Conversation.prune_messages(conversation, keep_last \\ 10)` - Remove old messages to manage token usage
 - `Conversation.update_source_context(conversation, tables)` - Track analyzed tables under `:source_context`
 
+An interface can keep messages of its own roles in the same list. When the
+conversation is sent to the model, an `:explanation` goes as the
+assistant's message, and any other role (a provider error, optimization
+suggestions) is left out.
+
 ### `Lotus.AI.explain_query/1`
 
 Explains a query (or a selected fragment) in plain language.
@@ -919,6 +977,8 @@ Explains a query (or a selected fragment) in plain language.
 - `:fragment` (optional) - A selected portion of the query to explain
 - `:data_source` (required) - Data source name
 - `:context` / `:scope` (optional) - Actor threaded into the `describe_table` tool
+- `:on_tool_call` (optional) - Called as each tool starts and stops
+- `:on_text` (optional) - Called with each piece of the explanation as it is written
 
 **Returns:**
 
@@ -934,6 +994,7 @@ Analyzes a statement and returns optimization suggestions.
 - `:data_source` (required) - Data source name
 - `:search_path` (optional) - PostgreSQL search path
 - `:context` / `:scope` (optional) - Actor threaded into the `describe_table` tool
+- `:on_tool_call` (optional) - Called as each tool starts and stops
 
 **Returns:**
 
