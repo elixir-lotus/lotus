@@ -23,6 +23,14 @@
   - `Lotus.Variables.regex/0`: use `Lotus.Variables.extract_names/2`
     (#287).
 
+- **Run the v7 migration: `owner_id` and `tenant_id` on queries and
+  dashboards, and names unique per tenant.** Lotus reads every column of a
+  query and a dashboard, so an app must migrate before it deploys v2.0.
+  PostgreSQL migrates with `mix ecto.migrate`
+  (`Lotus.Migrations.Postgres.V7`); an existing MySQL or SQLite install runs
+  the SQL in the v2 upgrade guide. A name that was unique across the table
+  is now unique within a tenant, and among the rows without one.
+
 ### Security
 
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
@@ -68,6 +76,20 @@
   `supported_filter_operators/1`, and an Ecto dialect without
   `supported_filter_operators/0`, is not taken to support them, since its
   engine may not take that SQL; it declares them when it does.
+
+- **An owner and a tenant on queries and dashboards.** `owner_id` and
+  `tenant_id` hold ids the host supplies; Lotus stores them and filters by
+  them but never decides them, so an install that sets neither behaves as
+  before. They are the `:owner_id` and `:tenant_id` options of
+  `create_query/2`, `update_query/3`, `create_dashboard/2` and
+  `update_dashboard/3`, not attributes, so form params passed as `attrs`
+  can't move content to another tenant. `list_queries_by/1` and
+  `list_dashboards_by/1` filter by them: an id, `nil` for none, or a list
+  (`tenant_id: ["acme", nil]`). See "Owner and tenant" in `Lotus.Storage`.
+- **A `:before_content_change` plug may change the changeset.** Lotus writes
+  the changeset the last plug continued with, so a plug can stamp an owner
+  or a tenant from the `:context`. A changeset of another record is
+  ignored, as `:before_query` ignores a rewrite that isn't a statement.
 
 ### Changed
 

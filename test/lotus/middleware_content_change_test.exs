@@ -82,6 +82,27 @@ defmodule Lotus.MiddlewareContentChangeTest do
     end
   end
 
+  defmodule StampPlug do
+    @moduledoc false
+    def init(opts), do: opts
+
+    def call(%{op: :create, changeset: changeset, context: %{user_id: id}} = payload, _opts) do
+      {:cont, %{payload | changeset: Ecto.Changeset.put_change(changeset, :owner_id, "#{id}")}}
+    end
+
+    def call(payload, _opts), do: {:cont, payload}
+  end
+
+  defmodule SwapPlug do
+    @moduledoc false
+    def init(opts), do: opts
+
+    def call(%{changeset: changeset} = payload, _opts) do
+      other = Ecto.Changeset.change(%Lotus.Storage.Query{id: 999_999}, name: "Swapped")
+      {:cont, %{payload | changeset: other |> Map.put(:valid?, changeset.valid?)}}
+    end
+  end
+
   @context %{user_id: 42}
   @missing_id 999_999
 
@@ -172,6 +193,30 @@ defmodule Lotus.MiddlewareContentChangeTest do
                Lotus.delete_query(query, context: @context)
 
       assert [%Query{name: "Orders"}] = Storage.list_queries()
+    end
+  end
+
+  describe "a plug that changes the changeset" do
+    test "has its changeset written, and the after event carries the change" do
+      Middleware.compile(%{
+        before_content_change: [{StampPlug, []}],
+        after_content_change: [{CapturePlug, :after_content_change}]
+      })
+
+      assert {:ok, %Query{owner_id: "42"}} =
+               Storage.create_query(%{name: "Orders", statement: "SELECT 1"}, context: @context)
+
+      assert_received {:after_content_change, %{op: :create, changes: %{owner_id: "42"}}}
+
+      assert {:ok, %Dashboard{owner_id: "42"}} =
+               Dashboards.create_dashboard(%{name: "Sales"}, context: @context)
+    end
+
+    test "a changeset of another record is ignored" do
+      Middleware.compile(%{before_content_change: [{SwapPlug, []}]})
+
+      assert {:ok, %Query{name: "Orders"}} =
+               Storage.create_query(%{name: "Orders", statement: "SELECT 1"}, context: @context)
     end
   end
 
