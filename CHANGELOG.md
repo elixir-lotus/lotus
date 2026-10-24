@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **`req_llm` is an optional dependency** (#298). Every app that installed
+  Lotus compiled ReqLLM, Req and their providers, AI or not. An app that
+  uses the AI features now adds `{:req_llm, "~> 1.29"}` to its deps.
+  Without it, Lotus compiles without its AI modules,
+  `Lotus.AI.enabled?/0` is `false` even when AI is configured (with a
+  warning, once), and the AI functions return
+  `{:error, :dependency_missing}`. `Lotus.AI.available?/0` (new) says
+  whether the dependency is loaded; `Lotus.AI.enabled?/0` reads the config
+  on each call. See the v2 upgrade guide.
+
 ### Security
 
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't

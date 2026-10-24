@@ -21,6 +21,17 @@ defmodule Lotus.AI do
   - `"groq:llama-3.3-70b-versatile"`
   - Any other provider supported by ReqLLM
 
+  ## The dependency
+
+  The AI features use [ReqLLM](https://hex.pm/packages/req_llm), an
+  optional dependency of Lotus: add it to your app's deps to use them.
+
+      {:req_llm, "~> 1.29"}
+
+  Without it, `available?/0` is `false`, `enabled?/0` is `false` even when
+  AI is configured (with a warning, once), and the AI functions return
+  `{:error, :dependency_missing}`.
+
   ## Usage
 
       {:ok, result} = Lotus.AI.generate_query(
@@ -43,14 +54,21 @@ defmodule Lotus.AI do
 
   - `{:ok, result}` - Successfully generated statement
   - `{:error, :not_configured}` - AI features not enabled in config
+  - `{:error, :dependency_missing}` - AI enabled in config, but `req_llm`
+    is not installed
   - `{:error, :api_key_not_configured}` - API key missing or invalid
   - `{:error, {:unable_to_generate, reason}}` - LLM refused (not a data question)
   - `{:error, term}` - Other errors (API failures, network issues, etc.)
   """
 
+  require Logger
+
   alias Lotus.AI.{QueryExplainer, QueryGenerator, QueryOptimizer}
   alias Lotus.Source
   alias Lotus.Source.Adapter
+
+  # Compiled only with ReqLLM; called only when it is (`available?/0`).
+  @compile {:no_warn_undefined, [QueryExplainer, QueryGenerator, QueryOptimizer]}
 
   @default_model "openai:gpt-4o"
   @ai_features ~w(generation optimization explanation)a
@@ -284,9 +302,27 @@ defmodule Lotus.AI do
   end
 
   @doc """
+  Whether the AI features can run on this node: whether ReqLLM, an
+  optional dependency, is loaded. Fixed for the life of the node; whether
+  AI is switched on is `enabled?/0`.
+
+      Lotus.AI.available?()
+      # => true
+  """
+  @spec available?() :: boolean()
+  def available?, do: Code.ensure_loaded?(dependency())
+
+  # The module the AI features need. An application setting only so that
+  # the tests can stand for a node without it.
+  defp dependency, do: Application.get_env(:lotus, :__ai_dependency__, ReqLLM)
+
+  @doc """
   Check if AI features are enabled and configured.
 
-  Returns `true` if AI is properly configured, `false` otherwise.
+  Returns `true` if AI is switched on and configured, and can run
+  (`available?/0`), `false` otherwise. AI switched on without its
+  dependency logs a warning, once. It reads the configuration on each
+  call, so a setting changed at runtime counts at once.
 
   ## Examples
 
@@ -373,7 +409,9 @@ defmodule Lotus.AI do
       Lotus.AI.model()
       # => {:ok, "openai:gpt-4o"}
   """
-  @spec model() :: {:ok, String.t()} | {:error, :not_configured}
+  @spec model() ::
+          {:ok, String.t()}
+          | {:error, :not_configured | :dependency_missing | :api_key_not_configured}
   def model do
     case get_ai_config() do
       {:ok, config} -> {:ok, config.model}
@@ -384,23 +422,36 @@ defmodule Lotus.AI do
   defp get_ai_config do
     ai_config = Lotus.Config.get(:ai) || []
 
-    if ai_config[:enabled] do
-      api_key = resolve_secret(ai_config[:api_key])
-
-      if api_key do
-        model = ai_config[:model] || @default_model
-
-        {:ok,
-         %{
-           model: model,
-           api_key: api_key
-         }}
-      else
-        {:error, :api_key_not_configured}
-      end
-    else
-      {:error, :not_configured}
+    cond do
+      !ai_config[:enabled] -> {:error, :not_configured}
+      not available?() -> warn_missing_dependency()
+      true -> ai_config(ai_config)
     end
+  end
+
+  defp ai_config(ai_config) do
+    api_key = resolve_secret(ai_config[:api_key])
+
+    if api_key do
+      {:ok, %{model: ai_config[:model] || @default_model, api_key: api_key}}
+    else
+      {:error, :api_key_not_configured}
+    end
+  end
+
+  # AI switched on, and its dependency missing: said once a node, as it is
+  # asked on every render of the UIs that show AI.
+  defp warn_missing_dependency do
+    unless :persistent_term.get({__MODULE__, :warned_missing}, false) do
+      :persistent_term.put({__MODULE__, :warned_missing}, true)
+
+      Logger.warning(
+        "Lotus AI is enabled in the config, but its dependency is missing: " <>
+          ~s(add {:req_llm, "~> 1.29"} to your deps to use it. AI stays off.)
+      )
+    end
+
+    {:error, :dependency_missing}
   end
 
   defp resolve_secret({:system, env_var}) when is_binary(env_var) do

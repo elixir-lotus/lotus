@@ -52,8 +52,9 @@ defmodule Lotus.MixProject do
       {:sake, "~> 0.4", optional: true},
       {:telemetry, "~> 1.0"},
 
-      # AI/LLM Integration
-      {:req_llm, "~> 1.29"},
+      # AI/LLM Integration. Optional: the AI features need it in the host's
+      # deps (see Lotus.AI.available?/0).
+      {:req_llm, "~> 1.29", optional: true},
 
       # Development and testing dependencies
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
