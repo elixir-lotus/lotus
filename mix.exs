@@ -115,10 +115,12 @@ defmodule Lotus.MixProject do
         Scheduling: [
           Lotus.Schedules,
           Lotus.Schedules.Cron,
+          Lotus.Schedules.Alert,
           Lotus.Scheduler,
           ~r/Lotus\.Scheduler\..+/,
           Lotus.Storage.Schedule,
           Lotus.Storage.ScheduleDelivery,
+          Lotus.Storage.ScheduleRule,
           Lotus.Storage.ScheduleRun,
           Lotus.Delivery,
           ~r/Lotus\.Delivery\..+/

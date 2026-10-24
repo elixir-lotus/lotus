@@ -15,6 +15,8 @@ defmodule Lotus.Delivery.Channels.Webhook do
        "run": {"id": 42, "scheduled_for": "2026-10-26T08:00:00.000000Z"},
        "attachments": [{"filename": "revenue.csv", "content_type": "text/csv", "content": "region,total\\n..."}]}
 
+  An alert's has `"alert"` too, as the `"json"` format has it.
+
   A 2xx response is a delivery; anything else, or no answer within 15
   seconds, is a failure the run records. `"headers"` are sent as given, for
   a token the receiver checks.
@@ -113,7 +115,7 @@ defmodule Lotus.Delivery.Channels.Webhook do
   end
 
   defp envelope(content, attachments) do
-    %{
+    envelope = %{
       "title" => content.title,
       "schedule" => %{"id" => content.schedule.id, "name" => content.schedule.name},
       "run" => %{"id" => content.run.id, "scheduled_for" => content.run.scheduled_for},
@@ -126,6 +128,11 @@ defmodule Lotus.Delivery.Channels.Webhook do
           }
         end)
     }
+
+    case content.alert do
+      nil -> envelope
+      alert -> Map.put(envelope, "alert", Lotus.Delivery.alert_json(alert))
+    end
   end
 
   # Req is optional: called through a variable, so Lotus compiles without it.

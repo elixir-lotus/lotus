@@ -41,7 +41,8 @@ defmodule Lotus.Schedules do
 
   Each run is recorded in `lotus_schedule_runs` (`list_runs/2`). A
   schedule's `deliveries` send each successful run somewhere; see
-  `Lotus.Delivery`.
+  `Lotus.Delivery`. A query schedule with a `rule` is an alert, which sends
+  only when the rule's status changes; see `Lotus.Schedules.Alert`.
 
   ## Content changes
 

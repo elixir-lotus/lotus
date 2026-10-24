@@ -11,6 +11,10 @@ defmodule Lotus.Scheduler.Worker do
   or `"failed"` with the error. A dashboard run fails when any of its query
   cards fails; `details` names each failed card.
 
+  A schedule with a `rule` is an alert: the run checks the rule against the
+  query's result, records the change in the schedule's `state`, and sends
+  the deliveries only when the status changes. See `Lotus.Schedules.Alert`.
+
   ## The actor
 
   A run has no `:context` or `:scope` by default: it runs as the app, and
@@ -35,6 +39,7 @@ defmodule Lotus.Scheduler.Worker do
 
   alias Lotus.{Config, Dashboards, Delivery, Result, Telemetry}
   alias Lotus.Delivery.Content
+  alias Lotus.Schedules.Alert
   alias Lotus.Storage.{Query, Schedule, ScheduleRun}
 
   @doc """
@@ -83,16 +88,17 @@ defmodule Lotus.Scheduler.Worker do
 
     finished_at = now()
 
-    attrs =
+    {attrs, state} =
       case outcome do
         {:ok, row_count, details, results} ->
-          deliver(run, schedule, row_count, details, results)
+          succeeded(run, schedule, row_count, details, results)
 
         {:error, reason, details} ->
-          %{status: "failed", error: describe(reason), details: details}
+          {%{status: "failed", error: describe(reason), details: details},
+           errored(schedule, reason)}
 
         {:error, reason} ->
-          %{status: "failed", error: describe(reason)}
+          {%{status: "failed", error: describe(reason)}, errored(schedule, reason)}
       end
 
     {:ok, run} =
@@ -102,7 +108,7 @@ defmodule Lotus.Scheduler.Worker do
 
     Lotus.repo().update_all(
       from(s in Schedule, where: s.id == ^schedule.id),
-      set: [last_run_at: run.scheduled_for]
+      set: [last_run_at: run.scheduled_for] ++ if(state, do: [state: state], else: [])
     )
 
     if run.status == "succeeded",
@@ -162,14 +168,65 @@ defmodule Lotus.Scheduler.Worker do
     end
   end
 
+  # The run's attributes and, for an alert, the schedule's new state. An
+  # alert's state is kept only when its run succeeds, so a change whose
+  # deliveries failed is sent again.
+  defp succeeded(run, %Schedule{rule: nil} = schedule, row_count, details, results),
+    do: {deliver(run, schedule, row_count, details, results, nil), nil}
+
+  defp succeeded(_run, schedule, row_count, details, []) do
+    message = "the alert has no result to read"
+
+    {%{status: "failed", row_count: row_count, error: message, details: details},
+     Alert.errored(schedule.state, message, now())}
+  end
+
+  defp succeeded(run, schedule, row_count, details, [%{result: result} | _] = results) do
+    %Schedule{rule: rule, state: state} = schedule
+
+    case Alert.evaluate(rule, result) do
+      {:ok, holds?, value} ->
+        {next, change} = Alert.transition(state, rule, holds?, value, now())
+
+        details =
+          Map.put(details, "alert", %{
+            "status" => next["status"],
+            "value" => value,
+            "change" => change
+          })
+
+        if change do
+          alert = %{status: change, value: value, message: Alert.describe(rule, change, value)}
+          attrs = deliver(run, schedule, row_count, details, results, alert)
+          {attrs, if(attrs.status == "succeeded", do: next)}
+        else
+          {%{status: "succeeded", row_count: row_count, details: details}, next}
+        end
+
+      {:error, message} ->
+        {%{status: "failed", row_count: row_count, error: message, details: details},
+         Alert.errored(state, message, now())}
+    end
+  end
+
+  defp errored(%Schedule{rule: nil}, _reason), do: nil
+  defp errored(%Schedule{state: state}, reason), do: Alert.errored(state, describe(reason), now())
+
   # After a run succeeds: each delivery that has not succeeded on an earlier
   # attempt of this run is sent, and its outcome recorded. A failed delivery
   # fails the run, so a job runner retries it.
-  defp deliver(_run, %Schedule{deliveries: []}, row_count, details, _results),
+  defp deliver(_run, %Schedule{deliveries: []}, row_count, details, _results, _alert),
     do: %{status: "succeeded", row_count: row_count, details: details}
 
-  defp deliver(run, schedule, row_count, details, results) do
-    content = %Content{title: schedule.name, results: results, schedule: schedule, run: run}
+  defp deliver(run, schedule, row_count, details, results, alert) do
+    content = %Content{
+      title: schedule.name,
+      results: results,
+      schedule: schedule,
+      run: run,
+      alert: alert
+    }
+
     previous = get_in(run.details || %{}, ["deliveries"]) || %{}
     outcomes = Delivery.deliver_all(content, schedule.deliveries, previous)
     details = Map.put(details, "deliveries", outcomes)
