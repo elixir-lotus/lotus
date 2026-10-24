@@ -19,7 +19,9 @@ defmodule Lotus.Delivery.Channels.Webhook do
 
   A 2xx response is a delivery; anything else, or no answer within 15
   seconds, is a failure the run records. `"headers"` are sent as given, for
-  a token the receiver checks.
+  a token the receiver checks; `"authorization"` is a shortcut for the
+  `authorization` header, the one field an editor shows besides the URL
+  (`settings/0`).
 
   ## Req
 
@@ -47,13 +49,45 @@ defmodule Lotus.Delivery.Channels.Webhook do
   def formats, do: :any
 
   @impl true
+  def label, do: "Webhook"
+
+  @impl true
+  def settings do
+    [
+      %{
+        key: "url",
+        label: "URL",
+        type: :url,
+        required: true,
+        placeholder: "https://",
+        help: "Lotus POSTs JSON here, with the results attached. Any 2xx answer is a delivery."
+      },
+      %{
+        key: "authorization",
+        label: "Authorization header",
+        type: :secret,
+        placeholder: "Bearer …",
+        help: "Sent as the authorization header, for a token the receiver checks."
+      }
+    ]
+  end
+
+  @impl true
+  def available, do: ensure_req()
+
+  @impl true
   def validate_config(config) do
     with :ok <- ensure_req(),
          {:ok, url} <- fetch_url(config),
-         :ok <- validate_url(url) do
+         :ok <- validate_url(url),
+         :ok <- validate_authorization(Map.get(config, "authorization")) do
       validate_headers(Map.get(config, "headers", %{}))
     end
   end
+
+  defp validate_authorization(nil), do: :ok
+  defp validate_authorization(value) when is_binary(value), do: :ok
+  defp validate_authorization(_value), do: {:error, "the authorization must be a string"}
 
   # The module an app without Req does not have; a setting only so that the
   # tests can stand for such an app.
@@ -93,9 +127,10 @@ defmodule Lotus.Delivery.Channels.Webhook do
 
   defp validate_headers(_headers), do: {:error, "headers must map names to strings"}
 
-  defp allow_http?, do: Keyword.get(settings(), :allow_http, false)
+  defp allow_http?, do: Keyword.get(host_settings(), :allow_http, false)
 
-  defp settings, do: Keyword.get(Lotus.Config.delivery(), :webhook, [])
+  # The host's settings of the channel, `config :lotus, delivery: [webhook: ...]`.
+  defp host_settings, do: Keyword.get(Lotus.Config.delivery(), :webhook, [])
 
   @impl true
   def deliver(content, attachments, config) do
@@ -103,14 +138,23 @@ defmodule Lotus.Delivery.Channels.Webhook do
       options =
         [
           json: envelope(content, attachments),
-          headers: Map.get(config, "headers", %{}),
+          headers: headers(config),
           receive_timeout: @timeout,
           connect_options: [timeout: @timeout],
           retry: false
         ]
-        |> Keyword.merge(Keyword.get(settings(), :req_options, []))
+        |> Keyword.merge(Keyword.get(host_settings(), :req_options, []))
 
       post(config["url"], options)
+    end
+  end
+
+  defp headers(config) do
+    headers = Map.get(config, "headers", %{})
+
+    case config["authorization"] do
+      value when is_binary(value) and value != "" -> Map.put(headers, "authorization", value)
+      _none -> headers
     end
   end
 

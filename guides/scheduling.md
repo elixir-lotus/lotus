@@ -157,7 +157,8 @@ Lotus.Schedules.create_schedule(%{
 ### The webhook channel
 
 `"webhook"` POSTs the attachments as JSON to `config["url"]`, with any
-`config["headers"]`. The URL must be `https`;
+`config["headers"]` (`config["authorization"]` is a shortcut for the
+`authorization` header). The URL must be `https`;
 `config :lotus, delivery: [webhook: [allow_http: true]]` allows `http` for a
 receiver on a private network. A 2xx response is a delivery.
 
@@ -181,6 +182,31 @@ config :lotus,
 
 A delivery stores the names, never a module: its settings are data people
 enter, so a channel validates them and takes nothing else from them.
+
+A dashboard such as Lotus Web draws a channel from three optional callbacks:
+`label/0` (its name for people), `settings/0` (the fields of its settings:
+a URL, a token, a list of addresses…) and `available/0` (whether it can
+send in this app, or the dependency or setting it is missing).
+`Lotus.Delivery.channel_specs/0` gathers them. A channel that is not
+available is refused when a schedule is saved, and a run's delivery to it
+fails with the reason.
+
+```elixir
+@impl true
+def label, do: "Pager"
+
+@impl true
+def settings do
+  [%{key: "service", label: "Service key", type: :secret, required: true}]
+end
+
+@impl true
+def available do
+  if Application.get_env(:my_app, :pager_url),
+    do: :ok,
+    else: {:error, "set config :my_app, :pager_url to page"}
+end
+```
 
 ### Outcomes and retries
 
