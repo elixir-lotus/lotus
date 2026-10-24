@@ -3,24 +3,6 @@ defmodule Lotus.VariablesTest do
 
   alias Lotus.Variables
 
-  describe "regex/0" do
-    test "matches valid variable placeholders" do
-      assert Regex.match?(Variables.regex(), "{{user_id}}")
-      assert Regex.match?(Variables.regex(), "{{_private}}")
-      assert Regex.match?(Variables.regex(), "{{Name123}}")
-    end
-
-    test "captures variable name without braces" do
-      assert [_, "user_id"] = Regex.run(Variables.regex(), "{{user_id}}")
-    end
-
-    test "does not match invalid variable names" do
-      refute Regex.match?(Variables.regex(), "{{123abc}}")
-      refute Regex.match?(Variables.regex(), "{{a-b}}")
-      refute Regex.match?(Variables.regex(), "{{}}")
-    end
-  end
-
   describe "extract_names/1" do
     test "extracts variable names in order" do
       assert Variables.extract_names("WHERE id = {{user_id}} AND status = {{status}}") ==

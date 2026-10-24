@@ -18,7 +18,7 @@ namespace, although none of them depends on Ecto. They now live in the
 neutral `Lotus.SQL` namespace, next to `Lotus.Query.Tokenizer`, with the same
 functions:
 
-| Deprecated | Replacement |
+| Removed | Replacement |
 |---|---|
 | `Lotus.Source.Adapters.Ecto.SQL.FilterInjector` | `Lotus.SQL.FilterInjector` |
 | `Lotus.Source.Adapters.Ecto.SQL.SortInjector` | `Lotus.SQL.SortInjector` |
@@ -27,8 +27,10 @@ functions:
 | `Lotus.Source.Adapters.Ecto.SQL.Sanitizer` | `Lotus.SQL.Sanitizer` |
 | `Lotus.Source.Adapters.Ecto.SQL.Validator` | `Lotus.SQL.Validator` |
 
-The old modules delegate to the new ones and every function is marked
-`@deprecated`, so the compiler names the replacement at each call site.
+On 1.x the old modules delegate to the new ones and every function is
+marked `@deprecated`, so the compiler names the replacement at each call
+site. In v2.0 the old modules are gone: a call to one is an undefined-module
+error.
 
 Who is affected: a custom `Lotus.Source.Adapters.Ecto.Dialect` such as
 `lotus_clickhouse`, and any adapter that reuses the helpers directly. Host
@@ -45,14 +47,14 @@ apps that go through `Lotus.Source.Adapter` callbacks (`apply_filters/3`,
 +  alias Lotus.SQL.Transformer
 ```
 
-The delegates are removed in v2.0.
+`lotus_clickhouse` uses `Lotus.SQL.*` from its main branch on.
 
 ---
 
 ## 2. `Lotus.Preflight.Relations` no longer stores state in the process dictionary
 
-`Lotus.Preflight.Relations.put/1`, `get/0`, `take/0` and `clear/0` are
-deprecated and removed in v2.0. They kept a preflight outcome in the process
+The `put`, `get`, `take` and `clear` functions of `Lotus.Preflight.Relations`,
+deprecated in 1.x, are removed in v2.0. They kept a preflight outcome in the process
 dictionary, which is invisible to supervision, leaks across queries in a
 reused process and cannot cross a `Task` boundary. `Lotus.Runner` carries
 the outcome as a value and has not touched the process dictionary since the
@@ -167,3 +169,20 @@ Who is affected: an app with `config :lotus, ai: [enabled: true]`. Without
 logged once, and `Lotus.AI.generate_query/1` and the other AI functions
 return `{:error, :dependency_missing}`. `Lotus.AI.available?/0` says whether
 the dependency is loaded.
+
+---
+
+## 5. `Lotus.Variables.regex()` is removed
+
+`Lotus.Variables.regex()` returned a regex for `{{name}}` placeholders. It
+was documented as deprecated once placeholders were found with
+`Lotus.Query.Tokenizer`, because the regex matches inside comments and
+quoted identifiers, where a placeholder is not a variable.
+
+Who is affected: code that scanned raw text with it. Use
+`Lotus.Variables.extract_names/2`, which knows comments and literals:
+
+```diff
+-  names = Regex.scan(Lotus.Variables.regex(), sql, capture: :all_but_first) |> List.flatten()
++  names = Lotus.Variables.extract_names(sql)
+```
