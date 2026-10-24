@@ -3,7 +3,7 @@ defmodule Lotus.Test.Peer do
   Starts a second node that runs `:lotus` for the cluster integration tests.
 
   The test node becomes distributed on first use. The peer gets the same
-  code path and the same `:lotus` application environment as the test
+  code path and the same `:lotus` (and `:swoosh`) application environment as the test
   node, plus whatever `env` the caller adds, and boots the `:lotus`
   application with it. `epmd` must be running: `epmd -daemon`.
   """
@@ -39,7 +39,17 @@ defmodule Lotus.Test.Peer do
       })
 
     lotus_env = Keyword.merge(Application.get_all_env(:lotus), env)
-    :ok = :rpc.call(node, Application, :put_all_env, [[lotus: lotus_env]])
+
+    # Swoosh, an optional dependency Lotus starts, takes the test node's
+    # settings too (no API client of its own). It is loaded first: loading
+    # an application puts back the defaults of its .app file.
+    _ = :rpc.call(node, Application, :load, [:swoosh])
+
+    :ok =
+      :rpc.call(node, Application, :put_all_env, [
+        [lotus: lotus_env, swoosh: Application.get_all_env(:swoosh)]
+      ])
+
     {:ok, _apps} = :rpc.call(node, Application, :ensure_all_started, [:lotus])
 
     {pid, node}
