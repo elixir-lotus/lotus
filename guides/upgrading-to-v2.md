@@ -100,6 +100,7 @@ required callbacks, and the rest live in capability behaviours:
 | `Lotus.Source.Adapter.Shaping` | `apply_filters/3`, `apply_sorts/3`, `apply_pagination/3`, `limit_query/3`, `supported_filter_operators/1`, `quote_identifier/2` |
 | `Lotus.Source.Adapter.Editor` | `editor_config/1`, `query_language/1`, `example_query/3`, `ai_context/1` |
 | `Lotus.Source.Adapter.Session` | `setup_session/3` (new in v2.0: connection settings for one statement, for row-level security in the database) |
+| `Lotus.Source.Adapter.Streaming` | `stream_query/4` (new in v2.0: reading a statement's rows as they are consumed, for large exports) |
 
 `supports_feature?/2`, `can_handle?/1`, `wrap/2` and the process callbacks
 (`shared_children/0`, `source_children/2`, `source_started/2`,

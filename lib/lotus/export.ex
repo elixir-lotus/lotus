@@ -102,6 +102,49 @@ defmodule Lotus.Export do
     )
   end
 
+  @doc """
+  Streams a saved query's export to `fun`, without holding the whole result:
+  the rows are read from the source as `fun` consumes the export (see
+  `Lotus.stream_query/3`), one chunk at a time.
+
+  `format` is `:csv` (a header line, then a line per row) or `:jsonl` (a JSON
+  object per row, one per line). `fun` receives an `Enumerable` of iodata
+  and runs inside the query's transaction, so it writes the export where it
+  goes (a file, an upload, a chunked HTTP response) before it returns.
+
+      {:ok, :ok} =
+        Lotus.Export.stream(query, :csv, [vars: %{"region" => "north"}], fn iodata ->
+          File.open!("orders.csv", [:write], fn file -> Enum.each(iodata, &IO.binwrite(file, &1)) end)
+          :ok
+        end)
+
+  Returns `{:ok, fun_result}` or `{:error, reason}`. Takes the options of
+  `Lotus.stream_query/3`, so the same checks, middleware and column policies
+  apply as for any run. Unlike `stream_csv/2`, which runs one paginated query
+  per page, it runs the query once.
+  """
+  @spec stream(Query.t(), :csv | :jsonl, keyword(), (Enumerable.t() -> result)) ::
+          {:ok, result} | {:error, term()}
+        when result: term()
+  def stream(%Query{} = q, format, opts \\ [], fun)
+      when format in [:csv, :jsonl] and is_function(fun, 1) do
+    Lotus.stream_query(q, opts, fn chunks -> fun.(encode_chunks(chunks, format)) end)
+  end
+
+  defp encode_chunks(chunks, :csv) do
+    Stream.transform(chunks, false, fn %Result{columns: cols, rows: rows}, header? ->
+      header = if header?, do: [], else: [CSVParser.dump_to_iodata([cols])]
+      body = Enum.map(rows, &CSVParser.dump_to_iodata([normalize_row_for_csv(&1)]))
+      {header ++ body, true}
+    end)
+  end
+
+  defp encode_chunks(chunks, :jsonl) do
+    Stream.flat_map(chunks, fn %Result{columns: cols, rows: rows} ->
+      Enum.map(rows, &[Lotus.JSON.encode!(row_to_map_for_json(cols, &1)), "\n"])
+    end)
+  end
+
   defp handle_csv_query_result({:ok, %Result{columns: _cols, rows: []}}, state, _off, _header?) do
     {:halt, state}
   end

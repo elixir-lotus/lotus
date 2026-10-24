@@ -12,4 +12,11 @@ defmodule Lotus.Source.Adapters.SQLite3 do
 
   use Lotus.Source.Adapters.Ecto,
     dialect: Lotus.Source.Adapters.Ecto.Dialects.SQLite3
+
+  @behaviour Lotus.Source.Adapter.Streaming
+
+  @impl Lotus.Source.Adapter.Streaming
+  defdelegate stream_query(state, sql, params, opts),
+    to: Lotus.Source.Adapters.Ecto,
+    as: :do_stream_query
 end

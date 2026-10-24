@@ -871,6 +871,105 @@ defmodule Lotus do
   end
 
   @doc """
+  Streams a saved query's rows to `fun`, chunk by chunk, without holding the
+  whole result in memory: for exports and deliveries too large to run whole.
+
+  The query is compiled with its variables as `run_query/2` compiles it, and
+  goes through the same checks: `:before_query`, sanitization, preflight,
+  `:before_execute` and the statement's session settings, before the first
+  row. `fun` receives an `Enumerable` of `%Lotus.Result{}` chunks, each with
+  the column policies applied and passed through `:after_query` with origin
+  `:streamed`. It runs inside the statement's transaction: consume the
+  stream there and return what you need.
+
+      {:ok, count} =
+        Lotus.stream_query(query, [vars: %{"since" => "2026-01-01"}], fn chunks ->
+          Enum.reduce(chunks, 0, fn chunk, n -> n + length(chunk.rows) end)
+        end)
+
+  Returns `{:ok, fun_result}` or `{:error, reason}`. See
+  `Lotus.Runner.stream/4` for the errors, telemetry and the adapters that
+  read rows as they are consumed. Streams bypass the result cache and take
+  no `:window`; `:filters` and `:sorts` apply.
+
+  ## Options
+
+  Those of `run_query/2`, plus:
+
+    * `:chunk_size` - The most rows a chunk holds (default 1000)
+    * `:timeout` - The time the whole stream may take (default `:infinity`)
+  """
+  @spec stream_query(Query.t() | term(), opts(), (Enumerable.t() -> result)) ::
+          {:ok, result} | {:error, term()}
+        when result: term()
+  def stream_query(query_or_id, opts \\ [], fun)
+
+  def stream_query(%Query{} = q, opts, fun) when is_function(fun, 1) do
+    adapter = Source.resolve!(Keyword.get(opts, :repo), q.data_source)
+    adapter_language = Adapter.query_language(adapter)
+
+    if language_compatible?(q.query_language, adapter_language) do
+      vars = prepare_variables(q, opts)
+      compile_opts = [adapter: adapter, search_path: Keyword.get(opts, :search_path)]
+
+      case Query.compile(q, vars, compile_opts) do
+        {:ok, %Statement{body: body, params: params}} ->
+          search_path = Keyword.get(opts, :search_path) || q.search_path
+          runner_opts = opts |> prepare_final_opts(search_path) |> Keyword.put(:vars, vars)
+          stream_with_options(adapter, body, params, opts, runner_opts, fun)
+
+        {:error, _} = err ->
+          err
+      end
+    else
+      {:error, language_mismatch_message(q.query_language, adapter.name, adapter_language)}
+    end
+  end
+
+  def stream_query(id, opts, fun) when is_function(fun, 1) do
+    id |> Storage.get_query!() |> stream_query(opts, fun)
+  end
+
+  @doc """
+  Streams a raw statement's rows to `fun`, as `stream_query/3` streams a
+  saved query's. Takes the options of `run_statement/3` and of
+  `stream_query/3`.
+  """
+  @spec stream_statement(Statement.body(), Statement.params(), opts(), (Enumerable.t() -> result)) ::
+          {:ok, result} | {:error, term()}
+        when result: term()
+  def stream_statement(statement, params \\ [], opts \\ [], fun) when is_function(fun, 1) do
+    adapter = Source.resolve!(Keyword.get(opts, :repo), nil)
+
+    runner_opts =
+      opts
+      |> Keyword.delete(:repo)
+      |> Keyword.put_new_lazy(:read_only, &Config.read_only?/0)
+
+    stream_with_options(adapter, statement, params, opts, runner_opts, fun)
+  end
+
+  defp stream_with_options(adapter, body, params, opts, runner_opts, fun) do
+    if Keyword.get(opts, :window) do
+      raise ArgumentError, "a stream takes no :window; it reads every row"
+    end
+
+    statement = %Statement{adapter: adapter.module, body: body, params: params}
+    statement = Adapter.transform_bound_query(adapter, statement, runner_opts)
+
+    filters = Keyword.get(opts, :filters, [])
+    :ok = validate_filter_columns!(adapter, filters)
+    :ok = validate_filter_operators!(adapter, filters)
+    statement = Adapter.apply_filters(adapter, statement, filters)
+
+    sorts = Keyword.get(opts, :sorts, [])
+    :ok = validate_sort_columns!(adapter, sorts)
+    statement = Adapter.apply_sorts(adapter, statement, sorts)
+
+    Runner.stream(adapter, statement, runner_opts, fun)
+  end
+
+  @doc """
   Returns whether unique query names are enforced.
   """
   defdelegate unique_names?(), to: Config

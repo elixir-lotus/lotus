@@ -13,6 +13,13 @@ defmodule Lotus.Source.Adapters.Postgres do
   use Lotus.Source.Adapters.Ecto,
     dialect: Lotus.Source.Adapters.Ecto.Dialects.Postgres
 
+  @behaviour Lotus.Source.Adapter.Streaming
+
+  @impl Lotus.Source.Adapter.Streaming
+  defdelegate stream_query(state, sql, params, opts),
+    to: Lotus.Source.Adapters.Ecto,
+    as: :do_stream_query
+
   @behaviour Lotus.Source.Adapter.Session
 
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter

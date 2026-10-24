@@ -42,6 +42,19 @@
 
 ### Added
 
+- **Stream a query's rows instead of holding them.**
+  `Lotus.stream_query/3` and `Lotus.stream_statement/4` hand a function an
+  `Enumerable` of `%Lotus.Result{}` chunks (`:chunk_size`, 1000 by
+  default), and `Lotus.Export.stream/4` builds CSV or JSONL on top of them.
+  The statement goes through the same checks as a run, before the first
+  row. The column policies and `:after_query` (with origin `:streamed`)
+  apply to every chunk, so masking still holds. Streams bypass the result
+  cache, and run and query telemetry report the rows streamed. Adapters
+  that declare the new `Lotus.Source.Adapter.Streaming` capability read
+  rows as they are consumed; the built-in PostgreSQL, MySQL and SQLite
+  adapters do, with `Ecto.Adapters.SQL.stream/4`. Other adapters run the
+  statement once and hand the rows over in chunks.
+
 - **Connection settings for one statement, for row-level security.**
   `%Lotus.Query.Statement{}` has a `:session` map that a `:before_query`
   plug fills from the actor, such as `%{"app.tenant_id" => "acme"}`. An

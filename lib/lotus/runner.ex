@@ -41,10 +41,10 @@ defmodule Lotus.Runner do
   @type relations :: Relations.outcome()
 
   @typedoc """
-  Where a result came from: executed against the source, or served from the
-  result cache.
+  Where a result came from: executed against the source, served from the
+  result cache, or one chunk of a stream (`stream/4`).
   """
-  @type origin :: :executed | :cached
+  @type origin :: :executed | :cached | :streamed
 
   @typedoc """
   What executing a statement produced: the result, and the relations preflight
@@ -177,6 +177,213 @@ defmodule Lotus.Runner do
         )
 
         reraise e, __STACKTRACE__
+    end
+  end
+
+  @default_chunk_size 1_000
+
+  @doc """
+  Streams a statement's rows to `fun`, chunk by chunk, without holding the
+  whole result.
+
+  The statement goes through the same phases as `run/4`: `:before_query`,
+  sanitization, preflight, `:before_execute` and the session settings, all
+  before the first row. `fun` then receives an `Enumerable` of
+  `%Lotus.Result{}` chunks of at most `:chunk_size` rows (default 1000),
+  each with the column policies applied and passed through `:after_query`
+  with origin `:streamed`, so a plug that masks values masks every chunk.
+
+  `fun` runs inside the statement's transaction, and the stream is only
+  valid while it runs: consume it there, and return what you need. The call
+  returns `{:ok, fun_result}`, or `{:error, reason}` when a phase before the
+  first row refuses the statement, or a chunk's column policies or an
+  `:after_query` plug refuse a chunk (the rows already handed to `fun`
+  stay handed). An error of the source while rows are read raises, as
+  `c:Ecto.Repo.stream/2` does.
+
+  An adapter that declares `Lotus.Source.Adapter.Streaming` reads the rows
+  from the source as `fun` consumes them. Any other runs the statement once
+  and hands its rows over in chunks, so the API is the same and only the
+  memory differs. Streams bypass the result cache.
+
+  `[:lotus, :run, *]` and `[:lotus, :query, *]` telemetry bracket the stream,
+  with origin `:streamed` and the number of rows streamed as `:row_count`.
+
+  `opts` takes those of `run/4`, plus `:chunk_size`. `:timeout` is the time
+  the whole stream may take, `:infinity` by default; the per-statement
+  timeout still applies to each read.
+  """
+  @spec stream(Adapter.t(), Statement.t(), opts(), (Enumerable.t() -> result)) ::
+          {:ok, result} | {:error, term()}
+        when result: term()
+  def stream(%Adapter{} = adapter, %Statement{} = statement, opts, fun)
+      when is_function(fun, 1) do
+    opts = Keyword.put_new(opts, :timeout, :infinity)
+
+    meta = %{
+      source: adapter.name,
+      statement: statement,
+      context: Keyword.get(opts, :context),
+      vars: vars(opts)
+    }
+
+    start_time = Telemetry.run_start(meta)
+
+    try do
+      case tag(:before_query, before_query(adapter, statement, opts)) do
+        {:ok, %Statement{} = statement} ->
+          stream_authorized(adapter, statement, opts, fun, start_time, meta)
+
+        {:error, _} = error ->
+          finish(error, start_time, meta, nil)
+      end
+    rescue
+      e ->
+        # A source error while rows are read, or a raise in `fun`: the span
+        # still closes, and the raise reaches the caller.
+        Telemetry.run_exception(
+          start_time,
+          Map.merge(meta, %{phase: :execute, reason: e, kind: :error, stacktrace: __STACKTRACE__})
+        )
+
+        reraise e, __STACKTRACE__
+    end
+  end
+
+  defp stream_authorized(adapter, statement, opts, fun, start_time, meta) do
+    outcome = %{statement: statement, relations: nil, origin: :streamed}
+
+    case authorize_phases(adapter, statement, opts) do
+      {:ok, %{relations: relations, assigns: assigns}} ->
+        outcome = %{outcome | relations: relations}
+
+        case stream_span(adapter, statement, relations, assigns, opts, fun) do
+          {:ok, value, summary} ->
+            {:ok, _} = finish({:ok, summary}, start_time, meta, outcome)
+            {:ok, value}
+
+          {:error, _} = error ->
+            finish(error, start_time, meta, outcome)
+        end
+
+      {:error, _} = error ->
+        finish(error, start_time, meta, outcome)
+    end
+  end
+
+  # The query span of a stream. Its stop carries the columns and the number
+  # of rows streamed, as a result with no rows.
+  defp stream_span(adapter, statement, relations, assigns, opts, fun) do
+    telemetry_meta = %{
+      source: adapter.name,
+      statement: statement,
+      context: Keyword.get(opts, :context)
+    }
+
+    start_time = Telemetry.query_start(telemetry_meta)
+
+    case stream_read_only(adapter, statement, relations, assigns, opts, fun) do
+      {:ok, value, %{columns: cols, rows: rows}} ->
+        summary = Result.new(cols, [], num_rows: rows, meta: %{streamed: true})
+
+        Telemetry.query_stop(
+          start_time,
+          Map.merge(telemetry_meta, %{row_count: rows, result: summary})
+        )
+
+        {:ok, value, summary}
+
+      {:error, _} = error ->
+        Telemetry.query_exception(start_time, :error, untag(error), [], telemetry_meta)
+        error
+    end
+  end
+
+  # The chunks are shaped as `fun` pulls them, inside the transaction. What
+  # the span reports (the columns and the rows streamed) is kept in a table
+  # private to this call, deleted when it returns.
+  defp stream_read_only(adapter, statement, relations, assigns, opts, fun) do
+    %Statement{body: body, params: params, session: session} = statement
+    chunk_size = Keyword.get(opts, :chunk_size, @default_chunk_size)
+
+    Adapter.transaction(
+      adapter,
+      fn _state ->
+        with :ok <- tag(:execute, Adapter.setup_session(adapter, session, opts)),
+             {:ok, raw} <- tag(:execute, open_stream(adapter, body, params, opts, chunk_size)) do
+          ref = make_ref()
+          tally = :ets.new(__MODULE__, [:set, :private])
+          :ets.insert(tally, [{:columns, []}, {:rows, 0}])
+
+          chunks =
+            Stream.map(raw, fn chunk ->
+              result = shape_chunk(adapter, statement, relations, assigns, opts, chunk, ref)
+              :ets.insert(tally, {:columns, result.columns})
+              :ets.update_counter(tally, :rows, length(result.rows))
+              result
+            end)
+
+          try do
+            value = fun.(chunks)
+            [{:columns, cols}] = :ets.lookup(tally, :columns)
+            [{:rows, rows}] = :ets.lookup(tally, :rows)
+            {:ok, value, %{columns: cols, rows: rows}}
+          catch
+            {^ref, phase, reason} -> {:error, {__MODULE__, phase, reason}}
+          after
+            :ets.delete(tally)
+          end
+        end
+      end,
+      opts
+    )
+    |> case do
+      {:ok, result} -> result
+      {:error, reason} -> tag(:execute, {:error, reason})
+    end
+  end
+
+  # The rows of a chunk with the column policies applied, through
+  # `:after_query`. A refusal stops the stream: it is thrown to
+  # `stream_read_only/6`, which returns it.
+  defp shape_chunk(adapter, statement, relations, assigns, opts, chunk, ref) do
+    scope = Keyword.get(opts, :scope)
+
+    with {:ok, %Result{} = result} <-
+           tag(:execute, handle_query_result({:ok, chunk}, 0, adapter, relations, scope)),
+         outcome = %{
+           statement: statement,
+           result: %{result | duration_ms: nil},
+           relations: relations,
+           origin: :streamed,
+           assigns: assigns
+         },
+         {:ok, %Result{} = result} <- tag(:after_query, after_query(adapter, outcome, opts)) do
+      result
+    else
+      {:error, {__MODULE__, phase, reason}} -> throw({ref, phase, reason})
+    end
+  end
+
+  # The rows of the source, read as they are consumed when the adapter
+  # streams; else the whole result, handed over in chunks.
+  defp open_stream(adapter, body, params, opts, chunk_size) do
+    if Adapter.capability?(adapter, :streaming) do
+      Adapter.stream_query(adapter, body, params, Keyword.put(opts, :max_rows, chunk_size))
+    else
+      with {:ok, %{columns: cols, rows: rows} = raw} <-
+             Adapter.execute_query(adapter, body, params, opts) do
+        chunks =
+          case rows || [] do
+            [] ->
+              [%{raw | rows: []}]
+
+            rows ->
+              rows |> Enum.chunk_every(chunk_size) |> Enum.map(&%{raw | columns: cols, rows: &1})
+          end
+
+        {:ok, chunks}
+      end
     end
   end
 
