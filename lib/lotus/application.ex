@@ -11,9 +11,11 @@ defmodule Lotus.Application do
 
   require Logger
 
+  alias Lotus.Delivery.Channels.Email
+
   def start(_type, _args) do
     :ok = warn_without_sake()
-    :ok = Lotus.Delivery.Channels.Email.warn_if_misconfigured()
+    :ok = Email.warn_if_misconfigured()
     Lotus.Supervisor.start_link([])
   end
 
