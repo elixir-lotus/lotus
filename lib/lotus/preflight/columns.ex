@@ -24,7 +24,11 @@ defmodule Lotus.Preflight.Columns do
 
   The check reads tokens, not a parse tree, so it fails closed: whatever it
   can't prove keeps the name is refused. `SELECT *` and `SELECT t.*` pass,
-  since the result keeps the column names. A view or function that renames
+  since the result keeps the column names. A name that is a whole `ORDER BY`
+  item and an output column of its query (`count(*) AS users ... ORDER BY
+  users`) sorts by that column, as the database reads it, not by a row. The
+  alias of `generate_series` or `generate_subscripts` in FROM names a number
+  or a time, never a row; any other function's alias is taken for one. A view or function that renames
   a protected column inside the database is beyond it; hide such columns
   from the role Lotus connects as.
   """
@@ -45,6 +49,15 @@ defmodule Lotus.Preflight.Columns do
   @clause_ends ~w(where group having order limit offset fetch window qualify returning)
   @set_ops ~w(union intersect except minus)
   @table_starts [{:kw, "from"}, {:kw, "join"}, ",", {:kw, "lateral"}, {:kw, "only"}]
+
+  # Functions in FROM whose rows are a number or a time, never a table's
+  # row: their alias is no whole-row reference. Their arguments are checked
+  # as anything else is.
+  @scalar_functions ~w(generate_series generate_subscripts)
+
+  # What may follow a whole ORDER BY item.
+  @sort_item_ends [",", ")", ";", :eof, {:kw, "limit"}, {:kw, "offset"}, {:kw, "fetch"}]
+  @sort_modifiers ~w(asc desc nulls)
 
   @doc """
   Checks `sql` against the column policies of `matcher` for the relations
@@ -80,7 +93,7 @@ defmodule Lotus.Preflight.Columns do
 
     0..(tuple_size(out) - 1)//1
     |> Enum.flat_map(fn i ->
-      with {{:name, _}, _reaches?, :from} <- elem(out, i),
+      with {{:name, _}, _reaches?, :from, _level} <- elem(out, i),
            true <- at(out, i - 1) in @table_starts,
            {path, next} <- name_path(out, i, []),
            true <- next != "(",
@@ -171,20 +184,26 @@ defmodule Lotus.Preflight.Columns do
   # ---------------------------------------------------------------------------
 
   # Each frame is one level of parentheses: the clause its lexemes sit in
-  # (:none, :with, :select, :from, :join_cond or :other), and whether the
-  # names of its select list reach the result. They do at the top level and
-  # in a derived table or CTE body nested only in such frames: a consumer
-  # reads them through `*` or by name, both checked where they appear. They
-  # don't in an expression, a function's arguments or a WHERE subquery.
+  # (:none, :with, :select, :from, :join_cond, :order or :other), whether the
+  # names of its select list reach the result, the level it is (a number
+  # for each frame, so that an ORDER BY finds its own query's output
+  # columns), and whether it holds the arguments of a scalar function in
+  # FROM. The names reach the result at the top level and in a derived
+  # table or CTE body nested only in such frames: a consumer reads them
+  # through `*` or by name, both checked where they appear. They don't in
+  # an expression, a function's arguments or a WHERE subquery.
   defp annotate(lexemes) do
     lexemes = List.to_tuple(lexemes)
     size = tuple_size(lexemes)
 
     init = %{
-      frames: [{:none, true}],
+      frames: [{:none, true, 0, false}],
+      levels: 0,
       out: [],
       relations: MapSet.new(),
       ctes: MapSet.new(),
+      outputs: MapSet.new(),
+      scalar: nil,
       set_op?: false,
       alias_list?: false
     }
@@ -192,25 +211,34 @@ defmodule Lotus.Preflight.Columns do
     state =
       Enum.reduce(0..(size - 1)//1, init, fn i, state ->
         lexeme = elem(lexemes, i)
-        [{clause, reaches?} | _] = state.frames
+        prev = raw_at(lexemes, i - 1)
+        [{clause, reaches?, level, _scalar?} | _] = state.frames
 
         state
-        |> note(
-          lexeme,
-          raw_at(lexemes, i - 1),
-          raw_at(lexemes, i - 2),
-          raw_at(lexemes, i + 1),
-          clause
-        )
-        |> Map.update!(:out, &[{lexeme, reaches?, clause} | &1])
-        |> step(lexeme, clause)
+        |> note(lexeme, prev, raw_at(lexemes, i - 2), raw_at(lexemes, i + 1), clause, level)
+        |> Map.update!(:out, &[{lexeme, reaches?, clause, level} | &1])
+        |> step(lexeme, clause, prev)
       end)
 
     %{state | out: state.out |> Enum.reverse() |> List.to_tuple()}
   end
 
   # Relation names and aliases (in FROM) and CTE names (in WITH), so that a
-  # whole-row reference to one can be found; and the renaming forms.
+  # whole-row reference to one can be found; the output columns' aliases,
+  # for ORDER BY; and the renaming forms. Right after a scalar function's
+  # arguments close in FROM (`state.scalar` is :call), its alias names a
+  # value, not a row, and so does a column alias list after it.
+  defp note(state, lexeme, prev, prev2, next, clause, level) do
+    state
+    |> note(lexeme, prev, prev2, next, clause)
+    |> note_output(lexeme, prev, clause, level)
+    |> Map.put(:scalar, scalar_after(state.scalar, lexeme, clause))
+  end
+
+  defp note(%{scalar: :call} = state, {:name, _}, _prev, _prev2, _next, :from), do: state
+
+  defp note(%{scalar: {:alias, alias}} = state, "(", alias, _prev2, _next, :from), do: state
+
   defp note(state, {:name, name}, _prev, _prev2, next, :from) when next != ".",
     do: %{state | relations: MapSet.put(state.relations, String.downcase(name))}
 
@@ -233,6 +261,17 @@ defmodule Lotus.Preflight.Columns do
 
   defp note(state, _lexeme, _prev, _prev2, _next, _clause), do: state
 
+  defp note_output(state, {:name, name}, {:kw, "as"}, :select, level),
+    do: %{state | outputs: MapSet.put(state.outputs, {level, String.downcase(name)})}
+
+  defp note_output(state, _lexeme, _prev, _clause, _level), do: state
+
+  # After a scalar function's arguments close in FROM: an optional AS, then
+  # its alias, then perhaps the alias's column list.
+  defp scalar_after(:call, {:kw, "as"}, :from), do: :call
+  defp scalar_after(:call, {:name, _} = alias, :from), do: {:alias, alias}
+  defp scalar_after(_scalar, _lexeme, _clause), do: nil
+
   # A name follows a table or subquery here, so a "(" after it opens a column
   # alias list rather than a function's arguments.
   defp alias_position?(lexeme), do: name?(lexeme) or lexeme in [")", {:kw, "as"}]
@@ -240,29 +279,44 @@ defmodule Lotus.Preflight.Columns do
   defp name?({:name, _}), do: true
   defp name?(_), do: false
 
-  defp step(%{frames: [{_, reaches?} | _]} = state, "(", clause),
-    do: %{state | frames: [{:none, reaches? and clause in [:from, :with]} | state.frames]}
+  defp step(%{frames: [{_, reaches?, _, _} | _]} = state, "(", clause, prev) do
+    level = state.levels + 1
+    scalar? = clause == :from and scalar_function?(prev)
+    frame = {:none, reaches? and clause in [:from, :with], level, scalar?}
+    %{state | frames: [frame | state.frames], levels: level}
+  end
 
-  defp step(%{frames: [_]} = state, ")", _clause), do: state
-  defp step(state, ")", _clause), do: %{state | frames: tl(state.frames)}
-  defp step(state, {:kw, "select"}, _clause), do: set_clause(state, :select)
-  defp step(state, {:kw, "with"}, :none), do: set_clause(state, :with)
-  defp step(state, {:kw, "from"}, :select), do: set_clause(state, :from)
+  defp step(%{frames: [_]} = state, ")", _clause, _prev), do: state
 
-  defp step(state, {:kw, "join"}, clause) when clause in [:from, :join_cond],
+  defp step(%{frames: [{_, _, _, scalar?} | rest]} = state, ")", _clause, _prev),
+    do: %{state | frames: rest, scalar: if(scalar?, do: :call)}
+
+  defp step(state, {:kw, "select"}, _clause, _prev), do: set_clause(state, :select)
+  defp step(state, {:kw, "with"}, :none, _prev), do: set_clause(state, :with)
+  defp step(state, {:kw, "from"}, :select, _prev), do: set_clause(state, :from)
+
+  defp step(state, {:kw, "join"}, clause, _prev) when clause in [:from, :join_cond],
     do: set_clause(state, :from)
 
-  defp step(state, {:kw, kw}, :from) when kw in ["on", "using"], do: set_clause(state, :join_cond)
+  defp step(state, {:kw, kw}, :from, _prev) when kw in ["on", "using"],
+    do: set_clause(state, :join_cond)
 
-  defp step(state, {:kw, kw}, clause)
-       when kw in @clause_ends and clause in [:select, :from, :join_cond, :other],
+  defp step(state, {:kw, "order"}, clause, _prev)
+       when clause in [:select, :from, :join_cond, :order, :other],
+       do: set_clause(state, :order)
+
+  defp step(state, {:kw, kw}, clause, _prev)
+       when kw in @clause_ends and clause in [:select, :from, :join_cond, :order, :other],
        do: set_clause(state, :other)
 
-  defp step(state, {:kw, op}, _clause) when op in @set_ops, do: set_clause(state, :none)
-  defp step(state, _lexeme, _clause), do: state
+  defp step(state, {:kw, op}, _clause, _prev) when op in @set_ops, do: set_clause(state, :none)
+  defp step(state, _lexeme, _clause, _prev), do: state
 
-  defp set_clause(%{frames: [{_, reaches?} | rest]} = state, clause),
-    do: %{state | frames: [{clause, reaches?} | rest]}
+  defp scalar_function?({:name, name}), do: String.downcase(name) in @scalar_functions
+  defp scalar_function?(_lexeme), do: false
+
+  defp set_clause(%{frames: [{_, reaches?, level, scalar?} | rest]} = state, clause),
+    do: %{state | frames: [{clause, reaches?, level, scalar?} | rest]}
 
   defp raw_at(_tuple, i) when i < 0, do: :bof
   defp raw_at(tuple, i) when i >= tuple_size(tuple), do: :eof
@@ -314,14 +368,14 @@ defmodule Lotus.Preflight.Columns do
   # An output alias or a CTE name names something; it reads nothing.
   defp definition?(out, i) do
     prev = at(out, i - 1)
-    {_lexeme, _reaches?, clause} = elem(out, i)
+    {_lexeme, _reaches?, clause, _level} = elem(out, i)
 
     prev == {:kw, "as"} or
       (clause == :with and prev in [{:kw, "with"}, {:kw, "recursive"}, ","])
   end
 
   defp check_protected(out, i, name, state) do
-    {_lexeme, reaches?, clause} = elem(out, i)
+    {_lexeme, reaches?, clause, _level} = elem(out, i)
 
     if reaches? and clause == :select and not state.set_op? and
          bare_start?(out, i) and bare_end?(out, i, name),
@@ -350,16 +404,30 @@ defmodule Lotus.Preflight.Columns do
   defp same_name?(_other, _name), do: false
 
   defp whole_row?(out, i, name, state) do
-    {_lexeme, _reaches?, clause} = elem(out, i)
+    {_lexeme, _reaches?, clause, _level} = elem(out, i)
 
     clause != :from and MapSet.member?(state.relations, String.downcase(name)) and
-      at(out, i - 1) != "." and at(out, i + 1) not in [".", "("]
+      at(out, i - 1) != "." and at(out, i + 1) not in [".", "("] and
+      not sorts_by_output?(out, i, name, state)
   end
+
+  # A whole ORDER BY item that names an output column of its own query sorts
+  # by that column: the database reads an output name before a relation's
+  # row there. Not inside an expression, where output names don't reach.
+  defp sorts_by_output?(out, i, name, state) do
+    {_lexeme, _reaches?, clause, level} = elem(out, i)
+
+    clause == :order and at(out, i - 1) in [{:kw, "by"}, ","] and sort_item_end?(at(out, i + 1)) and
+      MapSet.member?(state.outputs, {level, String.downcase(name)})
+  end
+
+  defp sort_item_end?({:name, word}), do: String.downcase(word) in @sort_modifiers
+  defp sort_item_end?(next), do: next in @sort_item_ends
 
   # `count(*)` reads no column; `*` and `t.*` as select items keep the names,
   # except across a set operation; `*` between operands multiplies them.
   defp check_star(out, i, state) do
-    {_lexeme, _reaches?, clause} = elem(out, i)
+    {_lexeme, _reaches?, clause, _level} = elem(out, i)
     prev = at(out, i - 1)
     next = at(out, i + 1)
 
