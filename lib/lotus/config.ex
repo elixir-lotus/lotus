@@ -359,6 +359,31 @@ defmodule Lotus.Config do
           doc:
             "Delivery formats by name, next to the built-in `\"csv\"`, `\"json\"` and `\"html\"`."
         ],
+        email: [
+          type: :keyword_list,
+          keys: [
+            mailer: [type: :atom, doc: "The app's Swoosh mailer, such as `MyApp.Mailer`."],
+            from: [
+              type: {:or, [:string, {:tuple, [:string, :string]}]},
+              doc: ~s(The address emails come from, or `{"Name", "address"}`.)
+            ],
+            max_attachment_bytes: [
+              type: :pos_integer,
+              doc: "Attachments over this size in all are left out (10 MB unless set)."
+            ]
+          ],
+          doc: "Settings of the `\"email\"` channel (`Lotus.Delivery.Channels.Email`)."
+        ],
+        slack: [
+          type: :keyword_list,
+          keys: [
+            req_options: [
+              type: :keyword_list,
+              doc: "Options passed to every `Req.post/2`, such as a proxy."
+            ]
+          ],
+          doc: "Settings of the `\"slack\"` channel (`Lotus.Delivery.Channels.Slack`)."
+        ],
         webhook: [
           type: :keyword_list,
           default: [],
