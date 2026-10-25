@@ -279,6 +279,14 @@
 
 ### Fixed
 
+- **Sources a resolver adds at runtime are sources everywhere.**
+  `Lotus.list_data_source_names/0`, which the dashboard's source pickers,
+  the MCP server and the AI assistant list from, and the check of a
+  query's `data_source`, read only `config :lotus, data_sources:`: a source
+  the configured `source_resolver` connected at runtime could be queried
+  but not picked, listed or saved on. They now ask the resolver
+  (`Lotus.Source.list_source_names/0`, new).
+
 - **Column policies no longer refuse two kinds of statements that read no
   whole row.** With a column policy on a table, Lotus refused, as "reads
   whole rows":

@@ -483,14 +483,12 @@ defmodule Lotus.Storage.Query do
         put_change(changeset, :data_source, nil)
 
       source_name when is_binary(source_name) ->
-        if source_name in Map.keys(Config.data_sources()) do
+        names = Lotus.Source.list_source_names()
+
+        if source_name in names do
           changeset
         else
-          add_error(
-            changeset,
-            :data_source,
-            "must be one of: #{Enum.join(Map.keys(Config.data_sources()), ", ")}"
-          )
+          add_error(changeset, :data_source, "must be one of: #{Enum.join(names, ", ")}")
         end
 
       _ ->
