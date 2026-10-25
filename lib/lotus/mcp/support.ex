@@ -94,11 +94,11 @@ if Code.ensure_loaded?(Sake.Server) do
 
     @doc """
     A saved query the principal may read (`:list_content`), that runs against
-    a data source the endpoint exposes.
+    a data source the endpoint exposes. Without a principal, any saved query.
     """
     @spec fetch_query(term(), Sake.Context.t() | keyword()) ::
             {:ok, Lotus.Storage.Query.t()} | {:error, String.t()}
-    def fetch_query(id, ctx_or_actor) do
+    def fetch_query(id, ctx_or_actor \\ []) do
       with %{} = query <- Lotus.get_query(id, lookup_opts(ctx_or_actor)),
            true <- exposed?(query) do
         {:ok, query}
@@ -111,10 +111,10 @@ if Code.ensure_loaded?(Sake.Server) do
     @spec exposed?(Lotus.Storage.Query.t()) :: boolean()
     def exposed?(query), do: match?({:ok, _}, data_source(query.data_source))
 
-    @doc "A dashboard by id, that the principal may read (`:list_content`)."
+    @doc "A dashboard by id, that the principal (if any) may read (`:list_content`)."
     @spec fetch_dashboard(term(), Sake.Context.t() | keyword()) ::
             {:ok, Lotus.Storage.Dashboard.t()} | {:error, String.t()}
-    def fetch_dashboard(id, ctx_or_actor) do
+    def fetch_dashboard(id, ctx_or_actor \\ []) do
       case Lotus.get_dashboard(id, lookup_opts(ctx_or_actor)) do
         nil -> {:error, "No dashboard with id #{inspect(id)}"}
         dashboard -> {:ok, dashboard}
