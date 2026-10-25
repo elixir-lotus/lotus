@@ -31,7 +31,7 @@ defmodule Lotus.Middleware do
   | `:before_content_change` | Before a query, visualization, dashboard, card, filter or filter mapping is created, updated, deleted, shared or reordered | `:op`, `:resource`, `:record`, `:changeset`, `:context` |
   | `:after_content_change` | After that change is written | `:op`, `:resource`, `:record`, `:changes`, `:context` |
   | `:before_ai_request` | Before an AI function sends its request to the model | `:feature`, `:model`, `:data_source`, `:prompt`, `:system_prompt`, `:context`, `:scope` |
-  | `:list_content` | Before queries or dashboards are listed or got for a caller (`context:`) | `:resource`, `:query`, `:context`, `:scope` |
+  | `:list_content` | Before queries or dashboards are listed or got for a caller (`context:`) | `:resource`, `:query`, `:context`, `:scope`, `:filter` |
 
   ### Query event ordering
 
@@ -289,6 +289,9 @@ defmodule Lotus.Middleware do
     * `:resource` is `:query` or `:dashboard`.
     * `:query` is the `Ecto.Query` Lotus is about to run, with the caller's
       own filters (`:search`, `:owner_id`, `:tenant_id`) on it.
+    * `:filter` is the list's `filter:` option, which Lotus does not read
+      (`nil` without one, and on a get): what the caller asked to list,
+      such as what is shared with them, for a plug that knows it.
 
   A plug narrows what the caller reads by continuing with a narrower
   `:query`, such as one with a `where` on the caller's id: a list then lists

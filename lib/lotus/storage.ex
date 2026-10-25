@@ -53,6 +53,9 @@ defmodule Lotus.Storage do
     * `:context` - The caller, for the `:list_content` middleware, which
       narrows the list to what they may read. Without it, every query is
       listed.
+    * `:filter` - A term Lotus does not read, handed to the `:list_content`
+      middleware as `:filter`: what the caller asked to list ("shared with
+      me"), for a plug that knows it.
   """
   @spec list_queries(keyword()) :: query_list()
   def list_queries(opts \\ []) do
@@ -73,6 +76,9 @@ defmodule Lotus.Storage do
     * `:context` - The caller, for the `:list_content` middleware, which
       narrows the list to what they may read. Without it, every query is
       listed.
+    * `:filter` - A term Lotus does not read, handed to the `:list_content`
+      middleware as `:filter`: what the caller asked to list ("shared with
+      me"), for a plug that knows it.
 
   ## Examples
 

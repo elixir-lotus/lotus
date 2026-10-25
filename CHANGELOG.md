@@ -52,7 +52,9 @@
   variants); a halt reads nothing. MCP's tools and resources pass the
   principal's context. Without `context:` nothing changes, so Lotus's own
   lookups read everything. Lotus Pro uses it for private queries and
-  dashboards.
+  dashboards. The list functions also take `filter:`, a term Lotus hands the
+  plugs as the payload's `:filter` without reading it: what the caller asked
+  to list, such as what is shared with them.
 
 - **Send a test.** `Lotus.Delivery.send_test/4` sends sample results to one
   delivery (a channel, a format and its settings) now, after checking it as
