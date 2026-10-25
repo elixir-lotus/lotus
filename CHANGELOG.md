@@ -42,6 +42,14 @@
 
 ### Added
 
+- **Settings that change at run time.** `config :lotus, settings: MyModule`
+  names a `Lotus.Settings` module that Lotus asks, on each read, for
+  `:read_only`, `:default_page_size`, `:data_source_descriptions`, `:ai`,
+  `:delivery` and `:cache` over the config: a value replaces the config's, a
+  keyword list or map is merged into it, and `:default` (or a raise, which is
+  logged) keeps it. `Lotus.Settings.validate/2` checks a value as the config
+  would. Lotus Pro uses it for the settings its admins change in the app.
+
 - **Telemetry an audit log can rest on.** Schema introspection events carry
   the caller's `:context` and `:scope` (and `:table` for `describe_table` and
   `get_table_stats`), so a consumer knows who browsed what. AI request events
