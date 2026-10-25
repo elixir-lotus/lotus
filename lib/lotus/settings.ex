@@ -33,11 +33,15 @@ defmodule Lotus.Settings do
 
   @overridable [:read_only, :default_page_size, :data_source_descriptions, :ai, :delivery, :cache]
 
+  @typedoc "A setting a `Lotus.Settings` module may answer."
+  @type key ::
+          :read_only | :default_page_size | :data_source_descriptions | :ai | :delivery | :cache
+
   @doc "The setting `key` over the config, or `:default` to keep the config's."
-  @callback get(key :: atom()) :: {:ok, term()} | :default
+  @callback get(key :: key()) :: {:ok, term()} | :default
 
   @doc "The settings a `Lotus.Settings` module may answer."
-  @spec overridable() :: [atom(), ...]
+  @spec overridable() :: [key(), ...]
   def overridable, do: @overridable
 
   @doc """
@@ -57,7 +61,7 @@ defmodule Lotus.Settings do
 
   @doc false
   # The config's value of `key` with the settings module's over it.
-  @spec apply(atom(), term()) :: term()
+  @spec apply(key(), term()) :: term()
   def apply(key, configured) when key in @overridable do
     case module() do
       nil -> configured
