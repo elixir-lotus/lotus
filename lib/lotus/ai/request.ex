@@ -41,6 +41,7 @@ defmodule Lotus.AI.Request do
     %{
       feature: feature,
       data_source: Keyword.fetch!(opts, :data_source),
+      prompt: Keyword.fetch!(opts, :prompt),
       context: Keyword.get(opts, :context),
       scope: Keyword.get(opts, :scope)
     }

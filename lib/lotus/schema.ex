@@ -85,7 +85,8 @@ defmodule Lotus.Schema do
     adapter = Source.resolve!(repo_or_name, nil)
     context = Keyword.get(opts, :context)
     scope = Keyword.get(opts, :scope)
-    start_time = Telemetry.schema_introspection_start(:list_schemas, adapter.name)
+    observed = %{context: context, scope: scope}
+    start_time = Telemetry.schema_introspection_start(:list_schemas, adapter.name, observed)
 
     key = schema_key(:list_schemas, adapter.name, scope)
     tags = ["source:#{adapter.name}", "schema:list_schemas"] ++ scope_tags(scope)
@@ -128,7 +129,8 @@ defmodule Lotus.Schema do
       start_time,
       :list_schemas,
       adapter.name,
-      result_status(result)
+      result_status(result),
+      observed
     )
 
     result
@@ -178,7 +180,8 @@ defmodule Lotus.Schema do
     adapter = Source.resolve!(repo_or_name, nil)
     context = Keyword.get(opts, :context)
     scope = Keyword.get(opts, :scope)
-    start_time = Telemetry.schema_introspection_start(:list_tables, adapter.name)
+    observed = %{context: context, scope: scope}
+    start_time = Telemetry.schema_introspection_start(:list_tables, adapter.name, observed)
     schemas = effective_schemas(adapter, opts)
     include_views? = Keyword.get(opts, :include_views, false)
 
@@ -248,7 +251,8 @@ defmodule Lotus.Schema do
       start_time,
       :list_tables,
       adapter.name,
-      result_status(result)
+      result_status(result),
+      observed
     )
 
     result
@@ -365,7 +369,8 @@ defmodule Lotus.Schema do
     adapter = Source.resolve!(repo_or_name, nil)
     context = Keyword.get(opts, :context)
     scope = Keyword.get(opts, :scope)
-    start_time = Telemetry.schema_introspection_start(:describe_table, adapter.name)
+    observed = %{context: context, scope: scope, table: table_name}
+    start_time = Telemetry.schema_introspection_start(:describe_table, adapter.name, observed)
     schemas = effective_schemas(adapter, opts)
 
     cache_result =
@@ -421,7 +426,8 @@ defmodule Lotus.Schema do
       start_time,
       :describe_table,
       adapter.name,
-      result_status(result)
+      result_status(result),
+      observed
     )
 
     result
@@ -543,7 +549,8 @@ defmodule Lotus.Schema do
   def get_table_stats(repo_or_name, table_name, opts \\ []) do
     adapter = Source.resolve!(repo_or_name, nil)
     scope = Keyword.get(opts, :scope)
-    start_time = Telemetry.schema_introspection_start(:get_table_stats, adapter.name)
+    observed = %{context: opts[:context], scope: scope, table: table_name}
+    start_time = Telemetry.schema_introspection_start(:get_table_stats, adapter.name, observed)
     schemas = effective_schemas(adapter, opts)
 
     result =
@@ -571,7 +578,8 @@ defmodule Lotus.Schema do
       start_time,
       :get_table_stats,
       adapter.name,
-      result_status(result)
+      result_status(result),
+      observed
     )
 
     result
@@ -662,7 +670,8 @@ defmodule Lotus.Schema do
     adapter = Source.resolve!(repo_or_name, nil)
     context = Keyword.get(opts, :context)
     scope = Keyword.get(opts, :scope)
-    start_time = Telemetry.schema_introspection_start(:list_relations, adapter.name)
+    observed = %{context: context, scope: scope}
+    start_time = Telemetry.schema_introspection_start(:list_relations, adapter.name, observed)
     schemas = effective_schemas(adapter, opts)
     include_views? = Keyword.get(opts, :include_views, false)
 
@@ -719,7 +728,8 @@ defmodule Lotus.Schema do
       start_time,
       :list_relations,
       adapter.name,
-      result_status(result)
+      result_status(result),
+      observed
     )
 
     result

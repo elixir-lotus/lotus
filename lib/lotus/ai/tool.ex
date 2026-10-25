@@ -134,7 +134,8 @@ if Code.ensure_loaded?(ReqLLM) do
       case do_run(loop, context, acc) do
         {:ok, response, acc} ->
           response = %{response | usage: acc.usage}
-          Telemetry.ai_request_stop(start_time, Map.merge(metadata, finished(acc)))
+          answered = Map.put(finished(acc), :response, ReqLLM.Response.text(response))
+          Telemetry.ai_request_stop(start_time, Map.merge(metadata, answered))
           {:ok, response}
 
         {:error, error, acc} ->
