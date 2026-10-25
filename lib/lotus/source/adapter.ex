@@ -46,6 +46,8 @@ defmodule Lotus.Source.Adapter do
       statement, for row-level security in the database
     * `Lotus.Source.Adapter.Streaming` — reading a statement's rows as they
       are consumed, for large exports
+    * `Lotus.Source.Adapter.Connection` — the form that connects a source
+      from settings a person types, and the source those settings make
 
   For example, a search engine adapter that filters and sorts but has no
   schemas:
@@ -65,8 +67,9 @@ defmodule Lotus.Source.Adapter do
   what an adapter declares, and `mix lotus.adapter.check` lists it with
   what is missing. `use Lotus.Source.Adapters.Ecto` declares every
   capability but `Session`, which only `Lotus.Source.Adapters.Postgres`
-  declares, and `Streaming`, which the built-in Postgres, MySQL and SQLite
-  adapters declare.
+  declares, `Streaming`, which the built-in Postgres, MySQL and SQLite
+  adapters declare, and `Connection`, which it declares when given a
+  `:connection` option, as the built-in ones are.
 
   The `:capabilities` field of `%Adapter{}` holds the declared
   capabilities. `with_capabilities/1` fills it when the adapter is built,
@@ -159,7 +162,14 @@ defmodule Lotus.Source.Adapter do
   segment: `:introspection` is `Lotus.Source.Adapter.Introspection`.
   """
   @type capability ::
-          :introspection | :preflight | :binding | :shaping | :editor | :session | :streaming
+          :introspection
+          | :preflight
+          | :binding
+          | :shaping
+          | :editor
+          | :session
+          | :streaming
+          | :connection
 
   @typedoc """
   What a statement cost the engine, as `execute_query/4` may report it. Every
@@ -187,6 +197,7 @@ defmodule Lotus.Source.Adapter do
           | {:editor, Lotus.Source.Adapter.Editor}
           | {:session, Lotus.Source.Adapter.Session}
           | {:streaming, Lotus.Source.Adapter.Streaming}
+          | {:connection, Lotus.Source.Adapter.Connection}
 
   @type t :: %__MODULE__{
           name: String.t(),
@@ -206,7 +217,8 @@ defmodule Lotus.Source.Adapter do
     shaping: Lotus.Source.Adapter.Shaping,
     editor: Lotus.Source.Adapter.Editor,
     session: Lotus.Source.Adapter.Session,
-    streaming: Lotus.Source.Adapter.Streaming
+    streaming: Lotus.Source.Adapter.Streaming,
+    connection: Lotus.Source.Adapter.Connection
   ]
 
   @capability_map Map.new(@capability_behaviours)

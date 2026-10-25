@@ -42,6 +42,19 @@
 
 ### Added
 
+- **Sources connected from settings** (`Lotus.Source.Adapter.Connection`,
+  `Lotus.Source.Connections`). An adapter can describe the form that
+  connects one of its sources (a host, a port, a user, a password; a URL
+  and a key) and build the source from what is typed in. `Lotus.Source.Connections.kinds/0`
+  lists the kinds every installed adapter offers, `test/2` tries a form's
+  values without keeping them and reports what the database said, and
+  `build/3` makes the source a resolver returns. The built-in Postgres,
+  MySQL and SQLite adapters declare `"postgres"`, `"mysql"` and `"sqlite"`
+  when their library is installed; an Ecto-backed adapter gets the same
+  from the `:connection` option of `use Lotus.Source.Adapters.Ecto`, its
+  sources each running a repo started by the reconciler. This is what Lotus
+  Pro's in-app connections are built on.
+
 - **Telemetry an audit log can rest on.** Schema introspection events carry
   the caller's `:context` and `:scope` (and `:table` for `describe_table` and
   `get_table_stats`), so a consumer knows who browsed what. AI request events

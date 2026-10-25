@@ -11,7 +11,29 @@ defmodule Lotus.Source.Adapters.SQLite3 do
   """
 
   use Lotus.Source.Adapters.Ecto,
-    dialect: Lotus.Source.Adapters.Ecto.Dialects.SQLite3
+    dialect: Lotus.Source.Adapters.Ecto.Dialects.SQLite3,
+    connection: [
+      kind: "sqlite",
+      label: "SQLite",
+      fields: [
+        %{
+          key: :database,
+          label: "File",
+          type: :string,
+          required: true,
+          placeholder: "/var/data/app.db",
+          hint: "The path of the database file on the server."
+        }
+      ]
+    ]
+
+  # Opening a file that is not there would make an empty database.
+  @impl Lotus.Source.Adapter.Connection
+  def from_settings(name, settings) do
+    if File.regular?(settings[:database]),
+      do: super(name, settings),
+      else: {:error, %{database: "There is no database file at #{settings[:database]}."}}
+  end
 
   @behaviour Lotus.Source.Adapter.Streaming
 

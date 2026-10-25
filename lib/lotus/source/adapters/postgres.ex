@@ -10,8 +10,15 @@ defmodule Lotus.Source.Adapters.Postgres do
   `Lotus.Source.Adapters.Ecto.Dialects.Postgres`: schemas, `EXPLAIN (FORMAT JSON)` query plans, a session `search_path`, and `statement_timeout`.
   """
 
+  alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
+
   use Lotus.Source.Adapters.Ecto,
-    dialect: Lotus.Source.Adapters.Ecto.Dialects.Postgres
+    dialect: Lotus.Source.Adapters.Ecto.Dialects.Postgres,
+    connection: [
+      kind: "postgres",
+      label: "PostgreSQL",
+      fields: EctoAdapter.server_fields(5432)
+    ]
 
   @behaviour Lotus.Source.Adapter.Streaming
 
@@ -21,8 +28,6 @@ defmodule Lotus.Source.Adapters.Postgres do
     as: :do_stream_query
 
   @behaviour Lotus.Source.Adapter.Session
-
-  alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
 
   # A custom setting (`prefix.name`), so a statement's session cannot touch
   # the settings Lotus relies on, such as `transaction_read_only`,
