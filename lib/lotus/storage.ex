@@ -36,7 +36,7 @@ defmodule Lotus.Storage do
   import Lotus.Helpers, only: [escape_like: 1]
 
   alias Lotus.{Middleware, Result}
-  alias Lotus.Storage.{Mutation, Ownership, Query}
+  alias Lotus.Storage.{Listing, Mutation, Ownership, Query}
 
   @type id :: integer() | binary()
   @type attrs :: map()
@@ -47,10 +47,16 @@ defmodule Lotus.Storage do
   Lists all queries from the database.
 
   Returns a list of Query structs.
+
+  ## Options
+
+    * `:context` - The caller, for the `:list_content` middleware, which
+      narrows the list to what they may read. Without it, every query is
+      listed.
   """
-  @spec list_queries() :: query_list()
-  def list_queries do
-    Lotus.repo().all(Query)
+  @spec list_queries(keyword()) :: query_list()
+  def list_queries(opts \\ []) do
+    Query |> Listing.narrow(:query, opts) |> Lotus.repo().all()
   end
 
   @doc """
@@ -64,6 +70,9 @@ defmodule Lotus.Storage do
     * `:tenant_id` - Only the queries of this tenant, as `:owner_id`.
       `tenant_id: ["acme", nil]` lists the tenant's queries and those of no
       tenant
+    * `:context` - The caller, for the `:list_content` middleware, which
+      narrows the list to what they may read. Without it, every query is
+      listed.
 
   ## Examples
 
@@ -76,7 +85,7 @@ defmodule Lotus.Storage do
   """
   @spec list_queries_by(keyword()) :: [Query.t()]
   def list_queries_by(opts \\ []) do
-    q = Ownership.filter(Query, opts)
+    q = Query |> Ownership.filter(opts) |> Listing.narrow(:query, opts)
 
     q =
       case Keyword.get(opts, :search) do
@@ -94,21 +103,23 @@ defmodule Lotus.Storage do
   @doc """
   Gets a single query by ID.
 
-  Returns `nil` if the Query does not exist.
+  Returns `nil` if the Query does not exist, or, with `context:`, if the
+  `:list_content` middleware does not let that caller read it.
   """
-  @spec get_query(id()) :: Query.t() | nil
-  def get_query(id) do
-    Lotus.repo().get(Query, id)
+  @spec get_query(id(), keyword()) :: Query.t() | nil
+  def get_query(id, opts \\ []) do
+    Query |> Listing.narrow(:query, opts) |> Lotus.repo().get(id)
   end
 
   @doc """
-  Gets a single query by ID.
+  Gets a single query by ID, as `get_query/2`.
 
-  Raises `Ecto.NoResultsError` if the Query does not exist.
+  Raises `Ecto.NoResultsError` if the Query does not exist, or the caller may
+  not read it.
   """
-  @spec get_query!(id()) :: Query.t() | no_return()
-  def get_query!(id) do
-    Lotus.repo().get!(Query, id)
+  @spec get_query!(id(), keyword()) :: Query.t() | no_return()
+  def get_query!(id, opts \\ []) do
+    Query |> Listing.narrow(:query, opts) |> Lotus.repo().get!(id)
   end
 
   @doc """

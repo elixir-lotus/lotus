@@ -25,7 +25,7 @@ if Code.ensure_loaded?(Sake.Server) do
       actor = Support.actor_opts(ctx)
 
       with :ok <- chart_type(args),
-           {:ok, query} <- Support.fetch_query(id),
+           {:ok, query} <- Support.fetch_query(id, ctx),
            {:ok, columns} <- Chart.query_columns(query, Support.vars(args[:vars]), actor),
            {:ok, config} <- Chart.config(args, columns),
            {:ok, viz} <- save(query, config, Keyword.take(actor, [:context])) do

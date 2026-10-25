@@ -42,6 +42,18 @@
 
 ### Added
 
+- **What a caller reads, narrowed by middleware.** `Lotus.list_queries/1`,
+  `Lotus.Storage.list_queries_by/1`, `Lotus.get_query/2`,
+  `Lotus.list_dashboards/1`, `Lotus.list_dashboards_by/1` and
+  `Lotus.get_dashboard/2` take `context:` (and `scope:`), and with it fire the
+  new `:list_content` event with the `Ecto.Query` they are about to run. A plug
+  continues with a narrower query, so a caller lists only what they may read,
+  and a get of anything else is `nil` (`Ecto.NoResultsError` from the `!`
+  variants); a halt reads nothing. MCP's tools and resources pass the
+  principal's context. Without `context:` nothing changes, so Lotus's own
+  lookups read everything. Lotus Pro uses it for private queries and
+  dashboards.
+
 - **Send a test.** `Lotus.Delivery.send_test/4` sends sample results to one
   delivery (a channel, a format and its settings) now, after checking it as
   a save does, and returns `:ok` or the channel's reason, for an editor to

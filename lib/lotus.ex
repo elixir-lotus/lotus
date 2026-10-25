@@ -137,19 +137,22 @@ defmodule Lotus do
   def default_data_source, do: Config.default_data_source()
 
   @doc """
-  Lists all saved queries.
+  Lists all saved queries. With `context:`, those the caller may read (see
+  `Lotus.Storage.list_queries/1`).
   """
-  defdelegate list_queries(), to: Storage
+  defdelegate list_queries(opts \\ []), to: Storage
 
   @doc """
-  Gets a single query by ID. Returns nil if not found.
+  Gets a single query by ID. Returns nil if not found, or, with `context:`,
+  if the caller may not read it.
   """
-  defdelegate get_query(id), to: Storage
+  defdelegate get_query(id, opts \\ []), to: Storage
 
   @doc """
-  Gets a single query by ID. Raises if not found.
+  Gets a single query by ID. Raises if not found, or, with `context:`, if
+  the caller may not read it.
   """
-  defdelegate get_query!(id), to: Storage
+  defdelegate get_query!(id, opts \\ []), to: Storage
 
   @doc """
   Creates a new saved query.
@@ -226,6 +229,7 @@ defmodule Lotus do
   ## Options
 
     * `:preload` - A list of associations to preload (e.g., `[:cards]`)
+    * `:context` - The caller: only the dashboards they may read
   """
   defdelegate list_dashboards(opts \\ []), to: Dashboards
 
@@ -235,18 +239,21 @@ defmodule Lotus do
   ## Options
 
     * `:search` - Search term to match against dashboard names
+    * `:context` - The caller: only the dashboards they may read
   """
   defdelegate list_dashboards_by(opts), to: Dashboards
 
   @doc """
-  Gets a single dashboard by ID. Returns nil if not found.
+  Gets a single dashboard by ID. Returns nil if not found, or, with
+  `context:`, if the caller may not read it.
   """
-  defdelegate get_dashboard(id), to: Dashboards
+  defdelegate get_dashboard(id, opts \\ []), to: Dashboards
 
   @doc """
-  Gets a single dashboard by ID. Raises if not found.
+  Gets a single dashboard by ID. Raises if not found, or, with `context:`,
+  if the caller may not read it.
   """
-  defdelegate get_dashboard!(id), to: Dashboards
+  defdelegate get_dashboard!(id, opts \\ []), to: Dashboards
 
   @doc """
   Gets a dashboard by its public sharing token.

@@ -29,7 +29,7 @@ if Code.ensure_loaded?(Sake.Server) do
     def execute(%{id: id} = args, ctx) do
       window = Support.window(args[:limit], args[:offset])
 
-      with {:ok, query} <- Support.fetch_query(id),
+      with {:ok, query} <- Support.fetch_query(id, ctx),
            {:ok, result} <-
              Lotus.run_query(
                query,

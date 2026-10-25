@@ -17,11 +17,11 @@ if Code.ensure_loaded?(Sake.Server) do
     alias Lotus.MCP.Support
 
     @impl true
-    def execute(args, _ctx) do
+    def execute(args, ctx) do
       dashboards =
         case args[:search] do
-          nil -> Lotus.list_dashboards()
-          term -> Lotus.list_dashboards_by(search: term)
+          nil -> Lotus.list_dashboards(Support.actor_opts(ctx))
+          term -> Lotus.list_dashboards_by([search: term] ++ Support.actor_opts(ctx))
         end
 
       {:ok,
