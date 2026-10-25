@@ -453,7 +453,7 @@ defmodule Lotus.AI do
   end
 
   defp get_ai_config do
-    ai_config = Lotus.Config.get(:ai) || []
+    ai_config = Lotus.Config.ai()
 
     cond do
       !ai_config[:enabled] -> {:error, :not_configured}
