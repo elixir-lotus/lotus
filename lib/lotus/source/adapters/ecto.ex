@@ -142,6 +142,8 @@ defmodule Lotus.Source.Adapters.Ecto do
         :ok
     end
 
+    connection_ast = Keyword.get(opts, :connection)
+
     quote do
       @behaviour Lotus.Source.Adapter
       @behaviour Lotus.Source.Adapter.Introspection
@@ -166,6 +168,7 @@ defmodule Lotus.Source.Adapters.Ecto do
       unquote(identity_callbacks())
       unquote(presentation_callbacks())
       unquote(type_mapping_callbacks())
+      unquote(if connection_ast, do: connection_callbacks(connection_ast))
 
       defoverridable Lotus.Source.Adapter
       defoverridable Lotus.Source.Adapter.Introspection
@@ -313,17 +316,54 @@ defmodule Lotus.Source.Adapters.Ecto do
   defp lifecycle_callbacks do
     quote do
       @impl true
-      def health_check(state) do
-        EctoAdapter.with_repo(state, &EctoAdapter.do_health_check/1)
-      rescue
-        e -> {:error, Exception.message(e)}
-      end
+      def health_check(state), do: EctoAdapter.do_health(state)
 
       @impl true
       def disconnect(_repo), do: :ok
 
       @impl true
       def format_error(_repo, error), do: @dialect.format_error(error)
+    end
+  end
+
+  # The `:connection` option: a repo module to start sources from, and the
+  # callbacks of `Lotus.Source.Adapter.Connection` over it.
+  defp connection_callbacks(connection_ast) do
+    quote do
+      @behaviour Lotus.Source.Adapter.Connection
+
+      @connection_repo EctoAdapter.__define_repo__(__MODULE__, @dialect.ecto_adapter(), __ENV__)
+      @connection_test Keyword.get(unquote(connection_ast), :test, :connect)
+
+      # Decided as the module compiles: whether the Ecto adapter is there.
+      if @connection_repo do
+        @impl Lotus.Source.Adapter.Connection
+        def connection,
+          do: unquote(connection_ast) |> Keyword.take([:kind, :label, :fields]) |> Map.new()
+
+        @impl Lotus.Source.Adapter.Connection
+        def from_settings(name, settings) do
+          EctoAdapter.settings_state(
+            __MODULE__,
+            @connection_repo,
+            name,
+            settings,
+            @connection_test
+          )
+        end
+      else
+        @impl Lotus.Source.Adapter.Connection
+        def connection, do: nil
+
+        @impl Lotus.Source.Adapter.Connection
+        def from_settings(_name, _settings),
+          do: {:error, "The database library this kind of source needs is not installed."}
+      end
+
+      @impl Lotus.Source.Adapter
+      def source_children(_name, state), do: EctoAdapter.settings_children(state)
+
+      defoverridable Lotus.Source.Adapter.Connection
     end
   end
 
@@ -472,6 +512,8 @@ defmodule Lotus.Source.Adapters.Ecto do
   Used by `Lotus.Source.Resolvers.Static` to avoid duplicating this list.
   """
   def builtin_adapters, do: @builtin_ecto_adapters
+
+  @settings_pool_size 5
 
   @doc """
   Wraps an `Ecto.Repo` module in an `%Adapter{}` struct.
@@ -724,11 +766,7 @@ defmodule Lotus.Source.Adapters.Ecto do
   # ---------------------------------------------------------------------------
 
   @impl true
-  def health_check(state) do
-    with_repo(state, &do_health_check/1)
-  rescue
-    e -> {:error, Exception.message(e)}
-  end
+  def health_check(state), do: do_health(state)
 
   @impl true
   def disconnect(_repo) do
@@ -906,6 +944,168 @@ defmodule Lotus.Source.Adapters.Ecto do
 
       {:ok, stream}
     end)
+  end
+
+  @doc false
+  # A source connected from settings whose repo is not running, as when a
+  # form tests it before it is saved, gets a connection of its own: through
+  # the repo's pool, a failure would read "connection not available".
+  def do_health(%{repo: repo, dynamic: target, config: config} = state) do
+    cond do
+      running?(target) ->
+        with_repo(state, &do_health_check/1)
+
+      state[:test] == :query ->
+        with :ok <- probe(repo, config), do: probe_through_repo(repo, config)
+
+      true ->
+        probe(repo, config)
+    end
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  def do_health(state) do
+    with_repo(state, &do_health_check/1)
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp running?(target) when is_pid(target), do: Process.alive?(target)
+  defp running?(target), do: GenServer.whereis(target) != nil
+
+  @probe_timeout 10_000
+
+  # One connection through the driver's DBConnection module, as the pool
+  # would open it, then closed.
+  defp probe(repo, config) do
+    config = Keyword.merge(config, pool_size: 1, timeout: @probe_timeout)
+
+    case driver(repo, config) do
+      {:ok, driver, opts} ->
+        # A driver traps exits in the process that connects.
+        task = Task.async(fn -> connect_once(driver, opts) end)
+
+        case Task.yield(task, @probe_timeout) || Task.shutdown(task, :brutal_kill) do
+          {:ok, result} -> result
+          _timeout -> {:error, "The database did not answer within 10 seconds."}
+        end
+
+      :error ->
+        probe_through_repo(repo, config)
+    end
+  end
+
+  defp driver(repo, config) do
+    connection = Module.concat(repo.__adapter__(), Connection)
+
+    with true <- Code.ensure_loaded?(connection),
+         true <- function_exported?(connection, :child_spec, 1),
+         %{start: {_pool, _fun, [{driver, opts}]}} when is_atom(driver) <-
+           connection.child_spec(config),
+         true <- Code.ensure_loaded?(driver),
+         true <- function_exported?(driver, :connect, 1) do
+      {:ok, driver, opts}
+    else
+      _other -> :error
+    end
+  end
+
+  defp connect_once(driver, opts) do
+    case driver.connect(opts) do
+      {:ok, conn} ->
+        driver.disconnect(:normal, conn)
+        :ok
+
+      {:error, error} ->
+        {:error, error}
+    end
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  # A driver whose child spec is not a DBConnection pool's: start the repo
+  # for one query.
+  defp probe_through_repo(repo, config) do
+    case repo.start_link(Keyword.put(config, :name, nil)) do
+      {:ok, pid} ->
+        try do
+          with_repo(%{repo: repo, dynamic: pid}, &do_health_check/1)
+        after
+          Supervisor.stop(pid)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc false
+  # Defines `<adapter>.Repo`, the repo module sources connected from
+  # settings start from, when the Ecto adapter is installed. Returns it, or
+  # `nil`.
+  @spec __define_repo__(module(), module(), Macro.Env.t()) :: module() | nil
+  def __define_repo__(adapter_module, ecto_adapter, env) do
+    repo = Module.concat(adapter_module, Repo)
+
+    if Code.ensure_loaded?(ecto_adapter) do
+      contents =
+        quote do
+          @moduledoc false
+          use Ecto.Repo, otp_app: :lotus, adapter: unquote(ecto_adapter)
+        end
+
+      Module.create(repo, contents, Macro.Env.location(env))
+      repo
+    end
+  end
+
+  @doc false
+  # The state of a source connected from settings: its repo runs under
+  # `Lotus.Source.Supervisor`, registered under the source's name.
+  @spec settings_state(module(), module(), String.t(), keyword(), :connect | :query) ::
+          {:ok, dynamic_state()}
+  def settings_state(adapter_module, repo, name, settings, test \\ :connect) do
+    state = %{
+      repo: repo,
+      dynamic: Lotus.Source.Registry.via(adapter_module, name),
+      config: Keyword.put_new(settings, :pool_size, @settings_pool_size)
+    }
+
+    {:ok, if(test == :query, do: Map.put(state, :test, :query), else: state)}
+  end
+
+  @doc false
+  # The repo of a source connected from settings; none for a repo the host
+  # supervises.
+  @spec settings_children(state()) :: [Supervisor.child_spec()]
+  def settings_children(%{repo: repo, dynamic: name, config: config}) do
+    [
+      %{
+        id: repo,
+        start: {repo, :start_link, [Keyword.put(config, :name, name)]},
+        type: :supervisor
+      }
+    ]
+  end
+
+  def settings_children(_state), do: []
+
+  @doc """
+  The fields of a form that connects a database server: host, port,
+  database, user, password and SSL, for the `:connection` option of
+  `use Lotus.Source.Adapters.Ecto`.
+  """
+  @spec server_fields(pos_integer()) :: [Lotus.Source.Adapter.Connection.field()]
+  def server_fields(default_port) do
+    [
+      %{key: :hostname, label: "Host", type: :string, required: true, placeholder: "db.internal"},
+      %{key: :port, label: "Port", type: :integer, default: default_port},
+      %{key: :database, label: "Database", type: :string, required: true},
+      %{key: :username, label: "User", type: :string, required: true},
+      %{key: :password, label: "Password", type: :secret},
+      %{key: :ssl, label: "Use SSL", type: :boolean, default: false}
+    ]
   end
 
   @doc false
