@@ -57,6 +57,21 @@ defmodule Lotus.ConfigTest do
       assert "email" in Map.keys(Lotus.Delivery.channels())
       assert "change" in Alert.conditions()
     end
+
+    test "the email and Slack channels' settings are config the app may set" do
+      Application.put_env(:lotus, :delivery,
+        email: [mailer: Lotus.ConfigTest, from: {"Lotus", "reports@example.com"}],
+        slack: [req_options: [retry: false]]
+      )
+
+      Config.reload!()
+
+      assert Config.delivery()[:email][:from] == {"Lotus", "reports@example.com"}
+      assert Config.delivery()[:slack][:req_options] == [retry: false]
+
+      assert {:error, message} = Lotus.Settings.validate(:delivery, email: [from: 42])
+      assert message =~ "from"
+    end
   end
 
   describe "cache_namespace/0" do

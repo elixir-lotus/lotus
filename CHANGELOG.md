@@ -42,6 +42,27 @@
 
 ### Added
 
+- **Sources connected from settings** (`Lotus.Source.Adapter.Connection`,
+  `Lotus.Source.Connections`). An adapter can describe the form that
+  connects one of its sources (a host, a port, a user, a password; a URL
+  and a key) and build the source from what is typed in. `Lotus.Source.Connections.kinds/0`
+  lists the kinds every installed adapter offers, `test/2` tries a form's
+  values without keeping them and reports what the database said, and
+  `build/3` makes the source a resolver returns. The built-in Postgres,
+  MySQL and SQLite adapters declare `"postgres"`, `"mysql"` and `"sqlite"`
+  when their library is installed; an Ecto-backed adapter gets the same
+  from the `:connection` option of `use Lotus.Source.Adapters.Ecto`, its
+  sources each running a repo started by the reconciler. This is what Lotus
+  Pro's in-app connections are built on.
+
+- **Settings that change at run time.** `config :lotus, settings: MyModule`
+  names a `Lotus.Settings` module that Lotus asks, on each read, for
+  `:read_only`, `:default_page_size`, `:data_source_descriptions`, `:ai`,
+  `:delivery` and `:cache` over the config: a value replaces the config's, a
+  keyword list or map is merged into it, and `:default` (or a raise, which is
+  logged) keeps it. `Lotus.Settings.validate/2` checks a value as the config
+  would. Lotus Pro uses it for the settings its admins change in the app.
+
 - **Telemetry an audit log can rest on.** Schema introspection events carry
   the caller's `:context` and `:scope` (and `:table` for `describe_table` and
   `get_table_stats`), so a consumer knows who browsed what. AI request events
@@ -286,6 +307,13 @@
   the configured `source_resolver` connected at runtime could be queried
   but not picked, listed or saved on. They now ask the resolver
   (`Lotus.Source.list_source_names/0`, new).
+
+- **`delivery: [email: …]` and `delivery: [slack: …]` are valid config.**
+  The email and Slack channels read their settings from them, as their docs
+  say, but the config schema named neither, so an app that set them failed
+  to start with `unknown options [:email]`. Both are declared now, with
+  their keys (`:mailer`, `:from`, `:max_attachment_bytes`; `:req_options`),
+  and `Lotus.Settings` can change them at run time.
 
 - **Column policies no longer refuse two kinds of statements that read no
   whole row.** With a column policy on a table, Lotus refused, as "reads

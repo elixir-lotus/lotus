@@ -10,8 +10,15 @@ defmodule Lotus.Source.Adapters.MySQL do
   `Lotus.Source.Adapters.Ecto.Dialects.MySQL`: databases-as-schemas, `EXPLAIN FORMAT=JSON` query plans, and `max_execution_time` as the statement timeout.
   """
 
+  alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
+
   use Lotus.Source.Adapters.Ecto,
-    dialect: Lotus.Source.Adapters.Ecto.Dialects.MySQL
+    dialect: Lotus.Source.Adapters.Ecto.Dialects.MySQL,
+    connection: [
+      kind: "mysql",
+      label: "MySQL",
+      fields: EctoAdapter.server_fields(3306)
+    ]
 
   @behaviour Lotus.Source.Adapter.Streaming
 

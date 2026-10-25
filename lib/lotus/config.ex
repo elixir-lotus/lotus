@@ -359,6 +359,31 @@ defmodule Lotus.Config do
           doc:
             "Delivery formats by name, next to the built-in `\"csv\"`, `\"json\"` and `\"html\"`."
         ],
+        email: [
+          type: :keyword_list,
+          keys: [
+            mailer: [type: :atom, doc: "The app's Swoosh mailer, such as `MyApp.Mailer`."],
+            from: [
+              type: {:or, [:string, {:tuple, [:string, :string]}]},
+              doc: ~s(The address emails come from, or `{"Name", "address"}`.)
+            ],
+            max_attachment_bytes: [
+              type: :pos_integer,
+              doc: "Attachments over this size in all are left out (10 MB unless set)."
+            ]
+          ],
+          doc: "Settings of the `\"email\"` channel (`Lotus.Delivery.Channels.Email`)."
+        ],
+        slack: [
+          type: :keyword_list,
+          keys: [
+            req_options: [
+              type: :keyword_list,
+              doc: "Options passed to every `Req.post/2`, such as a proxy."
+            ]
+          ],
+          doc: "Settings of the `\"slack\"` channel (`Lotus.Delivery.Channels.Slack`)."
+        ],
         webhook: [
           type: :keyword_list,
           default: [],
@@ -392,6 +417,16 @@ defmodule Lotus.Config do
         ]
       ],
       doc: "The conditions of alert rules. See `Lotus.Schedules.Alert`."
+    ],
+    settings: [
+      type: {:or, [:atom, nil]},
+      default: nil,
+      doc: """
+      A module implementing `Lotus.Settings`, which changes some settings at
+      run time over this config: `:read_only`, `:default_page_size`,
+      `:data_source_descriptions`, `:ai`, `:delivery` and `:cache`. Lotus Pro
+      sets it, for the settings its admins change in the app.
+      """
     ],
     middleware: [
       type: {:or, [:map, nil]},
@@ -601,7 +636,8 @@ defmodule Lotus.Config do
       :middleware,
       :scheduler,
       :delivery,
-      :alerts
+      :alerts,
+      :settings
     ])
   end
 
@@ -621,7 +657,7 @@ defmodule Lotus.Config do
   Returns whether queries are restricted to read-only operations.
   """
   @spec read_only?() :: boolean()
-  def read_only?, do: load!()[:read_only]
+  def read_only?, do: setting(:read_only)
 
   @doc """
   Returns whether the given source is allowed to return
@@ -679,7 +715,7 @@ defmodule Lotus.Config do
   The description of a data source from `:data_source_descriptions`, or `nil`.
   """
   @spec data_source_description(String.t()) :: String.t() | nil
-  def data_source_description(name), do: Map.get(load!()[:data_source_descriptions], name)
+  def data_source_description(name), do: Map.get(setting(:data_source_descriptions) || %{}, name)
 
   @doc """
   Lists the names of all configured data sources.
@@ -783,15 +819,39 @@ defmodule Lotus.Config do
   Returns the configuration for the given key from the application environment.
   """
   @spec get(atom()) :: any()
+  def get(key)
+      when key in [
+             :read_only,
+             :default_page_size,
+             :data_source_descriptions,
+             :ai,
+             :delivery,
+             :cache
+           ],
+      do: setting(key)
+
   def get(key) do
     load!()[key]
+  end
+
+  # A setting a `Lotus.Settings` module may change at run time, over the
+  # config's value.
+  defp setting(key), do: Lotus.Settings.apply(key, load!()[key])
+
+  @doc false
+  # Validates one setting as the config would (`Lotus.Settings.validate/2`).
+  def validate_setting(key, value) do
+    schema = Keyword.take(@schema, [key])
+
+    with {:ok, validated} <- NimbleOptions.validate([{key, value}], schema),
+         do: {:ok, validated[key]}
   end
 
   @doc """
   Returns the delivery configuration (see the `:delivery` option).
   """
   @spec delivery() :: keyword()
-  def delivery, do: load!()[:delivery] || []
+  def delivery, do: setting(:delivery) || []
 
   @doc """
   Returns the scheduler configuration (see the `:scheduler` option).
@@ -809,7 +869,7 @@ defmodule Lotus.Config do
   Returns the cache configuration.
   """
   @spec cache_config() :: cache_config() | nil
-  def cache_config, do: load!()[:cache]
+  def cache_config, do: setting(:cache)
 
   @entry_option_keys [:max_bytes, :compress, :lock_timeout]
 
@@ -929,7 +989,7 @@ defmodule Lotus.Config do
   When nil, Lotus uses its built-in default page size.
   """
   @spec default_page_size() :: pos_integer() | nil
-  def default_page_size, do: load!()[:default_page_size]
+  def default_page_size, do: setting(:default_page_size)
 
   @doc """
   Returns middleware configuration map, or empty map if not configured.

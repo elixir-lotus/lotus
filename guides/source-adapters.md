@@ -1385,6 +1385,73 @@ defmodule MyApp.DuckDB.Worker do
 end
 ```
 
+## Connecting a Source from Settings
+
+A host that lets people add sources in its app, as Lotus Pro does, needs
+two things from each adapter: the fields of the form that connects one,
+and the source those fields make. An adapter gives both by declaring
+`Lotus.Source.Adapter.Connection`:
+
+```elixir
+defmodule MyApp.Adapters.Search do
+  @behaviour Lotus.Source.Adapter
+  @behaviour Lotus.Source.Adapter.Connection
+
+  @impl Lotus.Source.Adapter.Connection
+  def connection do
+    %{
+      kind: "search",
+      label: "Search",
+      fields: [
+        %{key: :url, label: "URL", type: :string, required: true},
+        %{key: :api_key, label: "API key", type: :secret}
+      ]
+    }
+  end
+
+  # The settings arrive checked and cast, by field key. Return what wrap/2 takes.
+  @impl Lotus.Source.Adapter.Connection
+  def from_settings(_name, settings), do: {:ok, Map.new(settings)}
+
+  # ...
+end
+```
+
+`connection/0` returns `nil` when the adapter cannot connect a source in
+this app, such as when a library it needs is missing. `kind` is saved with
+the settings, so it stays the same between releases.
+
+An Ecto-backed adapter passes `:connection` to `use Lotus.Source.Adapters.Ecto`
+and gets both callbacks. Its sources run a repo of their own, started by the
+reconciler and registered under the source's name, and its health check opens
+one connection through the driver, so a wrong password reads as the database
+says it:
+
+```elixir
+use Lotus.Source.Adapters.Ecto,
+  dialect: MyApp.Dialects.DuckDB,
+  connection: [
+    kind: "duckdb",
+    label: "DuckDB",
+    fields: [%{key: :database, label: "File", type: :string, required: true}]
+  ]
+```
+
+A driver that connects without logging in, such as one over HTTP, adds
+`test: :query`: the health check then also runs a query, on a repo started
+for it, so a wrong password is caught too.
+
+`Lotus.Source.Adapters.Ecto.server_fields/1` gives the usual host, port,
+database, user, password and SSL fields. The built-in Postgres, MySQL and
+SQLite adapters declare `"postgres"`, `"mysql"` and `"sqlite"`.
+
+`Lotus.Source.Connections` is what a host calls: `kinds/0` lists the kinds
+of every installed adapter (the built-in ones and those in
+`:source_adapters`), `test/2` tries a form's values without keeping them, and
+`build/3` makes the source. Lotus does not store the settings: the host
+returns the built sources from its `Lotus.Source.Resolver` and calls
+`Lotus.Source.reconcile/0` when they change.
+
 ## Custom Resolvers
 
 Both extension points feeding the adapter pipeline are pluggable behaviours:
