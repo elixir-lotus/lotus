@@ -333,15 +333,18 @@ defmodule Lotus.Source.Adapters.Ecto do
       @behaviour Lotus.Source.Adapter.Connection
 
       @connection_repo EctoAdapter.__define_repo__(__MODULE__, @dialect.ecto_adapter(), __ENV__)
+      @connection_test Keyword.get(unquote(connection_ast), :test, :connect)
 
       @impl Lotus.Source.Adapter.Connection
       def connection do
-        if @connection_repo, do: Map.new(unquote(connection_ast))
+        if @connection_repo,
+          do: unquote(connection_ast) |> Keyword.take([:kind, :label, :fields]) |> Map.new()
       end
 
       @impl Lotus.Source.Adapter.Connection
-      def from_settings(name, settings),
-        do: EctoAdapter.settings_state(__MODULE__, @connection_repo, name, settings)
+      def from_settings(name, settings) do
+        EctoAdapter.settings_state(__MODULE__, @connection_repo, name, settings, @connection_test)
+      end
 
       @impl Lotus.Source.Adapter
       def source_children(_name, state), do: EctoAdapter.settings_children(state)
@@ -934,9 +937,16 @@ defmodule Lotus.Source.Adapters.Ecto do
   # form tests it before it is saved, gets a connection of its own: through
   # the repo's pool, a failure would read "connection not available".
   def do_health(%{repo: repo, dynamic: target, config: config} = state) do
-    if running?(target),
-      do: with_repo(state, &do_health_check/1),
-      else: probe(repo, config)
+    cond do
+      running?(target) ->
+        with_repo(state, &do_health_check/1)
+
+      state[:test] == :query ->
+        with :ok <- probe(repo, config), do: probe_through_repo(repo, config)
+
+      true ->
+        probe(repo, config)
+    end
   rescue
     e -> {:error, Exception.message(e)}
   end
@@ -1039,18 +1049,21 @@ defmodule Lotus.Source.Adapters.Ecto do
   @doc false
   # The state of a source connected from settings: its repo runs under
   # `Lotus.Source.Supervisor`, registered under the source's name.
-  @spec settings_state(module(), module() | nil, String.t(), keyword()) ::
+  @spec settings_state(module(), module() | nil, String.t(), keyword(), :connect | :query) ::
           {:ok, dynamic_state()} | {:error, String.t()}
-  def settings_state(_adapter_module, nil, _name, _settings),
+  def settings_state(adapter_module, repo, name, settings, test \\ :connect)
+
+  def settings_state(_adapter_module, nil, _name, _settings, _test),
     do: {:error, "The database library this kind of source needs is not installed."}
 
-  def settings_state(adapter_module, repo, name, settings) do
-    {:ok,
-     %{
-       repo: repo,
-       dynamic: Lotus.Source.Registry.via(adapter_module, name),
-       config: Keyword.put_new(settings, :pool_size, @settings_pool_size)
-     }}
+  def settings_state(adapter_module, repo, name, settings, test) do
+    state = %{
+      repo: repo,
+      dynamic: Lotus.Source.Registry.via(adapter_module, name),
+      config: Keyword.put_new(settings, :pool_size, @settings_pool_size)
+    }
+
+    {:ok, if(test == :query, do: Map.put(state, :test, :query), else: state)}
   end
 
   @doc false

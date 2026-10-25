@@ -170,6 +170,31 @@ defmodule Lotus.Source.ConnectionsTest do
       assert Lotus.Source.Registry.whereis(Lotus.Source.Adapters.Postgres, "warehouse") == nil
     end
 
+    test "test: :query also runs a query, for a driver that connects without logging in" do
+      alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
+      alias Lotus.Source.Adapters.Postgres
+
+      {:ok, values} = Connections.cast(Connections.kind("postgres"), @postgres)
+
+      {:ok, state} =
+        EctoAdapter.settings_state(Postgres, Postgres.Repo, "probe", values, :query)
+
+      assert state.test == :query
+      assert :ok = EctoAdapter.do_health(state)
+
+      {:ok, state} =
+        EctoAdapter.settings_state(
+          Postgres,
+          Postgres.Repo,
+          "probe",
+          Keyword.put(values, :password, "nope"),
+          :query
+        )
+
+      assert {:error, error} = EctoAdapter.do_health(state)
+      assert inspect(error) =~ "password authentication failed"
+    end
+
     test "a SQLite file must exist" do
       assert {:error, %{database: "There is no database file at /nowhere.db."}} =
                Connections.build("local", "sqlite", %{"database" => "/nowhere.db"})

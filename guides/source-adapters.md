@@ -1437,6 +1437,10 @@ use Lotus.Source.Adapters.Ecto,
   ]
 ```
 
+A driver that connects without logging in, such as one over HTTP, adds
+`test: :query`: the health check then also runs a query, on a repo started
+for it, so a wrong password is caught too.
+
 `Lotus.Source.Adapters.Ecto.server_fields/1` gives the usual host, port,
 database, user, password and SSL fields. The built-in Postgres, MySQL and
 SQLite adapters declare `"postgres"`, `"mysql"` and `"sqlite"`.
