@@ -256,6 +256,39 @@ defmodule Lotus.MCPTest do
       assert is_integer(approx["public.test_users"])
     end
 
+    test "every call is a [:lotus, :mcp, :call] event, with the actor" do
+      ref = make_ref()
+      pid = self()
+
+      :telemetry.attach(
+        "#{inspect(ref)}",
+        [:lotus, :mcp, :call],
+        fn _event, measurements, metadata, _ ->
+          send(pid, {:mcp_call, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("#{inspect(ref)}") end)
+
+      call!(client(), "list_tables", %{"data_source" => "postgres"})
+      call!(client(), "list_tables", %{"data_source" => "nope"})
+
+      assert_received {:mcp_call, %{duration: duration}, ok}
+      assert is_integer(duration)
+
+      assert %{
+               kind: :tool,
+               name: "list_tables",
+               arguments: %{data_source: "postgres"},
+               status: :ok,
+               context: %{id: 7},
+               scope: %{id: 7}
+             } = ok
+
+      assert_received {:mcp_call, _measurements, %{name: "list_tables", status: :error}}
+    end
+
     test "an unknown data source is a tool error, not a crash" do
       assert %{is_error: true, text: "Unknown data source \"nope\"" <> _} =
                call!(client(), "list_tables", %{"data_source" => "nope"})

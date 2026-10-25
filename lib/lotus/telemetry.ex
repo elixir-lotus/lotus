@@ -173,6 +173,9 @@ defmodule Lotus.Telemetry do
     * `:operation` - The introspection operation (e.g., `:list_schemas`, `:list_tables`,
       `:describe_table`, `:get_table_stats`, `:list_relations`)
     * `:source` - The data source name
+    * `:context` - The caller-supplied context (or `nil`)
+    * `:scope` - The caller-supplied scope (or `nil`)
+    * `:table` - The table name, for `:describe_table` and `:get_table_stats`
 
   ### `[:lotus, :schema, :introspection, :stop]`
 
@@ -184,8 +187,7 @@ defmodule Lotus.Telemetry do
 
   **Metadata:**
 
-    * `:operation` - The introspection operation
-    * `:source` - The data source name
+    * `:operation`, `:source`, `:context`, `:scope` and `:table` - As on start
     * `:result` - `:ok` or `:error`
 
   ## Content Events
@@ -259,6 +261,8 @@ defmodule Lotus.Telemetry do
     * `:feature` - `:generation`, `:optimization` or `:explanation`
     * `:model` - The model string, such as `"openai:gpt-4o"`
     * `:data_source` - The data source name
+    * `:prompt` - What the caller asked: the question for `:generation`,
+      the statement (and any hint) for `:optimization` and `:explanation`
     * `:context` - The caller-supplied context (or `nil`)
     * `:scope` - The caller-supplied scope (or `nil`)
 
@@ -275,6 +279,8 @@ defmodule Lotus.Telemetry do
     * `:tool_calls` - The names of the tools the model called, in order and
       with repeats, such as `["list_tables", "describe_table"]`
     * `:iterations` - The number of rounds, each one call to the provider
+    * `:response` - The text of the model's final answer, `nil` when it has
+      none (it stopped at the most rounds asking for tools)
 
   ### `[:lotus, :ai, :request, :exception]`
 
@@ -283,9 +289,30 @@ defmodule Lotus.Telemetry do
 
   **Measurements:** `:duration`, and the summed tokens as on `:stop`.
 
-  **Metadata:** the stop metadata plus:
+  **Metadata:** the stop metadata, without `:response`, plus:
 
     * `:reason` - The error the caller receives
+
+  ## MCP Events
+
+  ### `[:lotus, :mcp, :call]`
+
+  Emitted once for every tool call and resource read of `Lotus.MCP`, after
+  it answers. The statements, discovery and content changes a call makes
+  emit their own events, with the same `:context`. Compiled only with
+  `:sake`, as `Lotus.MCP` is.
+
+  **Measurements:** `:duration` (native units).
+
+  **Metadata:**
+
+    * `:kind` - `:tool` or `:resource`
+    * `:name` - The tool's name (`"run_sql"`) or the resource's URI
+    * `:arguments` - The tool's arguments, or the resource template's
+      parameters
+    * `:status` - `:ok`, or `:error` when the tool answered with an error
+    * `:context` - The context Lotus ran the call with (see `Lotus.MCP`)
+    * `:scope` - The scope it ran the call with
 
   ## Schedule Events
 
@@ -634,25 +661,26 @@ defmodule Lotus.Telemetry do
   end
 
   @doc false
-  def schema_introspection_start(operation, source) do
+  def schema_introspection_start(operation, source, observed \\ %{}) do
     start_time = System.monotonic_time()
 
-    :telemetry.execute(@schema_start, %{system_time: System.system_time()}, %{
-      operation: operation,
-      source: source
-    })
+    :telemetry.execute(
+      @schema_start,
+      %{system_time: System.system_time()},
+      Map.merge(observed, %{operation: operation, source: source})
+    )
 
     start_time
   end
 
   @doc false
-  def schema_introspection_stop(start_time, operation, source, result_status) do
+  def schema_introspection_stop(start_time, operation, source, result_status, observed \\ %{}) do
     duration = System.monotonic_time() - start_time
 
-    :telemetry.execute(@schema_stop, %{duration: duration}, %{
-      operation: operation,
-      source: source,
-      result: result_status
-    })
+    :telemetry.execute(
+      @schema_stop,
+      %{duration: duration},
+      Map.merge(observed, %{operation: operation, source: source, result: result_status})
+    )
   end
 end

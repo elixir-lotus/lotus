@@ -191,6 +191,7 @@ defmodule Lotus.AI.RequestHooksTest do
                feature: :generation,
                model: "openai:gpt-4o",
                data_source: "postgres",
+               prompt: "Show active users",
                context: @context,
                scope: @scope
              }
@@ -199,6 +200,7 @@ defmodule Lotus.AI.RequestHooksTest do
       assert %{prompt_tokens: 150, completion_tokens: 50, total_tokens: 200} = measurements
       assert is_integer(measurements.duration)
       assert %{usage: ^usage, tool_calls: [], iterations: 1, feature: :generation} = stop
+      assert is_binary(stop.response)
     end
 
     test "the usage of every round of the tool loop is summed, and the tools listed" do

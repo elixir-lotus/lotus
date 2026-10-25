@@ -93,5 +93,9 @@ if Code.ensure_loaded?(Sake.Server) do
     resources [Lotus.MCP.Resources.Query, Lotus.MCP.Resources.Dashboard]
 
     middleware :after_list, [Lotus.MCP.Authorize]
+    middleware :before_call, [Lotus.MCP.Observe]
+    middleware :after_call, [Lotus.MCP.Observe]
+    middleware :before_read, [Lotus.MCP.Observe]
+    middleware :after_read, [Lotus.MCP.Observe]
   end
 end

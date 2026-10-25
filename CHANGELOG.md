@@ -42,6 +42,14 @@
 
 ### Added
 
+- **Telemetry an audit log can rest on.** Schema introspection events carry
+  the caller's `:context` and `:scope` (and `:table` for `describe_table` and
+  `get_table_stats`), so a consumer knows who browsed what. AI request events
+  carry the `:prompt`, and `:stop` the text of the model's `:response`. Every
+  tool call and resource read of `Lotus.MCP` emits `[:lotus, :mcp, :call]`
+  with the tool or resource, its arguments, whether it failed, how long it
+  took and the actor it ran as. See `Lotus.Telemetry`.
+
 - **What a caller reads, narrowed by middleware.** `Lotus.list_queries/1`,
   `Lotus.Storage.list_queries_by/1`, `Lotus.get_query/2`,
   `Lotus.list_dashboards/1`, `Lotus.list_dashboards_by/1` and

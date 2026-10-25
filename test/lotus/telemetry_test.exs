@@ -200,13 +200,21 @@ defmodule Lotus.TelemetryTest do
         nil
       )
 
-      {:ok, _schema} = Lotus.Schema.describe_table("sqlite", "products")
+      {:ok, _schema} =
+        Lotus.Schema.describe_table("sqlite", "products", context: :ana, scope: :acme)
 
       assert_received {:telemetry, [:lotus, :schema, :introspection, :start], _,
-                       %{operation: :describe_table, source: "sqlite"}}
+                       %{operation: :describe_table, source: "sqlite", table: "products"}}
 
       assert_received {:telemetry, [:lotus, :schema, :introspection, :stop], %{duration: _},
-                       %{operation: :describe_table, source: "sqlite", result: :ok}}
+                       %{
+                         operation: :describe_table,
+                         source: "sqlite",
+                         result: :ok,
+                         table: "products",
+                         context: :ana,
+                         scope: :acme
+                       }}
 
       :telemetry.detach("#{inspect(ref)}")
     end
