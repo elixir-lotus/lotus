@@ -30,7 +30,7 @@ if Code.ensure_loaded?(Sake.Server) do
       window = Support.window(args[:rows_per_card] || 50, 0)
       filter_values = Support.vars(args[:filter_values])
 
-      with {:ok, dashboard} <- Support.fetch_dashboard(id),
+      with {:ok, dashboard} <- Support.fetch_dashboard(id, ctx),
            cards = Enum.filter(Support.dashboard_cards(dashboard), &(&1.card_type == :query)),
            :ok <- not_too_many(cards) do
         opts =

@@ -14,8 +14,8 @@ if Code.ensure_loaded?(Sake.Server) do
     alias Lotus.MCP.Support
 
     @impl true
-    def execute(%{id: id}, _ctx) do
-      case Support.fetch_dashboard(id) do
+    def execute(%{id: id}, ctx) do
+      case Support.fetch_dashboard(id, ctx) do
         {:ok, dashboard} -> {:ok, Support.dashboard_detail(dashboard)}
         {:error, message} -> {:error, message}
       end

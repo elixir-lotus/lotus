@@ -16,11 +16,11 @@ if Code.ensure_loaded?(Sake.Server) do
     alias Lotus.MCP.Support
 
     @impl true
-    def execute(args, _ctx) do
+    def execute(args, ctx) do
       queries =
         case args[:search] do
-          nil -> Lotus.list_queries()
-          term -> Lotus.Storage.list_queries_by(search: term)
+          nil -> Lotus.list_queries(Support.actor_opts(ctx))
+          term -> Lotus.Storage.list_queries_by([search: term] ++ Support.actor_opts(ctx))
         end
 
       exposed = Enum.filter(queries, &Support.exposed?/1)

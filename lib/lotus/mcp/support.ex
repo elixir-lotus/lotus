@@ -58,6 +58,11 @@ if Code.ensure_loaded?(Sake.Server) do
     defp get(actor, key) when is_map(actor), do: Map.fetch!(actor, key)
     defp get(actor, key), do: Keyword.fetch!(actor, key)
 
+    # The principal's `:context` and `:scope`, from Sake's context or as
+    # `actor_opts/1` gave them.
+    defp lookup_opts(actor) when is_list(actor), do: actor
+    defp lookup_opts(ctx), do: actor_opts(ctx)
+
     @doc "The data sources the endpoint exposes: `data_sources:` in the config, or all."
     @spec data_source_names() :: [String.t()]
     def data_source_names do
@@ -87,10 +92,14 @@ if Code.ensure_loaded?(Sake.Server) do
            "Unknown data source #{inspect(name)}. Call list_data_sources for the ones available."}
     end
 
-    @doc "A saved query that runs against a data source the endpoint exposes."
-    @spec fetch_query(term()) :: {:ok, Lotus.Storage.Query.t()} | {:error, String.t()}
-    def fetch_query(id) do
-      with %{} = query <- Lotus.get_query(id),
+    @doc """
+    A saved query the principal may read (`:list_content`), that runs against
+    a data source the endpoint exposes. Without a principal, any saved query.
+    """
+    @spec fetch_query(term(), Sake.Context.t() | keyword()) ::
+            {:ok, Lotus.Storage.Query.t()} | {:error, String.t()}
+    def fetch_query(id, ctx_or_actor \\ []) do
+      with %{} = query <- Lotus.get_query(id, lookup_opts(ctx_or_actor)),
            true <- exposed?(query) do
         {:ok, query}
       else
@@ -102,10 +111,11 @@ if Code.ensure_loaded?(Sake.Server) do
     @spec exposed?(Lotus.Storage.Query.t()) :: boolean()
     def exposed?(query), do: match?({:ok, _}, data_source(query.data_source))
 
-    @doc "A dashboard by id."
-    @spec fetch_dashboard(term()) :: {:ok, Lotus.Storage.Dashboard.t()} | {:error, String.t()}
-    def fetch_dashboard(id) do
-      case Lotus.get_dashboard(id) do
+    @doc "A dashboard by id, that the principal (if any) may read (`:list_content`)."
+    @spec fetch_dashboard(term(), Sake.Context.t() | keyword()) ::
+            {:ok, Lotus.Storage.Dashboard.t()} | {:error, String.t()}
+    def fetch_dashboard(id, ctx_or_actor \\ []) do
+      case Lotus.get_dashboard(id, lookup_opts(ctx_or_actor)) do
         nil -> {:error, "No dashboard with id #{inspect(id)}"}
         dashboard -> {:ok, dashboard}
       end

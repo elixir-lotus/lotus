@@ -41,7 +41,7 @@ if Code.ensure_loaded?(Sake.Server) do
     def execute(%{dashboard_id: id} = args, ctx) do
       actor = Support.actor_opts(ctx)
 
-      with {:ok, dashboard} <- Support.fetch_dashboard(id),
+      with {:ok, dashboard} <- Support.fetch_dashboard(id, ctx),
            {:ok, attrs} <- attrs(args[:type] || "query", args, actor),
            cards = Lotus.list_dashboard_cards(dashboard.id),
            {:ok, card} <-
@@ -57,7 +57,7 @@ if Code.ensure_loaded?(Sake.Server) do
     end
 
     defp attrs("query", %{query_id: query_id} = args, actor) when is_integer(query_id) do
-      with {:ok, query} <- Support.fetch_query(query_id),
+      with {:ok, query} <- Support.fetch_query(query_id, actor),
            {:ok, config} <- chart(query, args, actor) do
         {:ok,
          %{

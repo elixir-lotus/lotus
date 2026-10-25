@@ -24,7 +24,7 @@ if Code.ensure_loaded?(Sake.Server) do
 
     @impl true
     def execute(%{id: id} = args, ctx) do
-      with {:ok, query} <- Support.fetch_query(id),
+      with {:ok, query} <- Support.fetch_query(id, ctx),
            {:ok, attrs} <- attrs(args),
            :ok <-
              Support.read_only_statement(

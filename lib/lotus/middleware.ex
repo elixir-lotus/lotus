@@ -31,6 +31,7 @@ defmodule Lotus.Middleware do
   | `:before_content_change` | Before a query, visualization, dashboard, card, filter or filter mapping is created, updated, deleted, shared or reordered | `:op`, `:resource`, `:record`, `:changeset`, `:context` |
   | `:after_content_change` | After that change is written | `:op`, `:resource`, `:record`, `:changes`, `:context` |
   | `:before_ai_request` | Before an AI function sends its request to the model | `:feature`, `:model`, `:data_source`, `:prompt`, `:system_prompt`, `:context`, `:scope` |
+  | `:list_content` | Before queries or dashboards are listed or got for a caller (`context:`) | `:resource`, `:query`, `:context`, `:scope` |
 
   ### Query event ordering
 
@@ -275,6 +276,26 @@ defmodule Lotus.Middleware do
   bracket each request that reaches the model, with its token usage and the
   tools the model called. See `Lotus.Telemetry`.
 
+  ### Listing content
+
+  The queries and dashboards a caller reads go through `:list_content`:
+  `Lotus.list_queries/1`, `Lotus.Storage.list_queries_by/1`,
+  `Lotus.get_query/2`, `Lotus.list_dashboards/1`,
+  `Lotus.list_dashboards_by/1` and `Lotus.get_dashboard/2`, with the
+  caller's `context:`. MCP's tools and resources pass it. Without
+  `context:`, the event does not fire, so Lotus's own lookups (the scheduler,
+  a saved query run by id) read everything.
+
+    * `:resource` is `:query` or `:dashboard`.
+    * `:query` is the `Ecto.Query` Lotus is about to run, with the caller's
+      own filters (`:search`, `:owner_id`, `:tenant_id`) on it.
+
+  A plug narrows what the caller reads by continuing with a narrower
+  `:query`, such as one with a `where` on the caller's id: a list then lists
+  what the query finds, and a get finds a record only when the query does,
+  else `nil` (or `Ecto.NoResultsError` from the `!` variants). A halt reads
+  nothing. A `:query` that is not an `Ecto.Query` is ignored.
+
   ## Configuration
 
       config :lotus,
@@ -311,6 +332,7 @@ defmodule Lotus.Middleware do
           | :before_content_change
           | :after_content_change
           | :before_ai_request
+          | :list_content
 
   @typedoc """
   The error reason a mutation function returns when a `:before_content_change`

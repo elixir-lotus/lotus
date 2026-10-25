@@ -13,8 +13,8 @@ if Code.ensure_loaded?(Sake.Server) do
     alias Lotus.MCP.Support
 
     @impl true
-    def execute(%{id: id}, _ctx) do
-      case Support.fetch_query(id) do
+    def execute(%{id: id}, ctx) do
+      case Support.fetch_query(id, ctx) do
         {:ok, query} -> {:ok, Support.query_detail(query)}
         {:error, message} -> {:error, message}
       end

@@ -12,9 +12,9 @@ if Code.ensure_loaded?(Sake.Server) do
     alias Lotus.MCP.Support
 
     @impl true
-    def read(%{id: id}, _ctx) do
+    def read(%{id: id}, ctx) do
       with {id, ""} <- Integer.parse(id),
-           {:ok, query} <- Support.fetch_query(id) do
+           {:ok, query} <- Support.fetch_query(id, ctx) do
         {:ok, Support.query_detail(query)}
       else
         _ -> {:error, :not_found}
@@ -22,8 +22,8 @@ if Code.ensure_loaded?(Sake.Server) do
     end
 
     @impl true
-    def list(_ctx) do
-      Lotus.list_queries()
+    def list(ctx) do
+      Lotus.list_queries(Support.actor_opts(ctx))
       |> Enum.filter(&Support.exposed?/1)
       |> Enum.take(Support.list_limit())
       |> Enum.map(fn query ->

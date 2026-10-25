@@ -62,6 +62,7 @@ defmodule Lotus.Dashboards do
     DashboardCard,
     DashboardCardFilterMapping,
     DashboardFilter,
+    Listing,
     Mutation,
     Ownership
   }
@@ -93,7 +94,9 @@ defmodule Lotus.Dashboards do
   def list_dashboards(opts \\ []) do
     preloads = Keyword.get(opts, :preload, [])
 
-    from(d in Dashboard, order_by: [asc: d.name], preload: ^preloads)
+    dashboards = Listing.narrow(Dashboard, :dashboard, opts)
+
+    from(d in dashboards, order_by: [asc: d.name], preload: ^preloads)
     |> Lotus.repo().all()
   end
 
@@ -107,6 +110,9 @@ defmodule Lotus.Dashboards do
     * `:owner_id` - Only the dashboards of this owner: an id, `nil` for the
       dashboards without one, or a list of either
     * `:tenant_id` - Only the dashboards of this tenant, as `:owner_id`
+    * `:context` - The caller, for the `:list_content` middleware, which
+      narrows the list to what they may read. Without it, every dashboard
+      is listed.
 
   ## Examples
 
@@ -121,8 +127,8 @@ defmodule Lotus.Dashboards do
   def list_dashboards_by(opts \\ []) do
     preloads = Keyword.get(opts, :preload, [])
 
-    q =
-      from(d in Ownership.filter(Dashboard, opts), order_by: [asc: d.name], preload: ^preloads)
+    dashboards = Dashboard |> Ownership.filter(opts) |> Listing.narrow(:dashboard, opts)
+    q = from(d in dashboards, order_by: [asc: d.name], preload: ^preloads)
 
     q =
       case Keyword.get(opts, :search) do
@@ -140,21 +146,23 @@ defmodule Lotus.Dashboards do
   @doc """
   Gets a single dashboard by ID.
 
-  Returns `nil` if the dashboard does not exist.
+  Returns `nil` if the dashboard does not exist, or, with `context:`, if
+  the `:list_content` middleware does not let that caller read it.
   """
-  @spec get_dashboard(id()) :: Dashboard.t() | nil
-  def get_dashboard(id) do
-    Lotus.repo().get(Dashboard, id)
+  @spec get_dashboard(id(), keyword()) :: Dashboard.t() | nil
+  def get_dashboard(id, opts \\ []) do
+    Dashboard |> Listing.narrow(:dashboard, opts) |> Lotus.repo().get(id)
   end
 
   @doc """
-  Gets a single dashboard by ID.
+  Gets a single dashboard by ID, as `get_dashboard/2`.
 
-  Raises `Ecto.NoResultsError` if the dashboard does not exist.
+  Raises `Ecto.NoResultsError` if the dashboard does not exist, or the caller
+  may not read it.
   """
-  @spec get_dashboard!(id()) :: Dashboard.t() | no_return()
-  def get_dashboard!(id) do
-    Lotus.repo().get!(Dashboard, id)
+  @spec get_dashboard!(id(), keyword()) :: Dashboard.t() | no_return()
+  def get_dashboard!(id, opts \\ []) do
+    Dashboard |> Listing.narrow(:dashboard, opts) |> Lotus.repo().get!(id)
   end
 
   @doc """
