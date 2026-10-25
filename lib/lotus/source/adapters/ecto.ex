@@ -335,15 +335,29 @@ defmodule Lotus.Source.Adapters.Ecto do
       @connection_repo EctoAdapter.__define_repo__(__MODULE__, @dialect.ecto_adapter(), __ENV__)
       @connection_test Keyword.get(unquote(connection_ast), :test, :connect)
 
-      @impl Lotus.Source.Adapter.Connection
-      def connection do
-        if @connection_repo,
+      # Decided as the module compiles: whether the Ecto adapter is there.
+      if @connection_repo do
+        @impl Lotus.Source.Adapter.Connection
+        def connection,
           do: unquote(connection_ast) |> Keyword.take([:kind, :label, :fields]) |> Map.new()
-      end
 
-      @impl Lotus.Source.Adapter.Connection
-      def from_settings(name, settings) do
-        EctoAdapter.settings_state(__MODULE__, @connection_repo, name, settings, @connection_test)
+        @impl Lotus.Source.Adapter.Connection
+        def from_settings(name, settings) do
+          EctoAdapter.settings_state(
+            __MODULE__,
+            @connection_repo,
+            name,
+            settings,
+            @connection_test
+          )
+        end
+      else
+        @impl Lotus.Source.Adapter.Connection
+        def connection, do: nil
+
+        @impl Lotus.Source.Adapter.Connection
+        def from_settings(_name, _settings),
+          do: {:error, "The database library this kind of source needs is not installed."}
       end
 
       @impl Lotus.Source.Adapter
@@ -1049,14 +1063,9 @@ defmodule Lotus.Source.Adapters.Ecto do
   @doc false
   # The state of a source connected from settings: its repo runs under
   # `Lotus.Source.Supervisor`, registered under the source's name.
-  @spec settings_state(module(), module() | nil, String.t(), keyword(), :connect | :query) ::
-          {:ok, dynamic_state()} | {:error, String.t()}
-  def settings_state(adapter_module, repo, name, settings, test \\ :connect)
-
-  def settings_state(_adapter_module, nil, _name, _settings, _test),
-    do: {:error, "The database library this kind of source needs is not installed."}
-
-  def settings_state(adapter_module, repo, name, settings, test) do
+  @spec settings_state(module(), module(), String.t(), keyword(), :connect | :query) ::
+          {:ok, dynamic_state()}
+  def settings_state(adapter_module, repo, name, settings, test \\ :connect) do
     state = %{
       repo: repo,
       dynamic: Lotus.Source.Registry.via(adapter_module, name),
