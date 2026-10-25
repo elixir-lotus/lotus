@@ -257,6 +257,19 @@
 
 ### Fixed
 
+- **Column policies no longer refuse two kinds of statements that read no
+  whole row.** With a column policy on a table, Lotus refused, as "reads
+  whole rows":
+  - a sort by an output column named like a table
+    (`count(*) AS users ... ORDER BY users`). A whole `ORDER BY` item that
+    names an output column of its own query now passes, as the database
+    sorts by the column. Inside an expression, in `GROUP BY` or in a window,
+    the name is still taken for the row;
+  - the alias of `generate_series` or `generate_subscripts` in FROM
+    (`generate_series(...) AS week`, `AS w(week)`), which names a number or a
+    time. Any other function's alias is still taken for a row, since the
+    check can't know what a function returns.
+
 - **A conversation that holds an explanation, optimization suggestions or a
   provider error no longer crashes the next request.**
   `Lotus.AI.Conversation.build_context_messages/4` raised a `CaseClauseError`
