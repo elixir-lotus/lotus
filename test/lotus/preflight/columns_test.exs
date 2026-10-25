@@ -93,9 +93,52 @@ defmodule Lotus.Preflight.ColumnsTest do
 
     test "fails closed on the alias of a function in FROM" do
       assert {:error, "Query reads whole rows of g" <> _} =
-               check("SELECT u.name, g FROM users u, generate_series(1, 3) g")
+               check("SELECT u.name, g FROM users u, get_users() g")
+
+      assert {:error, "Query renames the columns " <> _} =
+               check("SELECT g.a FROM users u, get_users() AS g(a, b)")
 
       assert :ok = check("SELECT u.name, g.n FROM users u, generate_series(1, 3) AS g")
+    end
+
+    for sql <- [
+          "SELECT u.name, g FROM users u, generate_series(1, 3) g",
+          "SELECT week, count(u.id) FROM generate_series(1, 3) AS week JOIN users u ON u.id < week GROUP BY week",
+          "SELECT w.week FROM users u, generate_series(1, 3) AS w(week)",
+          "SELECT i FROM users u, generate_subscripts(ARRAY[1, 2], 1) AS i"
+        ] do
+      test "passes the alias of a function whose rows are values: #{sql}" do
+        assert :ok = check(unquote(sql))
+      end
+    end
+
+    test "still checks a scalar function's arguments" do
+      assert {:error, "Query uses protected column ssn" <> _} =
+               check("SELECT g FROM users u, generate_series(1, length(u.ssn)) g")
+    end
+
+    for sql <- [
+          "SELECT name, count(*) AS users FROM users GROUP BY name ORDER BY users DESC",
+          "SELECT name, count(*) AS users FROM users GROUP BY 1 ORDER BY users",
+          "SELECT name AS u FROM users u ORDER BY u NULLS LAST, name",
+          "SELECT count(*) AS users FROM users ORDER BY name, users DESC LIMIT 5",
+          "SELECT name AS users FROM users UNION SELECT name FROM users ORDER BY users"
+        ] do
+      test "passes a sort by an output column named as a table: #{sql}" do
+        assert :ok = check(unquote(sql))
+      end
+    end
+
+    for sql <- [
+          "SELECT name FROM users ORDER BY users",
+          "SELECT count(*) AS users FROM users ORDER BY users || ''",
+          "SELECT count(*) AS users FROM users GROUP BY users",
+          "SELECT (SELECT count(*) AS users FROM users) AS n FROM users ORDER BY users",
+          "SELECT name, row_number() OVER (ORDER BY users) AS users FROM users"
+        ] do
+      test "refuses a sort by a table's whole row: #{sql}" do
+        assert {:error, "Query reads whole rows of users" <> _} = check(unquote(sql))
+      end
     end
   end
 
