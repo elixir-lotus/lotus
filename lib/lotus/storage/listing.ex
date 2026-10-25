@@ -23,7 +23,8 @@ defmodule Lotus.Storage.Listing do
         resource: resource,
         query: query,
         context: opts[:context],
-        scope: opts[:scope]
+        scope: opts[:scope],
+        filter: opts[:filter]
       }
 
       case Middleware.run(:list_content, payload) do

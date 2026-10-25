@@ -80,6 +80,12 @@ defmodule Lotus.Dashboards do
   ## Options
 
     * `:preload` - A list of associations to preload (e.g., `[:cards]`)
+    * `:context` - The caller, for the `:list_content` middleware, which
+      narrows the list to what they may read. Without it, every dashboard
+      is listed.
+    * `:filter` - A term Lotus does not read, handed to the `:list_content`
+      middleware as `:filter`: what the caller asked to list ("shared with
+      me"), for a plug that knows it.
 
   ## Examples
 
@@ -113,6 +119,9 @@ defmodule Lotus.Dashboards do
     * `:context` - The caller, for the `:list_content` middleware, which
       narrows the list to what they may read. Without it, every dashboard
       is listed.
+    * `:filter` - A term Lotus does not read, handed to the `:list_content`
+      middleware as `:filter`: what the caller asked to list ("shared with
+      me"), for a plug that knows it.
 
   ## Examples
 

@@ -84,6 +84,19 @@ defmodule Lotus.MiddlewareListContentTest do
       assert_raise Ecto.NoResultsError, fn -> Lotus.get_dashboard!(other.id, as_ana) end
     end
 
+    test "hands the list's filter to the plugs, untouched", %{ana: ana} do
+      as_ana = [context: %{user_id: "ana"}, filter: {:shared_with, "ana"}]
+
+      Lotus.list_queries(as_ana)
+      assert_received {:list_content, %{resource: :query, filter: {:shared_with, "ana"}}}
+
+      Lotus.list_dashboards_by(as_ana)
+      assert_received {:list_content, %{resource: :dashboard, filter: {:shared_with, "ana"}}}
+
+      Lotus.get_query(ana.id, context: %{user_id: "ana"})
+      assert_received {:list_content, %{filter: nil}}
+    end
+
     test "keeps the caller's own filters", %{ben: ben} do
       as_ben = [context: %{user_id: "ben"}]
       assert Storage.list_queries_by([owner_id: "ana"] ++ as_ben) == []
