@@ -48,7 +48,7 @@ defmodule Lotus.Query.Tokenizer do
       special: the literal is an ordinary string after the prefix.
     * **Quoted identifiers.** Each of the profile's `identifier_quotes` opens
       an identifier that the same quote closes; a doubled quote stays
-      inside (`"a""b"`, `` `a``b` ``). Backslashes never escape.
+      inside (`"a""b"`, ``` `a``b` ```). Backslashes never escape.
     * **Bracket identifiers.** With `bracket_identifiers?` (SQLite), a
       single `[` opens an identifier that the first `]` closes, with no
       escapes (`[my col]`). A `[[` that opens a Lotus block (below) takes
