@@ -26,6 +26,13 @@ defmodule Lotus.Preflight.Columns do
       `GROUPING SETS`), which reveals how its values order or repeat, or by a
       position it can't match to a select item (at or after a `*`).
 
+  A column is protected by name, whatever relation it is read from, unless
+  the name is qualified (`o.ssn`, `orders.ssn`, `public.orders.ssn`) by a
+  relation the check can tell for sure: an alias or table name bound exactly
+  once in the statement's FROM and JOIN clauses, standing nowhere else, to a
+  table preflight found (not a CTE, derived table or function). Such a name
+  reads that table's column, protected only if a policy for that table is.
+
   The check reads tokens, not a parse tree, so it fails closed: whatever it
   can't prove keeps the name is refused. `SELECT *` and `SELECT t.*` pass,
   since the result keeps the column names. A name that is a whole `ORDER BY`
@@ -73,14 +80,13 @@ defmodule Lotus.Preflight.Columns do
           :ok | {:error, String.t()}
   def check(sql, %Profile{} = profile, %Matcher{} = matcher, relations) when is_binary(sql) do
     rels = Relations.to_list(relations)
-    protected? = &protected?(matcher, rels, &1)
     restricted? = Matcher.restricts_columns?(matcher, rels)
 
     if restricted? do
       sql
       |> lex(profile)
       |> annotate()
-      |> verify(protected?)
+      |> verify(matcher, rels)
     else
       :ok
     end
@@ -123,6 +129,14 @@ defmodule Lotus.Preflight.Columns do
       else: {Enum.reverse([name | acc]), at(out, i + 1)}
   end
 
+  # A name qualified by a relation preflight found (`o.ssn` with `orders o`)
+  # reads that relation's column, protected only if a policy for it is. Any
+  # other name may read any relation's column of that name.
+  defp protected?(matcher, rels, name, nil), do: protected?(matcher, rels, name)
+
+  defp protected?(matcher, rels, name, relation),
+    do: protected?(matcher, rels, name) and protected?(matcher, [relation], name)
+
   defp protected?(matcher, rels, name) do
     Enum.any?(Enum.uniq([name, String.downcase(name)]), fn n ->
       case Visibility.column_policy_for(matcher, rels, n) do
@@ -131,6 +145,126 @@ defmodule Lotus.Preflight.Columns do
       end
     end)
   end
+
+  # `t.*` over a relation with no protected column, wherever it stands.
+  defp safe_star?(_matcher, nil), do: false
+  defp safe_star?(matcher, relation), do: not Matcher.restricts_columns?(matcher, [relation])
+
+  # ---------------------------------------------------------------------------
+  # Qualifiers: the relation a qualified name reads, when it can be told
+  # ---------------------------------------------------------------------------
+
+  # What the statement binds in FROM and JOIN, by lowercase name: a table
+  # (`{:table, path}`, under its alias or else its name) or something whose
+  # columns can be anything (`:opaque`: a CTE, a derived table, a function);
+  # and how often each name stands anywhere but before a dot.
+  defp sources(out, ctes) do
+    Enum.reduce(0..(tuple_size(out) - 1)//1, {%{}, %{}}, fn i, {bindings, counts} ->
+      counts =
+        case elem(out, i) do
+          {{:name, name}, _reaches?, _clause, _level} ->
+            if at(out, i + 1) == ".",
+              do: counts,
+              else: Map.update(counts, String.downcase(name), 1, &(&1 + 1))
+
+          _ ->
+            counts
+        end
+
+      case binding_at(out, i, ctes) do
+        nil -> {bindings, counts}
+        {name, target} -> {Map.update(bindings, name, [target], &[target | &1]), counts}
+      end
+    end)
+  end
+
+  defp binding_at(out, i, ctes) do
+    case elem(out, i) do
+      {{:name, _}, _reaches?, :from, _level} ->
+        if at(out, i - 1) in @table_starts, do: table_binding(out, i, ctes)
+
+      {")", _reaches?, _clause, _level} ->
+        with {_lexeme, _reaches?, :from, _level} <- raw_at(out, i + 1),
+             name when is_binary(name) <- alias_at(out, i + 1) do
+          {String.downcase(name), :opaque}
+        else
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp table_binding(out, i, ctes) do
+    {path, j} = path_at(out, i, [])
+    path = Enum.map(path, &String.downcase/1)
+
+    cond do
+      at(out, j) == "(" -> nil
+      cte?(path, ctes) -> {alias_at(out, j, List.last(path)), :opaque}
+      true -> {alias_at(out, j, List.last(path)), {:table, path}}
+    end
+  end
+
+  defp path_at(out, i, acc) do
+    {:name, name} = at(out, i)
+
+    if at(out, i + 1) == "." and name?(at(out, i + 2)),
+      do: path_at(out, i + 2, [name | acc]),
+      else: {Enum.reverse([name | acc]), i + 1}
+  end
+
+  defp alias_at(out, j, default) do
+    case alias_at(out, j) do
+      nil -> default
+      name -> String.downcase(name)
+    end
+  end
+
+  defp alias_at(out, j) do
+    case {at(out, j), at(out, j + 1)} do
+      {{:kw, "as"}, {:name, name}} -> name
+      {{:name, name}, _next} -> name
+      _ -> nil
+    end
+  end
+
+  # The relation of `rels` a qualifier (`[alias]`, `[table]` or
+  # `[schema, table]`) names, or nil when it can't be told for sure: the name
+  # is bound more than once, or stands elsewhere too (a column, another
+  # alias), or binds no table preflight found, exactly once.
+  defp resolve([], _sources, _rels), do: nil
+
+  defp resolve(qualifier, {bindings, counts}, rels) when length(qualifier) <= 2 do
+    [name | _] = path = qualifier |> Enum.map(&String.downcase/1) |> Enum.reverse()
+
+    with [{:table, table}] <- Map.get(bindings, name),
+         1 <- Map.get(counts, name),
+         {:ok, path} <- relation_path(Enum.reverse(path), table),
+         [relation] <- Enum.filter(rels, &relation?(&1, path)) do
+      relation
+    else
+      _ -> nil
+    end
+  end
+
+  defp resolve(_qualifier, _sources, _rels), do: nil
+
+  # `[alias]` names the table it is bound to; `[schema, table]` names a table
+  # bound under its own name.
+  defp relation_path([_alias], table), do: {:ok, table}
+  defp relation_path([_schema, name] = path, table) when table in [[name], path], do: {:ok, path}
+  defp relation_path(_qualifier, _table), do: :error
+
+  defp relation?({_schema, table}, [name]), do: String.downcase(table) == name
+
+  defp relation?({schema, table}, [schema_name, name]),
+    do:
+      is_binary(schema) and String.downcase(schema) == schema_name and
+        String.downcase(table) == name
+
+  defp relation?(_relation, _path), do: false
 
   # ---------------------------------------------------------------------------
   # Lexing: code becomes words and punctuation; literals and comments drop out
@@ -351,16 +485,31 @@ defmodule Lotus.Preflight.Columns do
   # Verification
   # ---------------------------------------------------------------------------
 
-  defp verify(%{alias_list?: true}, _protected?) do
+  defp verify(%{alias_list?: true}, _matcher, _rels) do
     {:error,
      "Query renames the columns of a table with protected columns through a column " <>
        "alias list, which Lotus can't check against column policies. Alias columns in " <>
        "the select list instead."}
   end
 
-  defp verify(%{out: out} = state, protected?) do
+  defp verify(%{out: out} = state, matcher, rels) do
+    sources = sources(out, state.ctes)
+    protected? = &protected?(matcher, rels, &1, resolve(&2, sources, rels))
+    state = Map.put(state, :safe_star?, &safe_star?(matcher, resolve(&1, sources, rels)))
+
     0..(tuple_size(out) - 1)//1
     |> Enum.find_value(:ok, fn i -> check_at(out, i, state, protected?) end)
+  end
+
+  # The names before `i`'s, each followed by a dot: `[schema, table]` for
+  # `schema.table.column`.
+  defp qualifier_at(out, i) do
+    if at(out, i - 1) == "." and name?(at(out, i - 2)) do
+      {:name, name} = at(out, i - 2)
+      qualifier_at(out, i - 2) ++ [name]
+    else
+      []
+    end
   end
 
   defp check_at(out, i, state, protected?) do
@@ -372,7 +521,7 @@ defmodule Lotus.Preflight.Columns do
         check_star(out, i, state)
 
       {:int, n} ->
-        check_position(out, i, n, protected?)
+        check_position(out, i, n, state, protected?)
 
       :escaped_name ->
         {:error,
@@ -387,7 +536,7 @@ defmodule Lotus.Preflight.Columns do
   defp check_name(out, i, name, state, protected?) do
     cond do
       definition?(out, i) -> nil
-      protected?.(name) -> check_protected(out, i, name, state)
+      protected?.(name, qualifier_at(out, i)) -> check_protected(out, i, name, state)
       whole_row?(out, i, name, state) -> whole_row_error(name)
       true -> nil
     end
@@ -480,9 +629,10 @@ defmodule Lotus.Preflight.Columns do
   # does an item of DISTINCT ON, ROLLUP, CUBE or GROUPING SETS, and one in
   # parentheses. The position must be a select item that is no protected
   # column, with no `*` up to it, whose width can't be known here.
-  defp check_position(out, i, n, protected?) do
+  defp check_position(out, i, n, state, protected?) do
     with {:ok, level} <- position_level(out, i),
-         {:error, message} <- position_item(out, level, String.to_integer(n), protected?) do
+         {:error, message} <-
+           position_item(out, level, String.to_integer(n), state.safe_star?, protected?) do
       {:error, "Query sorts or groups by position #{n}, " <> message}
     else
       _ -> nil
@@ -543,23 +693,56 @@ defmodule Lotus.Preflight.Columns do
 
   # Each select list of the query at `level` (a set operation has one per
   # branch): position `n` must be safe in all of them.
-  defp position_item(out, level, n, protected?) do
+  defp position_item(out, level, n, safe_star?, protected?) do
     case select_lists(out, level) do
       [] -> {:error, unknown_position()}
-      lists -> Enum.find_value(lists, :ok, &list_position(&1, n, protected?))
+      lists -> Enum.find_value(lists, :ok, &list_position(&1, n, safe_star?, protected?))
     end
   end
 
-  defp list_position(items, n, protected?) do
+  # Up to a `*` the position is the item's. From a `t.*` over a relation
+  # with no protected column (whose width isn't known here) it may be any
+  # later item, so all of those must be safe.
+  defp list_position(items, n, safe_star?, protected?) do
     {before, rest} = Enum.split(items, max(n - 1, 0))
 
-    cond do
-      n < 1 or rest == [] -> {:error, unknown_position()}
-      Enum.any?(before, &star_item?/1) or star_item?(hd(rest)) -> {:error, unknown_position()}
-      name = protected_item(hd(rest), protected?) -> {:error, protected_position(name)}
-      true -> nil
+    case Enum.split_while(before, &(not star_item?(&1))) do
+      _ when n < 1 ->
+        {:error, unknown_position()}
+
+      {_before, []} when rest == [] ->
+        {:error, unknown_position()}
+
+      {_before, []} ->
+        if star_item?(hd(rest)),
+          do: items_position(rest, safe_star?, protected?),
+          else: item_position(hd(rest), protected?)
+
+      {_before, from_star} ->
+        items_position(from_star ++ rest, safe_star?, protected?)
     end
   end
+
+  defp item_position(item, protected?) do
+    if name = protected_item(item, protected?), do: {:error, protected_position(name)}
+  end
+
+  defp items_position(items, safe_star?, protected?) do
+    if Enum.all?(items, &safe_item?(&1, safe_star?, protected?)),
+      do: nil,
+      else: {:error, unknown_position()}
+  end
+
+  defp safe_item?(["*"], _safe_star?, _protected?), do: false
+
+  defp safe_item?(item, safe_star?, protected?) do
+    if star_item?(item),
+      do: item |> Enum.drop(-2) |> Enum.flat_map(&name_of/1) |> safe_star?.(),
+      else: protected_item(item, protected?) == nil
+  end
+
+  defp name_of({:name, name}), do: [name]
+  defp name_of(_lexeme), do: []
 
   # The select items of each SELECT at `level`, as the lexemes of that level
   # (what nested parentheses hold is checked where it stands), without the
@@ -607,12 +790,27 @@ defmodule Lotus.Preflight.Columns do
 
   # The first protected name the item reads (an alias after AS reads none).
   defp protected_item(item, protected?) do
-    item
-    |> Enum.zip([:bof | item])
-    |> Enum.find_value(fn
-      {{:name, name}, prev} when prev != {:kw, "as"} -> if protected?.(name), do: name
-      _ -> nil
+    out = List.to_tuple(item)
+
+    Enum.find_value(0..(tuple_size(out) - 1)//1, fn i ->
+      case raw_at(out, i) do
+        {:name, name} ->
+          if raw_at(out, i - 1) != {:kw, "as"} and protected?.(name, item_qualifier(out, i)),
+            do: name
+
+        _ ->
+          nil
+      end
     end)
+  end
+
+  defp item_qualifier(out, i) do
+    if raw_at(out, i - 1) == "." and name?(raw_at(out, i - 2)) do
+      {:name, name} = raw_at(out, i - 2)
+      item_qualifier(out, i - 2) ++ [name]
+    else
+      []
+    end
   end
 
   defp protected_position(name) do

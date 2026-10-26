@@ -215,6 +215,102 @@ defmodule Lotus.Preflight.ColumnsTest do
     end
   end
 
+  describe "a name qualified by a relation without the protected column" do
+    @joined [{"public", "users"}, {"public", "orders"}]
+
+    for sql <- [
+          "SELECT o.ssn AS order_ssn FROM orders o JOIN users u ON u.id = o.user_id",
+          "SELECT upper(o.ssn) FROM orders o JOIN users u ON u.id = o.user_id WHERE o.ssn = '1' ORDER BY o.ssn",
+          "SELECT orders.ssn AS s FROM orders JOIN users ON users.id = orders.user_id",
+          "SELECT public.orders.ssn AS s FROM public.orders JOIN users ON true",
+          "SELECT public.orders.ssn AS s FROM orders JOIN users ON true",
+          "SELECT o.ssn AS s FROM public.orders AS o JOIN users u ON true",
+          "SELECT o.ssn AS s FROM orders o JOIN users o2 ON true",
+          "SELECT O.ssn AS s FROM Orders O JOIN users u ON true",
+          ~s(SELECT o."ssn" AS s FROM orders o JOIN users u ON true),
+          ~s(SELECT "o".ssn AS s FROM "orders" "o" JOIN users u ON true),
+          "SELECT o.SSN AS s FROM orders o JOIN users u ON true",
+          "SELECT name FROM users WHERE id IN (SELECT o.user_id FROM orders o WHERE o.ssn = '1')",
+          "SELECT o.ssn, u.name FROM orders o JOIN users u ON true ORDER BY 1",
+          "SELECT o.*, u.name FROM orders o JOIN users u ON true ORDER BY 3"
+        ] do
+      test "passes: #{sql}" do
+        assert :ok = check(unquote(sql), @postgres, @joined)
+      end
+    end
+
+    for sql <- [
+          # unqualified, or qualified by the protected relation
+          "SELECT ssn AS s FROM orders o JOIN users u ON u.id = o.user_id",
+          "SELECT u.ssn AS s FROM orders o JOIN users u ON u.id = o.user_id",
+          "SELECT o2.ssn AS s FROM orders o JOIN users o2 ON true",
+          "SELECT public.users.ssn AS s FROM public.users JOIN orders ON true",
+          # an alias named like another table
+          "SELECT o.ssn AS s FROM users o",
+          "SELECT orders.ssn AS s FROM users orders",
+          "SELECT orders.ssn AS s FROM users AS orders JOIN orders o ON true",
+          "SELECT orders.ssn AS s FROM orders o JOIN users u ON true",
+          # a CTE or derived table that can carry the column
+          "WITH orders AS (SELECT ssn FROM users) SELECT o.ssn AS s FROM orders o",
+          "WITH orders AS (SELECT ssn FROM users) SELECT orders.ssn AS s FROM orders",
+          ~s(WITH "Orders" AS (SELECT ssn FROM users\) SELECT o.ssn AS s FROM orders o),
+          "SELECT o.ssn AS s FROM (SELECT * FROM users) o",
+          "SELECT o.ssn AS s FROM orders o, LATERAL (SELECT ssn FROM users) o",
+          # an alias bound twice, or standing elsewhere too
+          ~s(SELECT "O".ssn AS s FROM orders "O" JOIN users o ON true),
+          "SELECT (SELECT o.ssn FROM (users o JOIN orders x ON true)) AS s FROM orders o",
+          "SELECT o.ssn AS s FROM orders o JOIN users u ON true WHERE o IS NOT NULL",
+          "SELECT o.ssn AS s, u.name AS o FROM orders o JOIN users u ON true",
+          # a schema or a table preflight didn't find
+          "SELECT sales.orders.ssn AS s FROM orders JOIN users ON true",
+          "SELECT p.ssn AS s FROM payments p JOIN users u ON true",
+          "SELECT x.public.orders.ssn AS s FROM orders JOIN users ON true",
+          "SELECT o.ssn AS s FROM db.public.orders o JOIN users ON true"
+        ] do
+      test "refuses: #{sql}" do
+        assert {:error, "Query uses protected column ssn" <> _} =
+                 check(unquote(sql), @postgres, @joined)
+      end
+    end
+
+    for sql <- [
+          "SELECT o.*, u.ssn FROM orders o JOIN users u ON true ORDER BY 3",
+          "SELECT u.*, o.id FROM orders o JOIN users u ON true ORDER BY 3",
+          "SELECT x.* FROM (SELECT * FROM orders) x JOIN users u ON true ORDER BY 1"
+        ] do
+      test "refuses a position after a t.* it can't size: #{sql}" do
+        assert {:error, "Query sorts or groups by position " <> _} =
+                 check(unquote(sql), @postgres, @joined)
+      end
+    end
+
+    test "a relation's own policy decides, and a column-only rule applies to every relation" do
+      both =
+        Visibility.compile(%{
+          column: [{"users", "ssn", :omit}, {"orders", "ssn", [action: :mask, mask: :sha256]}]
+        })
+
+      sql = "SELECT o.ssn AS s FROM orders o JOIN users u ON u.id = o.user_id"
+      assert {:error, _} = Columns.check(sql, @postgres, both, @joined)
+
+      anywhere = Visibility.compile(%{column: [{"ssn", :omit}]})
+      assert {:error, _} = Columns.check(sql, @postgres, anywhere, @joined)
+
+      schema = Visibility.compile(%{column: [{"public", "users", "ssn", :omit}]})
+      assert :ok = Columns.check(sql, @postgres, schema, @joined)
+
+      assert :ok =
+               Columns.check(sql, @postgres, schema, [{"public", "users"}, {"sales", "orders"}])
+
+      assert {:error, _} =
+               Columns.check(sql, @postgres, schema, [
+                 {"public", "users"},
+                 {"public", "orders"},
+                 {"sales", "orders"}
+               ])
+    end
+  end
+
   test "a Unicode-escaped identifier can't be compared, so it is refused" do
     assert {:error, "Query uses a Unicode-escaped identifier" <> _} =
              check(~S(SELECT U&"\0073sn" AS x FROM users))

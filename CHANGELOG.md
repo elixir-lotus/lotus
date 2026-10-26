@@ -393,6 +393,17 @@
   their keys (`:mailer`, `:from`, `:max_attachment_bytes`; `:req_options`),
   and `Lotus.Settings` can change them at run time.
 
+- **A column of another table that shares a protected column's name is no
+  longer refused.** Lotus matched a protected column by its bare name, so
+  with `users.ssn` protected, `SELECT o.ssn AS order_ssn FROM orders o JOIN
+  users u ON ...` was refused although `orders.ssn` has no policy. A name
+  qualified by an alias or table name (`o.ssn`, `orders.ssn`,
+  `public.orders.ssn`) that is bound exactly once in the statement's FROM
+  and JOIN clauses, to a table preflight found, now reads that table's
+  column and is checked against that table's policy alone. An unqualified
+  name, an alias bound twice or standing elsewhere, a CTE, a derived table
+  or a function is still taken for the protected column.
+
 - **Column policies no longer refuse two kinds of statements that read no
   whole row.** With a column policy on a table, Lotus refused, as "reads
   whole rows":
