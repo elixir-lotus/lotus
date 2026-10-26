@@ -99,6 +99,18 @@
   skipped only when the first word of code is one of those commands as a
   whole word.
 
+- **MySQL: a comma join, a subquery or a CTE no longer hides a table from
+  the visibility check.** Lotus took the tables a MySQL statement reads
+  either from `EXPLAIN` (which names them by alias) or from the statement
+  text (only the first table after each `FROM` or `JOIN`), choosing one by
+  the names' length or by `mysql.` appearing in the text. So
+  `SELECT * FROM test_users u, mysql.db d` read `mysql.db` without the
+  built-in deny, and `FROM test_users t, lotus_queries q` read Lotus's own
+  table. Lotus now reads every item of every FROM list (comma-separated, joined,
+  parenthesized, in subqueries anywhere and in CTEs) and checks the union of
+  both lists. An alias, a derived table, a table function or a CTE is not
+  taken for a table.
+
 ### Added
 
 - **Read-only per data source.** `config :lotus, data_source_read_only:

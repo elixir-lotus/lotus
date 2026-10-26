@@ -14,6 +14,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   @behaviour Lotus.Source.Adapters.Ecto.Dialect
 
   alias __MODULE__.EditorConfig
+  alias __MODULE__.Relations
   alias Lotus.Query.Filter
   alias Lotus.Query.Statement
   alias Lotus.Query.Tokenizer.Profile
@@ -478,12 +479,10 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     %{statement | body: SortInjector.apply(sql, sorts, &quote_identifier/1)}
   end
 
-  alias Lotus.Source.Adapters.Ecto, as: EctoHelpers
-
   @impl true
   def extract_accessed_resources(repo, %Statement{body: sql, params: params, meta: meta}) do
     opts = Map.to_list(meta)
-    alias_map = EctoHelpers.parse_alias_map(sql, Profile.for_language(query_language()))
+    read = Relations.read(sql)
     explain = "EXPLAIN FORMAT=JSON " <> sql
 
     # Route through execute_in_transaction so EXPLAIN runs under
@@ -491,6 +490,10 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     # MySQL's SESSION setting only takes effect at the next START TRANSACTION,
     # so the SETs must happen before repo.transaction — which is what
     # execute_in_transaction already guarantees.
+    #
+    # The relations are the union of what EXPLAIN names (by alias, without a
+    # schema, mapped back through the statement) and what the statement
+    # reads, so neither can drop a table the other sees.
     result =
       execute_in_transaction(
         repo,
@@ -501,14 +504,10 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
                 json
                 |> Lotus.JSON.decode!()
                 |> collect_mysql_relations(MapSet.new())
-                |> MapSet.to_list()
-                |> Enum.map(fn {schema, table_name} ->
-                  {schema, EctoHelpers.resolve_alias(table_name, alias_map)}
-                end)
                 |> Enum.reject(fn {_schema, name} -> is_nil(name) end)
+                |> Enum.flat_map(&Relations.resolve(&1, read))
 
-              sql_rels = extract_tables_from_sql(sql)
-              choose_relations(explain_rels, sql_rels, sql) |> MapSet.new()
+              MapSet.new(read.tables ++ explain_rels)
 
             {:error, err} ->
               repo.rollback(format_error(err))
@@ -565,68 +564,10 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
 
   defp collect_query_block(_, acc), do: acc
 
-  # The table after each FROM and JOIN in the statement's code, as
-  # `{schema, table}`. A FROM or JOIN inside a string, a comment or a quoted
-  # identifier is not code, and a backquoted name may hold any character.
+  # The tables the statement's text reads, as `{schema, table}`; see
+  # `MySQL.Relations`.
   @doc false
-  def extract_tables_from_sql(sql) do
-    sql
-    |> EctoHelpers.sql_lexemes(Profile.for_language(query_language()))
-    |> table_refs([])
-    |> Enum.reverse()
-    |> Enum.uniq()
-  end
-
-  defp table_refs([{:word, keyword} | rest], acc) do
-    acc =
-      if String.downcase(keyword) in ["from", "join"],
-        do: table_ref(rest, acc),
-        else: acc
-
-    table_refs(rest, acc)
-  end
-
-  defp table_refs([_lexeme | rest], acc), do: table_refs(rest, acc)
-  defp table_refs([], acc), do: acc
-
-  defp table_ref([schema, {:punct, "."}, table | _rest], acc) do
-    with {:ok, schema} <- table_name(schema), {:ok, table} <- table_name(table) do
-      [{schema, table} | acc]
-    else
-      _ -> acc
-    end
-  end
-
-  defp table_ref([table | _rest], acc) do
-    case table_name(table) do
-      {:ok, table} -> [{nil, table} | acc]
-      :error -> acc
-    end
-  end
-
-  defp table_ref([], acc), do: acc
-
-  defp table_name({:identifier, raw}), do: {:ok, EctoHelpers.unquote_identifier(raw)}
-
-  defp table_name({:word, <<c, _::binary>> = word}) when c in ?a..?z or c in ?A..?Z or c == ?_,
-    do: {:ok, word}
-
-  defp table_name(_lexeme), do: :error
-
-  defp choose_relations(explain_rels, sql_rels, sql) do
-    if should_use_sql_relations?(explain_rels, sql),
-      do: sql_rels,
-      else: explain_rels
-  end
-
-  defp should_use_sql_relations?(explain_rels, sql) do
-    Enum.empty?(explain_rels) or
-      Enum.all?(explain_rels, fn {_, name} -> String.length(name) <= 4 end) or
-      String.contains?(sql, "information_schema") or
-      String.contains?(sql, "performance_schema") or
-      String.contains?(sql, "mysql.") or
-      String.contains?(sql, "sys.")
-  end
+  def extract_tables_from_sql(sql), do: Relations.read(sql).tables
 
   @impl true
   def transform_statement(%Statement{body: sql} = statement) do

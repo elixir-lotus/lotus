@@ -938,6 +938,87 @@ defmodule Lotus.Source.Adapters.EctoTest do
              ]
     end
 
+    test "reads every item of a FROM list and every join" do
+      sql = """
+      SELECT * FROM a x, b AS y, db.c, (SELECT 1 FROM d) e
+      JOIN f ON 1 STRAIGHT_JOIN g NATURAL JOIN h CROSS JOIN i LEFT JOIN j USING (id)
+      """
+
+      assert Enum.sort(MySQLDialect.extract_tables_from_sql(sql)) ==
+               Enum.sort([
+                 {nil, "a"},
+                 {nil, "b"},
+                 {"db", "c"},
+                 {nil, "d"},
+                 {nil, "f"},
+                 {nil, "g"},
+                 {nil, "h"},
+                 {nil, "i"},
+                 {nil, "j"}
+               ])
+
+      assert MySQLDialect.extract_tables_from_sql("SELECT * FROM (a, b JOIN c ON 1) WHERE 1") ==
+               [{nil, "a"}, {nil, "b"}, {nil, "c"}]
+
+      assert MySQLDialect.extract_tables_from_sql(
+               "SELECT * FROM a, LATERAL (SELECT 1 FROM b) AS l"
+             ) == [{nil, "a"}, {nil, "b"}]
+    end
+
+    test "reads subqueries anywhere" do
+      sql = """
+      SELECT (SELECT max(id) FROM a) FROM b
+      WHERE id IN (SELECT id FROM c) AND EXISTS (SELECT 1 FROM d, e WHERE 1)
+      """
+
+      assert Enum.sort(MySQLDialect.extract_tables_from_sql(sql)) ==
+               [{nil, "a"}, {nil, "b"}, {nil, "c"}, {nil, "d"}, {nil, "e"}]
+    end
+
+    test "reads CTE bodies but not CTE names" do
+      sql = """
+      WITH RECURSIVE x AS (SELECT * FROM a), y (n) AS (SELECT 1 FROM b)
+      SELECT * FROM x JOIN y ON 1, c
+      """
+
+      assert Enum.sort(MySQLDialect.extract_tables_from_sql(sql)) ==
+               [{nil, "a"}, {nil, "b"}, {nil, "c"}]
+
+      assert MySQLDialect.extract_tables_from_sql("SELECT a FROM t GROUP BY a WITH ROLLUP") ==
+               [{nil, "t"}]
+    end
+
+    test "reads no table from a function's FROM, DUAL or a table function" do
+      assert MySQLDialect.extract_tables_from_sql(
+               "SELECT EXTRACT(YEAR FROM d), TRIM(LEADING 'x' FROM s) FROM DUAL"
+             ) == []
+
+      assert MySQLDialect.extract_tables_from_sql(
+               "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (a INT PATH '$')) AS jt"
+             ) == []
+    end
+
+    @tag :mysql
+    test "extract_accessed_resources names no alias, derived table or CTE as a table" do
+      adapter = MySQL.wrap("my", MysqlRepo)
+
+      for {sql, expected} <- [
+            {"SELECT * FROM test_users u, test_posts p WHERE p.user_id = u.id",
+             [{nil, "test_posts"}, {nil, "test_users"}]},
+            {"SELECT * FROM (SELECT id FROM test_users LIMIT 3) d", [{nil, "test_users"}]},
+            {"WITH x AS (SELECT id FROM test_users LIMIT 3) SELECT * FROM x, x AS y",
+             [{nil, "test_users"}]},
+            {"SELECT id FROM test_users UNION SELECT id FROM test_posts",
+             [{nil, "test_posts"}, {nil, "test_users"}]},
+            {"SELECT EXTRACT(YEAR FROM NOW()) FROM DUAL", []},
+            {"SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (a INT PATH '$')) AS jt", []},
+            {"SELECT * FROM mysql.db d", [{"mysql", "db"}]}
+          ] do
+        assert {:ok, relations} = Adapter.extract_accessed_resources(adapter, Statement.new(sql))
+        assert Enum.sort(relations) == expected, sql
+      end
+    end
+
     @tag :mysql
     test "extract_accessed_resources sees a system table behind a comment" do
       adapter = MySQL.wrap("my", MysqlRepo)
