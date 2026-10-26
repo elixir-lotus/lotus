@@ -16,6 +16,8 @@ defmodule Mix.Tasks.Lotus.Adapter.Check do
         editor         declared, missing example_query/3
         session        not declared
         streaming      not declared
+        connection     not declared
+        cancel         not declared
 
   `Lotus.Source.Adapter` dispatches a capability's callbacks only to a
   module that declares its behaviour, so a capability is one of:

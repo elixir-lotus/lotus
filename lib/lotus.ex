@@ -74,6 +74,7 @@ defmodule Lotus do
           timeout: non_neg_integer(),
           statement_timeout_ms: non_neg_integer(),
           read_only: boolean(),
+          on_cancel_token: (Runner.Cancel.t() -> any()),
           search_path: binary() | nil,
           repo: binary() | module() | nil,
           vars: map(),
@@ -135,6 +136,41 @@ defmodule Lotus do
   """
   @spec read_only?(String.t()) :: boolean()
   def read_only?(source_name) when is_binary(source_name), do: Config.read_only?(source_name)
+
+  @doc """
+  Whether a running statement on a data source can be stopped with
+  `cancel/1`: whether its adapter declares `Lotus.Source.Adapter.Cancel`.
+  The built-in PostgreSQL and MySQL sources can; SQLite cannot.
+  """
+  @spec cancellable?(String.t() | module()) :: boolean()
+  def cancellable?(source), do: source |> Source.resolve!(nil) |> Adapter.capability?(:cancel)
+
+  @doc """
+  Stops a running statement, from any process.
+
+  Takes the token the `:on_cancel_token` function of `run_statement/3` or
+  `run_query/2` received. The statement's call returns
+  `{:error, "The query was cancelled."}`, which middleware and telemetry
+  see as an error, and which the result cache does not store.
+
+  Returns `:ok` once the database was asked to stop it, or
+  `{:error, reason}`: the database refused, or the statement is not running
+  any more.
+
+      parent = self()
+
+      Task.start(fn ->
+        Lotus.run_statement("SELECT pg_sleep(60)", [],
+          on_cancel_token: &send(parent, {:cancel_token, &1})
+        )
+      end)
+
+      receive do
+        {:cancel_token, token} -> Lotus.cancel(token)
+      end
+  """
+  @spec cancel(Runner.Cancel.t()) :: :ok | {:error, term()}
+  defdelegate cancel(token), to: Runner.Cancel
 
   @doc """
   Returns the default data source as a {name, module} tuple.
@@ -518,6 +554,11 @@ defmodule Lotus do
   - `:date` - Cast from ISO8601 string to Date struct
 
 
+  ## Options
+
+  Those of `run_statement/3`, including `:read_only` and `:on_cancel_token`,
+  plus `:vars`.
+
   ### Windowed pagination
   Pass `window: [limit: pos_integer, offset: non_neg_integer, count: :none | :exact]` to
   return only a page of rows from the original query. When `count: :exact`, Lotus will
@@ -852,6 +893,11 @@ defmodule Lotus do
       DELETE, DDL) at both the application and database level. Set to `false` to allow
       write queries. Defaults to the source's setting (`read_only?/1`), which
       is `true` unless configured otherwise.
+    * `:on_cancel_token` — a function of one argument, called with a token
+      when the statement starts, in the process that runs it, on a source
+      that can cancel (`cancellable?/1`). Pass the token to `cancel/1` to
+      stop the statement. It is called again for the count of a
+      `window: [count: :exact]` run. Not called on any other source.
 
   ## Examples
 

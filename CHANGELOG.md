@@ -53,6 +53,17 @@
   a source does. Statements, saved queries, streams, exports and dashboard
   cards follow it; the AI and MCP paths stay read-only.
 
+- **Stop a running statement.** `Lotus.run_statement/3` and
+  `Lotus.run_query/2` take `on_cancel_token: fun`, called with a token as
+  the statement starts; `Lotus.cancel/1` stops it from any process. The
+  call returns `{:error, "The query was cancelled."}`, an error to
+  middleware and telemetry, and the result cache does not store it. A
+  source can when its adapter declares the new capability
+  `Lotus.Source.Adapter.Cancel` (`cancel_handle/1` and `cancel/2`): the
+  built-in PostgreSQL adapter does with `pg_backend_pid()` and
+  `pg_cancel_backend/1`, MySQL with `CONNECTION_ID()` and `KILL QUERY`.
+  SQLite does not. `Lotus.cancellable?/1` says whether a source can.
+
 - **Sources connected from settings** (`Lotus.Source.Adapter.Connection`,
   `Lotus.Source.Connections`). An adapter can describe the form that
   connects one of its sources (a host, a port, a user, a password; a URL
