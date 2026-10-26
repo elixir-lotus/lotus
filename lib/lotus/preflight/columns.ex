@@ -704,23 +704,23 @@ defmodule Lotus.Preflight.Columns do
 
   # Asked each time a name stands, unless no column rule can name it.
   defp protected_by_name?(raw, down, %{names: names} = ctx, cache) do
-    if names == :any or Map.has_key?(names, raw) or Map.has_key?(names, down),
+    if names == :any or Map.has_key?(names, down),
       do: {policy_protects?(ctx.matcher, ctx.rels, raw, down), cache},
       else: {false, cache}
   end
 
-  # The column names the matcher's column rules spell out exactly, or :any
-  # when one is a pattern. A rule's column matches a name only when the two
-  # are equal (`Lotus.Visibility.Matcher`), so no other name can be
-  # protected and the matcher needs no asking about it. Anything this
-  # doesn't recognize is read as :any.
+  # The column names the matcher's column rules spell out exactly, in
+  # lowercase, or :any when one is a pattern. A rule's column matches a name
+  # only when the two are equal ignoring case (`Lotus.Visibility.Matcher`),
+  # so no other name can be protected and the matcher needs no asking about
+  # it. Anything this doesn't recognize is read as :any.
   defp column_names(%Matcher{column: %{patterns: [], exact: exact} = rules}) when is_map(exact) do
     columns =
       Enum.map(Map.get(rules, :schema_table, []), &elem(&1, 2)) ++
         Enum.map(Map.get(rules, :table, []), &elem(&1, 1))
 
     if Enum.all?(columns, &(is_binary(&1) and &1 != "*")),
-      do: Map.new(columns ++ Map.keys(exact), &{&1, true}),
+      do: Map.new(columns ++ Map.keys(exact), &{String.downcase(&1), true}),
       else: :any
   end
 

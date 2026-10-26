@@ -116,6 +116,39 @@ defmodule Lotus.Visibility.MatcherTest do
       assert %{action: :error} = Visibility.column_policy_for(matcher, [], "password")
     end
 
+    test "column rules match a result column name in any case" do
+      matcher =
+        Visibility.compile(%{
+          column: [
+            {"public", "users", "ssn", :omit},
+            {"users", "pin", :error},
+            {"email", [mask: :sha256]},
+            {~r/_secret$/, :mask}
+          ]
+        })
+
+      rels = [{"public", "users"}]
+
+      assert %{action: :omit} = Visibility.column_policy_for(matcher, rels, "SSN")
+      assert %{action: :error} = Visibility.column_policy_for(matcher, rels, "Pin")
+      assert %{action: :mask, mask: :sha256} = Visibility.column_policy_for(matcher, [], "EMAIL")
+      assert %{action: :mask} = Visibility.column_policy_for(matcher, [], "API_SECRET")
+
+      upper = Visibility.compile(%{column: [{"SSN", :omit}]})
+      assert %{action: :omit} = Visibility.column_policy_for(upper, [], "ssn")
+    end
+
+    test "a name matching rules in two cases gets the stricter policy" do
+      exact_allows = Visibility.compile(%{column: [{"ssn", :mask}, {"SSN", :allow}]})
+      assert %{action: :mask} = Visibility.column_policy_for(exact_allows, [], "SSN")
+
+      folded_allows =
+        Visibility.compile(%{column: [{"users", "SSN", :allow}, {"users", "ssn", :omit}]})
+
+      assert %{action: :omit} =
+               Visibility.column_policy_for(folded_allows, [{"public", "users"}], "ssn")
+    end
+
     test "filter and validate helpers take a matcher" do
       matcher = Visibility.compile(%{schema: [deny: ["legacy"]]})
 

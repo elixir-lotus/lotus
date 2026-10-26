@@ -782,6 +782,12 @@ Column rules are evaluated from most to least specific:
 
 The most specific match wins.
 
+A rule's column matches a result column's name in any case, since a
+database may return it in another case than the rule spells it
+(`ssn AS "SSN"`, or MySQL's names as typed); a regex matches the name as
+returned or in lowercase. When rules match a name in more than one case,
+the strictest of their policies applies.
+
 ### Column rules and preflight
 
 The first two forms need to know which tables the result came from.

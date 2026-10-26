@@ -59,6 +59,15 @@
   `SELECT * FROM t`, so with `UNION`, `INTERSECT` or `EXCEPT` it is now
   refused as `*` is.
 
+- **A column policy holds whatever case the result names the column in.**
+  Lotus matched a result column's name to the column rules by exact case,
+  so `SELECT ssn AS "SSN" FROM users` on PostgreSQL, or `SELECT SSN FROM
+  users` on MySQL (which returns the name as typed), returned the values
+  unmasked. Column rules now match a name in any case, and a regex rule
+  matches it as returned or in lowercase. A name that rules match in more
+  than one case gets the strictest of their policies, so no column is less
+  protected than before. Schema and table names still match by exact case.
+
 ### Added
 
 - **Read-only per data source.** `config :lotus, data_source_read_only:

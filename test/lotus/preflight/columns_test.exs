@@ -387,6 +387,15 @@ defmodule Lotus.Preflight.ColumnsTest do
     assert {:error, _} = Columns.check("SELECT upper(pin) FROM cards", @postgres, matcher, [])
   end
 
+  test "a rule protects its column in any case" do
+    upper = Visibility.compile(%{column: [{"users", "SSN", :omit}]})
+
+    assert {:error, "Query uses protected column ssn" <> _} =
+             Columns.check("SELECT upper(ssn) FROM users", @postgres, upper, @relations)
+
+    assert :ok = Columns.check(~s|SELECT ssn AS "SSN" FROM users|, @postgres, upper, @relations)
+  end
+
   test "without a protected column, anything passes" do
     assert :ok =
              check("SELECT ssn AS s, to_json(u) FROM users u", @postgres, [{"public", "posts"}])

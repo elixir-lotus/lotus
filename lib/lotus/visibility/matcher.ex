@@ -256,10 +256,37 @@ defmodule Lotus.Visibility.Matcher do
   def column_policy(%__MODULE__{column: column}, relations, column_name) do
     rels = relations || []
 
-    find_schema_table_column(column.schema_table, rels, column_name) ||
-      find_table_column(column.table, rels, column_name) ||
-      find_column(column, column_name)
+    stricter(
+      find_policy(column, rels, column_name, false),
+      find_policy(column, rels, column_name, true)
+    )
   end
+
+  # A database may return a column's name in another case than the rule
+  # spells it (`ssn AS "SSN"`, MySQL's labels as typed), so column names
+  # also match ignoring case. Matching by exact case too, and keeping the
+  # stricter policy of the two, never leaves a column less protected than
+  # an exact match would.
+  defp find_policy(column, rels, column_name, fold?) do
+    find_schema_table_column(column.schema_table, rels, column_name, fold?) ||
+      find_table_column(column.table, rels, column_name, fold?) ||
+      find_column(column, column_name, fold?)
+  end
+
+  # The stricter of two column policies: `:error`, then `:omit`, then
+  # `:mask`, then `:allow` or none. Of two masks, the one that shows less:
+  # `:null`, a fixed value, a hash, then a partial mask. A tie keeps the
+  # first. An action Lotus doesn't know ranks with `:allow`, as the runner
+  # applies it.
+  defp stricter(a, b), do: if(rank(b) > rank(a), do: b, else: a)
+
+  defp rank(%{action: :error}), do: 7
+  defp rank(%{action: :omit}), do: 6
+  defp rank(%{action: :mask, mask: :null}), do: 5
+  defp rank(%{action: :mask, mask: {:fixed, _}}), do: 4
+  defp rank(%{action: :mask, mask: :sha256}), do: 3
+  defp rank(%{action: :mask}), do: 2
+  defp rank(_policy), do: 0
 
   @doc false
   # Whether any column rule that can apply to `relations` does more than
@@ -319,35 +346,35 @@ defmodule Lotus.Visibility.Matcher do
   defp pattern_match?(nil, _), do: false
   defp pattern_match?(_, _), do: false
 
-  defp find_schema_table_column(_rules, [], _column_name), do: nil
+  defp find_schema_table_column(_rules, [], _column_name, _fold?), do: nil
 
-  defp find_schema_table_column(rules, rels, column_name) do
+  defp find_schema_table_column(rules, rels, column_name, fold?) do
     Enum.find_value(rules, fn {schema_pat, table_pat, col_pat, policy} ->
       if Enum.any?(rels, fn {s, t} ->
            cv_match?(schema_pat, s) and cv_match?(table_pat, t) and
-             cv_match?(col_pat, column_name)
+             column_match?(col_pat, column_name, fold?)
          end),
          do: normalize(policy)
     end)
   end
 
-  defp find_table_column(_rules, [], _column_name), do: nil
+  defp find_table_column(_rules, [], _column_name, _fold?), do: nil
 
-  defp find_table_column(rules, rels, column_name) do
+  defp find_table_column(rules, rels, column_name, fold?) do
     Enum.find_value(rules, fn {table_pat, col_pat, policy} ->
       if Enum.any?(rels, fn {_s, t} ->
-           cv_match?(table_pat, t) and cv_match?(col_pat, column_name)
+           cv_match?(table_pat, t) and column_match?(col_pat, column_name, fold?)
          end),
          do: normalize(policy)
     end)
   end
 
-  defp find_column(column, column_name) do
-    exact = Map.get(column.exact, column_name)
+  defp find_column(column, column_name, fold?) do
+    exact = find_exact(column.exact, column_name, fold?)
 
     pattern =
       Enum.find(column.patterns, fn {_pos, col_pat, _policy} ->
-        cv_match?(col_pat, column_name)
+        column_match?(col_pat, column_name, fold?)
       end)
 
     case {exact, pattern} do
@@ -367,6 +394,28 @@ defmodule Lotus.Visibility.Matcher do
         normalize(policy)
     end
   end
+
+  defp find_exact(exact, column_name, false), do: Map.get(exact, column_name)
+
+  defp find_exact(exact, column_name, true) do
+    exact
+    |> Enum.filter(fn {name, _rule} -> column_match?(name, column_name, true) end)
+    |> Enum.map(&elem(&1, 1))
+    |> Enum.min_by(&elem(&1, 0), fn -> nil end)
+  end
+
+  # Ignoring case, a string matches the name in any case, and a regex the
+  # name as it is or in lowercase, so a pattern written for lowercase names
+  # catches `SSN` too.
+  defp column_match?(pattern, name, false), do: cv_match?(pattern, name)
+
+  defp column_match?(%Regex{} = rx, name, true) when is_binary(name),
+    do: Regex.match?(rx, name) or Regex.match?(rx, String.downcase(name))
+
+  defp column_match?(pattern, name, true) when is_binary(pattern) and is_binary(name),
+    do: pattern == "*" or String.downcase(pattern) == String.downcase(name)
+
+  defp column_match?(pattern, name, true), do: cv_match?(pattern, name)
 
   defp cv_match?(%Regex{} = rx, val) when is_binary(val), do: Regex.match?(rx, val)
   defp cv_match?(%Regex{}, _), do: false
