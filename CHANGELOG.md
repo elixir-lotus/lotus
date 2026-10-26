@@ -52,6 +52,13 @@
   `TABLE t ORDER BY 3`). `SELECT name, ssn FROM users ORDER BY 1` still
   runs.
 
+- **`TABLE t` in a set operation no longer bypasses a column policy.**
+  `SELECT name, email FROM orders UNION ALL TABLE users` ran and returned
+  the first columns of `users`, a protected one among them, under the
+  names `name` and `email`, which no policy matches. `TABLE t` is
+  `SELECT * FROM t`, so with `UNION`, `INTERSECT` or `EXCEPT` it is now
+  refused as `*` is.
+
 ### Added
 
 - **Read-only per data source.** `config :lotus, data_source_read_only:
@@ -315,6 +322,17 @@
 
 ### Changed
 
+- **The column policy check of a SQL statement is about 11 times faster.**
+  `Lotus.Preflight.Columns` reads a statement's words by matching bytes
+  instead of running regexes, lowers only the words that need it, and walks
+  the statement once to note its clauses and once to check it, asking the
+  policies only about names a column rule can match. Its own work on a
+  134-byte statement takes about 13 µs instead of 150, and stays linear in
+  the statement's size (see `bench/preflight_columns.exs`). It decides as
+  before, but for a word with a non-ASCII character that is no letter
+  (`ssn€`), which it now reads, as the databases do, as part of a name, and
+  SQLite's `[name]`, whose doubled `[` it no longer reads as an escape.
+
 - **`Lotus.Query.Tokenizer` is a byte-level scanner, 50 to 80 times
   faster.** It walked the statement one character at a time, tried every
   delimiter of the profile at every character and copied each character
@@ -392,6 +410,17 @@
   to start with `unknown options [:email]`. Both are declared now, with
   their keys (`:mailer`, `:from`, `:max_attachment_bytes`; `:req_options`),
   and `Lotus.Settings` can change them at run time.
+
+- **A column of another table that shares a protected column's name is no
+  longer refused.** Lotus matched a protected column by its bare name, so
+  with `users.ssn` protected, `SELECT o.ssn AS order_ssn FROM orders o JOIN
+  users u ON ...` was refused although `orders.ssn` has no policy. A name
+  qualified by an alias or table name (`o.ssn`, `orders.ssn`,
+  `public.orders.ssn`) that is bound exactly once in the statement's FROM
+  and JOIN clauses, to a table preflight found, now reads that table's
+  column and is checked against that table's policy alone. An unqualified
+  name, an alias bound twice or standing elsewhere, a CTE, a derived table
+  or a function is still taken for the protected column.
 
 - **Column policies no longer refuse two kinds of statements that read no
   whole row.** With a column policy on a table, Lotus refused, as "reads
