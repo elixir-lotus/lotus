@@ -80,7 +80,12 @@ defmodule Lotus.Query.Tokenizer.Profile do
   """
   @spec for_language(String.t() | nil) :: t()
   def for_language("sql:postgres") do
-    %__MODULE__{dollar_quotes?: true, nested_block_comments?: true}
+    %__MODULE__{
+      dollar_quotes?: true,
+      nested_block_comments?: true,
+      escape_string_prefix?: true,
+      line_comment_ends_at_cr?: true
+    }
   end
 
   def for_language("sql:mysql") do
@@ -88,12 +93,14 @@ defmodule Lotus.Query.Tokenizer.Profile do
       string_quotes: ["'", "\""],
       identifier_quotes: ["`"],
       line_comments: ["--", "#"],
-      backslash_escapes?: true
+      backslash_escapes?: true,
+      dash_comment_needs_space?: true,
+      executable_comments?: true
     }
   end
 
   def for_language("sql:sqlite") do
-    %__MODULE__{identifier_quotes: ["\"", "`"]}
+    %__MODULE__{identifier_quotes: ["\"", "`"], bracket_identifiers?: true}
   end
 
   def for_language(language) when is_binary(language) do
@@ -123,8 +130,9 @@ defmodule Lotus.Query.Tokenizer.Profile do
 
   Recognized keys mirror `t:Lotus.Source.Adapter.dialect_spec/0`:
   `:identifier_quotes`, `:hash_comments`, `:slash_comments`,
-  `:double_quoted_strings`, `:double_dollar_quoted_strings` and
-  `:backslash_escapes`. Other keys are ignored. A `nil` spec returns
+  `:double_quoted_strings`, `:double_dollar_quoted_strings`,
+  `:backslash_escapes` and `:space_after_dashes` (which sets
+  `:dash_comment_needs_space?`). Other keys are ignored. A `nil` spec returns
   `base` unchanged.
   """
   @spec from_dialect_spec(t(), map() | nil) :: t()
@@ -138,6 +146,7 @@ defmodule Lotus.Query.Tokenizer.Profile do
     |> apply_double_quoted_strings(spec)
     |> apply_flag(spec, :double_dollar_quoted_strings, :dollar_quotes?)
     |> apply_flag(spec, :backslash_escapes, :backslash_escapes?)
+    |> apply_flag(spec, :space_after_dashes, :dash_comment_needs_space?)
   end
 
   defp apply_identifier_quotes(profile, %{identifier_quotes: quotes}) when is_binary(quotes) do
