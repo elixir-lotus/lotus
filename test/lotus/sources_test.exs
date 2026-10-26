@@ -7,6 +7,7 @@ defmodule Lotus.SourcesTest do
   alias Lotus.Query.Statement
   alias Lotus.Source
   alias Lotus.Source.Adapter
+  alias Lotus.Storage.Query
 
   describe "resolve!/2" do
     test "resolves with string repo_opt" do
@@ -110,6 +111,49 @@ defmodule Lotus.SourcesTest do
       assert_raise ArgumentError, ~r/not configured/, fn ->
         Source.resolve!(123, :"Elixir.Nonexistent.Module")
       end
+    end
+  end
+
+  describe "names from the resolver" do
+    defmodule RuntimeResolver do
+      @moduledoc false
+      @behaviour Lotus.Source.Resolver
+
+      alias Lotus.Source.Resolvers.Static
+
+      defdelegate resolve(source_opt, fallback), to: Static
+      defdelegate list_sources(), to: Static
+      defdelegate get_source!(name), to: Static
+      defdelegate default_source(), to: Static
+
+      def list_source_names, do: ["warehouse" | Static.list_source_names()]
+    end
+
+    setup do
+      stub(Config, :source_resolver, fn -> RuntimeResolver end)
+      :ok
+    end
+
+    test "list_data_source_names/0 has the sources the resolver adds" do
+      assert "warehouse" in Lotus.list_data_source_names()
+      assert "postgres" in Lotus.list_data_source_names()
+    end
+
+    test "a query may be saved on one" do
+      changeset =
+        Query.new(%{
+          name: "On the warehouse",
+          statement: "SELECT 1",
+          data_source: "warehouse"
+        })
+
+      assert changeset.valid?
+
+      changeset =
+        Query.new(%{name: "Nowhere", statement: "SELECT 1", data_source: "nowhere"})
+
+      assert {"must be one of: " <> names, _} = changeset.errors[:data_source]
+      assert names =~ "warehouse"
     end
   end
 

@@ -300,6 +300,14 @@
 
 ### Fixed
 
+- **Sources a resolver adds at runtime are sources everywhere.**
+  `Lotus.list_data_source_names/0`, which the dashboard's source pickers,
+  the MCP server and the AI assistant list from, and the check of a
+  query's `data_source`, read only `config :lotus, data_sources:`: a source
+  the configured `source_resolver` connected at runtime could be queried
+  but not picked, listed or saved on. They now ask the resolver
+  (`Lotus.Source.list_source_names/0`, new).
+
 - **`delivery: [email: …]` and `delivery: [slack: …]` are valid config.**
   The email and Slack channels read their settings from them, as their docs
   say, but the config schema named neither, so an app that set them failed

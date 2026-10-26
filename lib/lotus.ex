@@ -114,11 +114,12 @@ defmodule Lotus do
   def get_data_source!(name), do: Config.get_data_source!(name)
 
   @doc """
-  Lists the names of all configured data sources.
+  Lists the names of all data sources: the configured ones and any the
+  source resolver adds at runtime (`config :lotus, source_resolver:`).
 
   Useful for building UI dropdowns.
   """
-  def list_data_source_names, do: Config.list_data_source_names()
+  def list_data_source_names, do: Lotus.Source.list_source_names()
 
   @doc """
   Returns the description of a data source, from

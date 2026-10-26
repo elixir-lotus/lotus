@@ -47,6 +47,13 @@ defmodule Lotus.Source do
   def list_sources, do: Enum.map(resolver().list_sources(), &Adapter.with_capabilities/1)
 
   @doc """
+  Lists the names of all sources, as the resolver has them: the configured
+  ones and any it adds at runtime.
+  """
+  @spec list_source_names() :: [String.t()]
+  def list_source_names, do: resolver().list_source_names()
+
+  @doc """
   Gets a source adapter by name. Raises if not found.
   """
   @spec get_source!(String.t()) :: Adapter.t()
