@@ -691,7 +691,8 @@ defmodule Lotus.Dashboards do
 
     case source_query_vars(filter, filter_values) do
       {:ok, vars} ->
-        run_opts = opts |> Keyword.drop([:filter_values]) |> Keyword.put(:vars, vars)
+        run_opts =
+          opts |> Keyword.drop([:filter_values]) |> Keyword.put(:vars, vars) |> read_only()
 
         with {:ok, result} <- Lotus.run_query(filter.source_query_id, run_opts) do
           {:ok, Enum.flat_map(result.rows, &row_to_options/1)}
@@ -914,7 +915,7 @@ defmodule Lotus.Dashboards do
       vars = card_variables(mappings, filters, Keyword.get(opts, :filter_values, %{}))
 
       query_opts = Keyword.drop(opts, [:filter_values])
-      run_opts = Keyword.put(query_opts, :vars, vars)
+      run_opts = query_opts |> Keyword.put(:vars, vars) |> read_only()
 
       Lotus.run_query(card.query_id, run_opts)
     end
@@ -1041,7 +1042,7 @@ defmodule Lotus.Dashboards do
     vars = vars_for_card.(card)
 
     query_opts = Keyword.drop(opts, [:filter_values, :parallel, :timeout])
-    run_opts = Keyword.put(query_opts, :vars, vars)
+    run_opts = query_opts |> Keyword.put(:vars, vars) |> read_only()
 
     Lotus.run_query(card.query_id, run_opts)
   rescue
@@ -1088,4 +1089,8 @@ defmodule Lotus.Dashboards do
   end
 
   defp apply_transform(value, _transform), do: value
+
+  # A dashboard only reads: its cards and filters run read-only, whatever
+  # the source or the caller allows.
+  defp read_only(opts), do: Keyword.put(opts, :read_only, true)
 end
