@@ -57,13 +57,17 @@ defmodule Lotus.Visibility.Matcher do
             table_deny: @empty_tables,
             column: @empty_columns
 
+  # How rules are applied. Raise it whenever the same rules come to mask
+  # differently, so that results cached under the old way are not served.
+  @semantics 2
+
   @doc false
   # A digest of the rules, the same on every node for the same rules. A
   # compiled regex is reduced to its source and options, which are what make
   # two regexes the same rule.
   @spec fingerprint(t()) :: binary()
   def fingerprint(%__MODULE__{} = matcher) do
-    term = matcher |> Map.from_struct() |> portable()
+    term = {@semantics, matcher |> Map.from_struct() |> portable()}
 
     :sha256
     |> :crypto.hash(:erlang.term_to_binary(term, [:deterministic]))
