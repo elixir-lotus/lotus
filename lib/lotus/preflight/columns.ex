@@ -20,7 +20,11 @@ defmodule Lotus.Preflight.Columns do
     * rename columns with a column alias list (`AS t(a, b)`,
       `WITH c(a, b) AS ...`);
     * combine `*` with `UNION`, `INTERSECT` or `EXCEPT`, whose result takes
-      the first branch's column names.
+      the first branch's column names;
+    * sort or group by the position of a protected column (`SELECT ssn ...
+      ORDER BY 1`, also in `GROUP BY`, `DISTINCT ON`, `ROLLUP`, `CUBE` and
+      `GROUPING SETS`), which reveals how its values order or repeat, or by a
+      position it can't match to a select item (at or after a `*`).
 
   The check reads tokens, not a parse tree, so it fails closed: whatever it
   can't prove keeps the name is refused. `SELECT *` and `SELECT t.*` pass,
@@ -48,6 +52,8 @@ defmodule Lotus.Preflight.Columns do
   @item_ends [",", {:kw, "from"}, :eof]
   @clause_ends ~w(where group having order limit offset fetch window qualify returning)
   @set_ops ~w(union intersect except minus)
+  @query_clauses [:select, :from, :join_cond, :order, :group, :other]
+  @position_clauses [:order, :group, :table_order]
   @table_starts [{:kw, "from"}, {:kw, "join"}, ",", {:kw, "lateral"}, {:kw, "only"}]
 
   # Functions in FROM whose rows are a number or a time, never a table's
@@ -164,6 +170,7 @@ defmodule Lotus.Preflight.Columns do
     |> Enum.map(fn [lexeme] ->
       cond do
         Regex.match?(~r/^[\p{L}_]/u, lexeme) -> word(String.downcase(lexeme), lexeme)
+        Regex.match?(~r/^[0-9]+$/, lexeme) -> {:int, lexeme}
         Regex.match?(~r/^\d/, lexeme) -> :lit
         true -> lexeme
       end
@@ -184,7 +191,8 @@ defmodule Lotus.Preflight.Columns do
   # ---------------------------------------------------------------------------
 
   # Each frame is one level of parentheses: the clause its lexemes sit in
-  # (:none, :with, :select, :from, :join_cond, :order or :other), whether the
+  # (:none, :with, :select, :from, :join_cond, :order, :group, :other, :table or
+  # :table_order), whether the
   # names of its select list reach the result, the level it is (a number
   # for each frame, so that an ORDER BY finds its own query's output
   # columns), and whether it holds the arguments of a scalar function in
@@ -292,8 +300,20 @@ defmodule Lotus.Preflight.Columns do
     do: %{state | frames: rest, scalar: if(scalar?, do: :call)}
 
   defp step(state, {:kw, "select"}, _clause, _prev), do: set_clause(state, :select)
-  defp step(state, {:kw, "with"}, :none, _prev), do: set_clause(state, :with)
+
+  defp step(state, {:kw, "with"}, clause, _prev) when clause in [:none, :table, :table_order],
+    do: set_clause(state, :with)
+
   defp step(state, {:kw, "from"}, :select, _prev), do: set_clause(state, :from)
+
+  # `TABLE t` reads as `SELECT * FROM t ...`, so its ORDER BY sorts by the
+  # table's columns, by position too. Otherwise :table and :table_order are
+  # :none.
+  defp step(state, {:kw, "table"}, :none, _prev), do: set_clause(state, :table)
+  defp step(state, {:kw, "order"}, :table, _prev), do: set_clause(state, :table_order)
+
+  defp step(state, {:kw, kw}, :table_order, _prev) when kw in @clause_ends and kw != "order",
+    do: set_clause(state, :table)
 
   defp step(state, {:kw, "join"}, clause, _prev) when clause in [:from, :join_cond],
     do: set_clause(state, :from)
@@ -301,13 +321,14 @@ defmodule Lotus.Preflight.Columns do
   defp step(state, {:kw, kw}, :from, _prev) when kw in ["on", "using"],
     do: set_clause(state, :join_cond)
 
-  defp step(state, {:kw, "order"}, clause, _prev)
-       when clause in [:select, :from, :join_cond, :order, :other],
-       do: set_clause(state, :order)
+  defp step(state, {:kw, "order"}, clause, _prev) when clause in @query_clauses,
+    do: set_clause(state, :order)
 
-  defp step(state, {:kw, kw}, clause, _prev)
-       when kw in @clause_ends and clause in [:select, :from, :join_cond, :order, :other],
-       do: set_clause(state, :other)
+  defp step(state, {:kw, "group"}, clause, _prev) when clause in @query_clauses,
+    do: set_clause(state, :group)
+
+  defp step(state, {:kw, kw}, clause, _prev) when kw in @clause_ends and clause in @query_clauses,
+    do: set_clause(state, :other)
 
   defp step(state, {:kw, op}, _clause, _prev) when op in @set_ops, do: set_clause(state, :none)
   defp step(state, _lexeme, _clause, _prev), do: state
@@ -345,15 +366,13 @@ defmodule Lotus.Preflight.Columns do
   defp check_at(out, i, state, protected?) do
     case at(out, i) do
       {:name, name} ->
-        cond do
-          definition?(out, i) -> nil
-          protected?.(name) -> check_protected(out, i, name, state)
-          whole_row?(out, i, name, state) -> whole_row_error(name)
-          true -> nil
-        end
+        check_name(out, i, name, state, protected?)
 
       "*" ->
         check_star(out, i, state)
+
+      {:int, n} ->
+        check_position(out, i, n, protected?)
 
       :escaped_name ->
         {:error,
@@ -362,6 +381,15 @@ defmodule Lotus.Preflight.Columns do
 
       _ ->
         nil
+    end
+  end
+
+  defp check_name(out, i, name, state, protected?) do
+    cond do
+      definition?(out, i) -> nil
+      protected?.(name) -> check_protected(out, i, name, state)
+      whole_row?(out, i, name, state) -> whole_row_error(name)
+      true -> nil
     end
   end
 
@@ -444,6 +472,157 @@ defmodule Lotus.Preflight.Columns do
       true ->
         nil
     end
+  end
+
+  # A whole ORDER BY or GROUP BY item that is an integer names the select
+  # item at that position, so sorting or grouping by it reveals how that
+  # column's values order or repeat whatever the result shows of them. So
+  # does an item of DISTINCT ON, ROLLUP, CUBE or GROUPING SETS, and one in
+  # parentheses. The position must be a select item that is no protected
+  # column, with no `*` up to it, whose width can't be known here.
+  defp check_position(out, i, n, protected?) do
+    with {:ok, level} <- position_level(out, i),
+         {:error, message} <- position_item(out, level, String.to_integer(n), protected?) do
+      {:error, "Query sorts or groups by position #{n}, " <> message}
+    else
+      _ -> nil
+    end
+  end
+
+  defp position_level(out, i) do
+    {_lexeme, _reaches?, clause, level} = elem(out, i)
+    prev = at(out, i - 1)
+    next = at(out, i + 1)
+
+    cond do
+      clause in @position_clauses and prev in [{:kw, "by"}, ","] and not operator?(next) ->
+        {:ok, level}
+
+      clause == :none and prev in ["(", ","] and next in [")", ","] ->
+        out |> opening_paren(i - 1, level) |> paren_level(out)
+
+      true ->
+        nil
+    end
+  end
+
+  # Punctuation that continues an expression: the integer is an operand then.
+  defp operator?(next), do: is_binary(next) and next not in [",", ")", ";"]
+
+  # The "(" that opened the frame of `level`: levels count up as frames
+  # open, so it is the last lexeme before `i` of a lower level.
+  defp opening_paren(_out, i, _level) when i < 0, do: nil
+
+  defp opening_paren(out, i, level) do
+    if out |> elem(i) |> elem(3) < level, do: i, else: opening_paren(out, i - 1, level)
+  end
+
+  defp paren_level(nil, _out), do: nil
+
+  defp paren_level(j, out) do
+    {_paren, _reaches?, clause, level} = elem(out, j)
+
+    case {clause, at(out, j - 1), at(out, j - 2)} do
+      {:select, {:kw, "on"}, {:kw, "distinct"}} ->
+        {:ok, level}
+
+      {clause, prev, _prev2} when clause in @position_clauses ->
+        if item_start?(prev), do: {:ok, level}
+
+      {:none, prev, _prev2} ->
+        if item_start?(prev), do: out |> opening_paren(j - 1, level) |> paren_level(out)
+
+      _ ->
+        nil
+    end
+  end
+
+  # What may precede a whole grouping or sort item, or a list of them.
+  defp item_start?({:name, name}), do: String.downcase(name) in ~w(rollup cube sets)
+  defp item_start?(prev), do: prev in [{:kw, "by"}, ",", "("]
+
+  # Each select list of the query at `level` (a set operation has one per
+  # branch): position `n` must be safe in all of them.
+  defp position_item(out, level, n, protected?) do
+    case select_lists(out, level) do
+      [] -> {:error, unknown_position()}
+      lists -> Enum.find_value(lists, :ok, &list_position(&1, n, protected?))
+    end
+  end
+
+  defp list_position(items, n, protected?) do
+    {before, rest} = Enum.split(items, max(n - 1, 0))
+
+    cond do
+      n < 1 or rest == [] -> {:error, unknown_position()}
+      Enum.any?(before, &star_item?/1) or star_item?(hd(rest)) -> {:error, unknown_position()}
+      name = protected_item(hd(rest), protected?) -> {:error, protected_position(name)}
+      true -> nil
+    end
+  end
+
+  # The select items of each SELECT at `level`, as the lexemes of that level
+  # (what nested parentheses hold is checked where it stands), without the
+  # keywords that start the first item or end the list.
+  defp select_lists(out, level) do
+    0..(tuple_size(out) - 1)//1
+    |> Enum.reduce([], fn i, lists ->
+      case elem(out, i) do
+        {{:kw, "select"}, _reaches?, _clause, ^level} -> [[[]] | lists]
+        {",", _reaches?, :select, ^level} -> add_item(lists)
+        {lexeme, _reaches?, :select, ^level} -> add_lexeme(lists, lexeme)
+        _ -> lists
+      end
+    end)
+    |> Enum.reverse()
+    |> Enum.map(fn items ->
+      items |> Enum.map(&Enum.reverse/1) |> Enum.reverse() |> clean_items()
+    end)
+  end
+
+  defp add_item([items | lists]), do: [[[] | items] | lists]
+  defp add_item([]), do: []
+
+  defp add_lexeme([[item | items] | lists], lexeme), do: [[[lexeme | item] | items] | lists]
+  defp add_lexeme([], _lexeme), do: []
+
+  defp clean_items([first | items]) do
+    first =
+      case first do
+        [{:kw, "distinct"}, {:kw, "on"}, "(" | rest] -> rest
+        [{:kw, kw} | rest] when kw in ["distinct", "all"] -> rest
+        _ -> first
+      end
+
+    Enum.map([first | items], fn item -> Enum.reject(item, &list_keyword?/1) end)
+  end
+
+  defp list_keyword?({:kw, kw}), do: kw != "as"
+  defp list_keyword?(_lexeme), do: false
+
+  # `*` or `t.*`.
+  defp star_item?(["*"]), do: true
+  defp star_item?([{:name, _}, "." | rest]), do: star_item?(rest)
+  defp star_item?(_item), do: false
+
+  # The first protected name the item reads (an alias after AS reads none).
+  defp protected_item(item, protected?) do
+    item
+    |> Enum.zip([:bof | item])
+    |> Enum.find_value(fn
+      {{:name, name}, prev} when prev != {:kw, "as"} -> if protected?.(name), do: name
+      _ -> nil
+    end)
+  end
+
+  defp protected_position(name) do
+    "protected column #{name}, which reveals how its values order or repeat whatever " <>
+      "the result shows of them. Sort or group by another column."
+  end
+
+  defp unknown_position do
+    "which Lotus can't match to a select item (it follows a * or is past the select " <>
+      "list), so it can't check it against column policies. Sort by the column's name."
   end
 
   defp qualifier({:name, name}), do: name

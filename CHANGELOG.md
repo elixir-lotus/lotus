@@ -40,6 +40,18 @@
   `~> 1.29`, so an app can't resolve a vulnerable version. Run
   `mix deps.update req_llm` if your lock holds an older one.
 
+- **A sort or grouping by position no longer bypasses a column policy.**
+  Lotus refused `ORDER BY ssn` on a protected column but let
+  `SELECT ssn FROM users ORDER BY 1` (or `GROUP BY 1`) run, which sorts or
+  groups by the real values and so reveals how they order or repeat
+  although the result masks them. An integer that is a whole `ORDER BY`,
+  `GROUP BY`, `DISTINCT ON`, `ROLLUP`, `CUBE` or `GROUPING SETS` item now
+  names the select item at that position of its own query: Lotus refuses
+  the statement when that item is a protected column, or when it can't tell
+  which item it is (at or after a `*` or `t.*`, past the select list,
+  `TABLE t ORDER BY 3`). `SELECT name, ssn FROM users ORDER BY 1` still
+  runs.
+
 ### Added
 
 - **Read-only per data source.** `config :lotus, data_source_read_only:
