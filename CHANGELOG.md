@@ -322,6 +322,17 @@
 
 ### Changed
 
+- **The column policy check of a SQL statement is about 11 times faster.**
+  `Lotus.Preflight.Columns` reads a statement's words by matching bytes
+  instead of running regexes, lowers only the words that need it, and walks
+  the statement once to note its clauses and once to check it, asking the
+  policies only about names a column rule can match. Its own work on a
+  134-byte statement takes about 13 µs instead of 150, and stays linear in
+  the statement's size (see `bench/preflight_columns.exs`). It decides as
+  before, but for a word with a non-ASCII character that is no letter
+  (`ssn€`), which it now reads, as the databases do, as part of a name, and
+  SQLite's `[name]`, whose doubled `[` it no longer reads as an escape.
+
 - **`Lotus.Query.Tokenizer` is a byte-level scanner, 50 to 80 times
   faster.** It walked the statement one character at a time, tried every
   delimiter of the profile at every character and copied each character

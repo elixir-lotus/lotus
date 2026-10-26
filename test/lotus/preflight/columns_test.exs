@@ -336,6 +336,50 @@ defmodule Lotus.Preflight.ColumnsTest do
     assert {:error, _} = check("SELECT `ssn` AS x FROM users", mysql)
   end
 
+  test "SQLite brackets quote an identifier, with no escapes" do
+    sqlite = Profile.for_language("sql:sqlite")
+
+    assert :ok = check("SELECT [ssn], [my]]col] FROM users", sqlite)
+
+    assert {:error, "Query uses protected column ssn" <> _} =
+             check("SELECT [ssn] AS x FROM users", sqlite)
+  end
+
+  test "what a MySQL executable comment holds is checked as the code it is" do
+    mysql = Profile.for_language("sql:mysql")
+
+    assert {:error, "Query uses protected column ssn" <> _} =
+             check("SELECT name /*! , ssn AS x */ FROM users", mysql)
+
+    assert {:error, _} = check("SELECT name FROM users /*!50000 ORDER BY ssn */", mysql)
+    assert :ok = check("SELECT name /* , ssn AS x */ FROM users", mysql)
+  end
+
+  test "words are taken as the databases take unquoted identifiers" do
+    assert :ok = check("SELECT ssné AS x, ssn$1 AS y, _ssn AS z FROM users")
+    assert {:error, _} = check("SELECT 1ssn AS x FROM users")
+    assert {:error, "Query uses protected column SSN" <> _} = check("SELECT SSN AS x FROM users")
+  end
+
+  test "a column pattern protects every name it matches" do
+    for rule <- [
+          {"users", ~r/^ss/, :omit},
+          {~r/^SS/i, :omit},
+          {"public", "users", ~r/sn$/, :omit}
+        ] do
+      matcher = Visibility.compile(%{column: [rule]})
+      check = &Columns.check(&1, @postgres, matcher, @relations)
+
+      assert {:error, _} = check.("SELECT upper(ssn) FROM users")
+      assert :ok = check.("SELECT upper(name) AS x FROM users")
+    end
+
+    star = Visibility.compile(%{column: [{"users", "*", :omit}]})
+
+    assert {:error, _} =
+             Columns.check("SELECT upper(name) FROM users", @postgres, star, @relations)
+  end
+
   test "a column-only rule applies whatever the relations" do
     matcher = Visibility.compile(%{column: [{"pin", :omit}]})
 

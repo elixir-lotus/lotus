@@ -55,11 +55,18 @@ defmodule Lotus.Preflight.Columns do
                order limit offset fetch window qualify returning join on using with recursive
                lateral inner left right full outer cross natural only by into values table)
 
+  # Words SQL is often written with in capitals.
+  @common_words ~w(and or not null is in like ilike between case when then else end asc desc
+                   nulls first last exists true false any some cast interval count sum avg min
+                   max coalesce over partition rows range current row date timestamp now)
+
   @select_starts [{:kw, "select"}, {:kw, "distinct"}, {:kw, "all"}, ","]
   @item_ends [",", {:kw, "from"}, :eof]
-  @clause_ends ~w(where group having order limit offset fetch window qualify returning)
+  @clause_ends ~w(where having limit offset fetch window qualify returning)
   @set_ops ~w(union intersect except minus)
   @query_clauses [:select, :from, :join_cond, :order, :group, :other]
+
+  # The clauses whose whole integer items name a select item.
   @position_clauses [:order, :group, :table_order]
   @table_starts [{:kw, "from"}, {:kw, "join"}, ",", {:kw, "lateral"}, {:kw, "only"}]
 
@@ -72,6 +79,15 @@ defmodule Lotus.Preflight.Columns do
   @sort_item_ends [",", ")", ";", :eof, {:kw, "limit"}, {:kw, "offset"}, {:kw, "fetch"}]
   @sort_modifiers ~w(asc desc nulls)
 
+  # What may precede a whole grouping or sort item in parentheses.
+  @grouping_sets ~w(rollup cube sets)
+
+  # How many qualifiers are looked up one by one before all are worked out.
+  @max_scans 8
+
+  # Punctuation the check steers by, kept as literals.
+  @punctuation ~w|( ) , . * ; [ ]|
+
   @doc """
   Checks `sql` against the column policies of `matcher` for the relations
   preflight found. Returns `:ok` or `{:error, message}`.
@@ -80,9 +96,8 @@ defmodule Lotus.Preflight.Columns do
           :ok | {:error, String.t()}
   def check(sql, %Profile{} = profile, %Matcher{} = matcher, relations) when is_binary(sql) do
     rels = Relations.to_list(relations)
-    restricted? = Matcher.restricts_columns?(matcher, rels)
 
-    if restricted? do
+    if Matcher.restricts_columns?(matcher, rels) do
       sql
       |> lex(profile)
       |> annotate()
@@ -103,153 +118,764 @@ defmodule Lotus.Preflight.Columns do
   def table_names(sql, %Profile{} = profile) when is_binary(sql) do
     %{out: out, ctes: ctes} = sql |> lex(profile) |> annotate()
 
-    0..(tuple_size(out) - 1)//1
-    |> Enum.flat_map(fn i ->
-      with {{:name, _}, _reaches?, :from, _level} <- elem(out, i),
-           true <- at(out, i - 1) in @table_starts,
-           {path, next} <- name_path(out, i, []),
-           true <- next != "(",
-           false <- cte?(path, ctes) do
-        [path]
-      else
-        _ -> []
-      end
-    end)
-    |> Enum.uniq()
+    out |> table_paths(:bof, ctes, []) |> Enum.reverse() |> Enum.uniq()
   end
 
-  defp cte?([name], ctes), do: MapSet.member?(ctes, String.downcase(name))
+  defp table_paths([{lexeme, _reaches?, clause, _level} = entry | rest], prev, ctes, acc) do
+    acc =
+      with {:name, _raw, _down} <- lexeme,
+           :from <- clause,
+           true <- prev in @table_starts,
+           {path, after_path} = path_of([entry | rest], []),
+           true <- next_lexeme(after_path) != "(",
+           false <- cte?(path, ctes) do
+        [path | acc]
+      else
+        _ -> acc
+      end
+
+    table_paths(rest, lexeme, ctes, acc)
+  end
+
+  defp table_paths([], _prev, _ctes, acc), do: acc
+
+  # The raw names of a `schema.table` path at the head of `entries`, and the
+  # entries after it.
+  defp path_of([{{:name, raw, _down}, _reaches?, _clause, _level} | rest], acc) do
+    case rest do
+      [{".", _, _, _} | [{{:name, _, _}, _, _, _} | _] = more] -> path_of(more, [raw | acc])
+      _ -> {:lists.reverse([raw | acc]), rest}
+    end
+  end
+
+  defp cte?([name], ctes), do: Map.has_key?(ctes, downcase(name))
   defp cte?(_path, _ctes), do: false
 
-  defp name_path(out, i, acc) do
-    {:name, name} = at(out, i)
+  defp next_lexeme([{lexeme, _reaches?, _clause, _level} | _]), do: lexeme
+  defp next_lexeme([]), do: :eof
 
-    if at(out, i + 1) == "." and name?(at(out, i + 2)),
-      do: name_path(out, i + 2, [name | acc]),
-      else: {Enum.reverse([name | acc]), at(out, i + 1)}
+  # ---------------------------------------------------------------------------
+  # Lexing: code becomes words and punctuation; literals and comments drop out
+  # ---------------------------------------------------------------------------
+
+  # Lexemes are `{:kw, word}` for a keyword, `{:name, raw, lowercase}` for any
+  # other word or a quoted identifier, `{:int, digits}` for an integer, `:lit`
+  # for any other literal, `:escaped_name`, or the punctuation itself. A word
+  # is what the databases take for an unquoted identifier: a letter or `_`,
+  # then letters, digits, `_` or `$`, where any non-ASCII character counts as
+  # a letter. The lexer matches bytes; it runs no regex.
+  defp lex(sql, profile),
+    do: sql |> Tokenizer.tokenize(profile) |> lex_tokens([]) |> :lists.reverse()
+
+  # PostgreSQL's `U&"\0073sn"` spells a name with escapes this check doesn't
+  # decode, so it stands for a name that can't be compared.
+  defp lex_tokens([{:code, raw}, {:identifier, _} = identifier | rest], acc) do
+    size = byte_size(raw)
+
+    if size >= 2 and :binary.part(raw, size - 2, 2) in ["u&", "U&"],
+      do: lex_tokens(rest, [:escaped_name | lex_code(:binary.part(raw, 0, size - 2), acc)]),
+      else: lex_tokens([identifier | rest], lex_code(raw, acc))
   end
+
+  defp lex_tokens([token | rest], acc), do: lex_tokens(rest, lex_token(token, acc))
+  defp lex_tokens([], acc), do: acc
+
+  defp lex_token({:code, raw}, acc), do: lex_code(raw, acc)
+
+  defp lex_token({:identifier, raw}, acc) do
+    name = unquote_identifier(raw)
+    [{:name, name, downcase(name)} | acc]
+  end
+
+  defp lex_token({:string, _raw}, acc), do: [:lit | acc]
+  defp lex_token({:variable, _name, _raw}, acc), do: [:lit | acc]
+  defp lex_token({:block, inner}, acc), do: lex_tokens(inner, acc)
+  defp lex_token({:comment, _raw}, acc), do: acc
+
+  defp lex_code(<<c, rest::binary>>, acc) when c in [?\s, ?\t, ?\n, ?\r, ?\f, ?\v],
+    do: lex_code(rest, acc)
+
+  defp lex_code(<<c, _::binary>> = code, acc)
+       when c in ?a..?z or c in ?A..?Z or c == ?_ or c >= 128 do
+    {size, upper?, ascii?} = word_size(code, 1, c in ?A..?Z, c < 128)
+    <<word::binary-size(^size), rest::binary>> = code
+    lex_code(rest, [word(word, upper?, ascii?) | acc])
+  end
+
+  defp lex_code(<<c, _::binary>> = code, acc) when c in ?0..?9 do
+    {size, int?} = number_size(code, digits_size(code, 1))
+    <<number::binary-size(^size), rest::binary>> = code
+    lex_code(rest, [if(int?, do: {:int, number}, else: :lit) | acc])
+  end
+
+  defp lex_code(<<"::", rest::binary>>, acc), do: lex_code(rest, ["::" | acc])
+
+  for p <- @punctuation do
+    defp lex_code(<<unquote(p), rest::binary>>, acc), do: lex_code(rest, [unquote(p) | acc])
+  end
+
+  defp lex_code(<<c, rest::binary>>, acc), do: lex_code(rest, [<<c>> | acc])
+  defp lex_code(<<>>, acc), do: acc
+
+  # The size of the word at the head of `code`, whether it has an ASCII
+  # capital, and whether it is all ASCII.
+  defp word_size(code, n, upper?, ascii?) do
+    case code do
+      <<_::binary-size(^n), c, _::binary>> when c in ?a..?z or c in ?0..?9 or c in [?_, ?$] ->
+        word_size(code, n + 1, upper?, ascii?)
+
+      <<_::binary-size(^n), c, _::binary>> when c in ?A..?Z ->
+        word_size(code, n + 1, true, ascii?)
+
+      <<_::binary-size(^n), c, _::binary>> when c >= 128 ->
+        word_size(code, n + 1, upper?, false)
+
+      _ ->
+        {n, upper?, ascii?}
+    end
+  end
+
+  defp digits_size(code, n) do
+    case code do
+      <<_::binary-size(^n), c, _::binary>> when c in ?0..?9 -> digits_size(code, n + 1)
+      _ -> n
+    end
+  end
+
+  # Digits, then perhaps `.digits`, then perhaps an exponent: `1`, `1.5`,
+  # `1e-3`. Only digits alone are an integer.
+  defp number_size(code, n) do
+    n2 =
+      case code do
+        <<_::binary-size(^n), ?., c, _::binary>> when c in ?0..?9 -> digits_size(code, n + 2)
+        _ -> n
+      end
+
+    n3 =
+      case code do
+        <<_::binary-size(^n2), e, c, _::binary>> when e in [?e, ?E] and c in ?0..?9 ->
+          digits_size(code, n2 + 2)
+
+        <<_::binary-size(^n2), e, s, c, _::binary>>
+        when e in [?e, ?E] and s in [?+, ?-] and c in ?0..?9 ->
+          digits_size(code, n2 + 3)
+
+        _ ->
+          n2
+      end
+
+    {n3, n3 == n}
+  end
+
+  defp word(word, upper?, ascii?) do
+    case known(word) do
+      nil when ascii? and not upper? ->
+        {:name, word, word}
+
+      nil ->
+        down = if ascii?, do: String.downcase(word, :ascii), else: String.downcase(word)
+        keyword(down) || {:name, word, down}
+
+      lexeme ->
+        lexeme
+    end
+  end
+
+  # A keyword in lower or upper case, or a common word in upper case, needs
+  # no lowering.
+  for keyword <- @keywords do
+    defp known(unquote(keyword)), do: {:kw, unquote(keyword)}
+    defp known(unquote(String.upcase(keyword))), do: {:kw, unquote(keyword)}
+  end
+
+  for word <- @common_words, upper = String.upcase(word) do
+    defp known(unquote(upper)), do: {:name, unquote(upper), unquote(word)}
+  end
+
+  defp known(_word), do: nil
+
+  for keyword <- @keywords do
+    defp keyword(unquote(keyword)), do: {:kw, unquote(keyword)}
+  end
+
+  defp keyword(_word), do: nil
+
+  defp downcase(name) do
+    case case_of(name) do
+      :lower -> name
+      :ascii -> String.downcase(name, :ascii)
+      :unicode -> String.downcase(name)
+    end
+  end
+
+  defp case_of(<<c, _::binary>>) when c >= 128, do: :unicode
+  defp case_of(<<c, rest::binary>>) when c in ?A..?Z, do: upper_case_of(rest)
+  defp case_of(<<_, rest::binary>>), do: case_of(rest)
+  defp case_of(<<>>), do: :lower
+
+  defp upper_case_of(<<c, _::binary>>) when c >= 128, do: :unicode
+  defp upper_case_of(<<_, rest::binary>>), do: upper_case_of(rest)
+  defp upper_case_of(<<>>), do: :ascii
+
+  # The quotes off, a doubled quote made one; SQLite's `[name]` has no
+  # escapes. An unterminated identifier runs to the end of the input; its
+  # last character goes too.
+  defp unquote_identifier(<<?[, _::binary>> = raw), do: strip_quotes(raw, ?])
+
+  defp unquote_identifier(<<q, _::binary>> = raw) do
+    inner = strip_quotes(raw, q)
+
+    if :binary.match(inner, <<q, q>>) == :nomatch,
+      do: inner,
+      else: :binary.replace(inner, <<q, q>>, <<q>>, [:global])
+  end
+
+  defp strip_quotes(raw, close) do
+    size = byte_size(raw)
+
+    if size >= 2 and :binary.last(raw) == close,
+      do: :binary.part(raw, 1, size - 2),
+      else: String.slice(raw, 1..-2//1)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Annotation: each lexeme with its clause, and whether its names reach the
+  # result
+  # ---------------------------------------------------------------------------
+
+  # One pass over the lexemes. Each frame is one level of parentheses: the
+  # clause its lexemes sit in (:none, :with, :select, :from, :join_cond,
+  # :order, :group, :other, or :table and :table_order), whether the names of its select list reach
+  # the result, the level it is (a number for each frame, so that an ORDER
+  # BY finds its own query's output columns), whether it holds the arguments
+  # of a scalar function in FROM, and the level whose select items an integer
+  # in it may name (`ORDER BY (1)`, `ROLLUP (1, 2)`, `DISTINCT ON (1)`), or
+  # nil. The names reach the result at the top level and in a derived table
+  # or CTE body nested only in such frames: a consumer reads them through
+  # `*` or by name, both checked where they appear. They don't in an
+  # expression, a function's arguments or a WHERE subquery.
+  #
+  # Each lexeme becomes `{lexeme, reaches?, clause, level}`; an integer
+  # becomes `{:int, digits, level}`, the level it names a select item of
+  # when it is a whole sort or grouping item, or nil.
+  defp annotate(lexemes) do
+    notes = %{relations: %{}, ctes: %{}, outputs: %{}, set_op?: false, alias_list?: false}
+    top = {:none, true, 0, false, nil}
+    {out, notes} = annotate(lexemes, :bof, :bof, [top], 0, nil, [], notes)
+    Map.put(notes, :out, out)
+  end
+
+  defp annotate([lexeme | rest], prev, prev2, [frame | _] = frames, levels, scalar, acc, notes) do
+    {clause, reaches?, level, _scalar?, position} = frame
+    next = next_of(rest)
+
+    notes =
+      notes
+      |> note(scalar, lexeme, prev, prev2, next, clause)
+      |> note_output(lexeme, prev, clause, level)
+
+    entry = {entry_lexeme(lexeme, clause, prev, next, level, position), reaches?, clause, level}
+    scalar = scalar_after(scalar, lexeme, clause)
+
+    case step(lexeme, frames, levels, clause, prev, prev2) do
+      {frames, levels} ->
+        annotate(rest, lexeme, prev, frames, levels, scalar, [entry | acc], notes)
+
+      {frames, levels, scalar} ->
+        annotate(rest, lexeme, prev, frames, levels, scalar, [entry | acc], notes)
+    end
+  end
+
+  defp annotate([], _prev, _prev2, _frames, _levels, _scalar, acc, notes),
+    do: {:lists.reverse(acc), notes}
+
+  defp next_of([next | _]), do: next
+  defp next_of([]), do: :eof
+
+  # Relation names and aliases (in FROM) and CTE names (in WITH), so that a
+  # whole-row reference to one can be found; and the renaming forms. Right
+  # after a scalar function's arguments close in FROM (`scalar` is :call),
+  # its alias names a value, not a row, and so does a column alias list
+  # after it.
+  defp note(notes, :call, {:name, _, _}, _prev, _prev2, _next, :from), do: notes
+  defp note(notes, {:alias, alias}, "(", alias, _prev2, _next, :from), do: notes
+
+  defp note(notes, _scalar, {:name, _raw, down}, _prev, _prev2, next, :from) when next != ".",
+    do: %{notes | relations: Map.put(notes.relations, down, true)}
+
+  defp note(notes, _scalar, "(", prev, prev2, _next, :from) do
+    if prev in [{:kw, "as"}, ")"] or (name?(prev) and alias_position?(prev2)),
+      do: %{notes | alias_list?: true},
+      else: notes
+  end
+
+  defp note(notes, _scalar, {:name, _raw, down}, prev, _prev2, next, :with)
+       when prev in [{:kw, "with"}, {:kw, "recursive"}, ","] do
+    %{
+      notes
+      | relations: Map.put(notes.relations, down, true),
+        ctes: Map.put(notes.ctes, down, true),
+        alias_list?: notes.alias_list? or next == "("
+    }
+  end
+
+  defp note(notes, _scalar, {:kw, op}, _prev, _prev2, _next, _clause) when op in @set_ops,
+    do: %{notes | set_op?: true}
+
+  defp note(notes, _scalar, _lexeme, _prev, _prev2, _next, _clause), do: notes
+
+  # The output columns' aliases, for ORDER BY.
+  defp note_output(notes, {:name, _raw, down}, {:kw, "as"}, :select, level),
+    do: %{notes | outputs: Map.put(notes.outputs, {level, down}, true)}
+
+  defp note_output(notes, _lexeme, _prev, _clause, _level), do: notes
+
+  # After a scalar function's arguments close in FROM: an optional AS, then
+  # its alias, then perhaps the alias's column list.
+  defp scalar_after(:call, {:kw, "as"}, :from), do: :call
+  defp scalar_after(:call, {:name, _, _} = alias, :from), do: {:alias, alias}
+  defp scalar_after(_scalar, _lexeme, _clause), do: nil
+
+  # A name follows a table or subquery here, so a "(" after it opens a column
+  # alias list rather than a function's arguments.
+  defp alias_position?(lexeme), do: name?(lexeme) or lexeme in [")", {:kw, "as"}]
+
+  defp name?({:name, _, _}), do: true
+  defp name?(_), do: false
+
+  # A whole ORDER BY or GROUP BY item that is an integer names the select
+  # item at that position, and so does a whole item in parentheses of one,
+  # of ROLLUP, CUBE, GROUPING SETS or DISTINCT ON. An integer followed by an
+  # operator is an operand.
+  defp entry_lexeme({:int, n}, clause, prev, next, level, position) do
+    cond do
+      clause in @position_clauses and prev in [{:kw, "by"}, ","] and not operator?(next) ->
+        {:int, n, level}
+
+      clause == :none and prev in ["(", ","] and next in [")", ","] ->
+        {:int, n, position}
+
+      true ->
+        {:int, n, nil}
+    end
+  end
+
+  defp entry_lexeme(lexeme, _clause, _prev, _next, _level, _position), do: lexeme
+
+  defp operator?(next), do: is_binary(next) and next not in [",", ")", ";"]
+
+  defp step("(", [frame | _] = frames, levels, clause, prev, prev2) do
+    {_clause, reaches?, level, _scalar?, position} = frame
+    levels = levels + 1
+    scalar? = clause == :from and scalar_function?(prev)
+    position = paren_position(clause, prev, prev2, level, position)
+    {[{:none, reaches? and clause in [:from, :with], levels, scalar?, position} | frames], levels}
+  end
+
+  defp step(")", [_top] = frames, levels, _clause, _prev, _prev2), do: {frames, levels}
+
+  defp step(")", [{_, _, _, scalar?, _} | frames], levels, _clause, _prev, _prev2),
+    do: {frames, levels, if(scalar?, do: :call)}
+
+  defp step({:kw, kw}, [frame | parents] = frames, levels, clause, _prev, _prev2) do
+    case keyword_clause(kw, clause) do
+      ^clause -> {frames, levels}
+      clause -> {[put_elem(frame, 0, clause) | parents], levels}
+    end
+  end
+
+  defp step(_lexeme, frames, levels, _clause, _prev, _prev2), do: {frames, levels}
+
+  defp keyword_clause("select", _clause), do: :select
+  defp keyword_clause("with", clause) when clause in [:none, :table, :table_order], do: :with
+  defp keyword_clause("from", :select), do: :from
+
+  # `TABLE t` reads as `SELECT * FROM t ...`, so its ORDER BY sorts by the
+  # table's columns, by position too. Otherwise :table and :table_order are
+  # :none.
+  defp keyword_clause("table", :none), do: :table
+  defp keyword_clause("order", :table), do: :table_order
+
+  defp keyword_clause(kw, :table_order) when kw in @clause_ends or kw == "group",
+    do: :table
+
+  defp keyword_clause("join", clause) when clause in [:from, :join_cond], do: :from
+  defp keyword_clause(kw, :from) when kw in ["on", "using"], do: :join_cond
+  defp keyword_clause("order", clause) when clause in @query_clauses, do: :order
+  defp keyword_clause("group", clause) when clause in @query_clauses, do: :group
+
+  defp keyword_clause(kw, clause) when kw in @clause_ends and clause in @query_clauses,
+    do: :other
+
+  defp keyword_clause(kw, _clause) when kw in @set_ops, do: :none
+  defp keyword_clause(_kw, clause), do: clause
+
+  # The level whose select items a whole integer item in a "(" opened here
+  # names: this frame's own after ORDER BY or GROUP BY, its enclosing one's
+  # in a nested list, nil in a function's arguments.
+  defp paren_position(:select, {:kw, "on"}, {:kw, "distinct"}, level, _position), do: level
+
+  defp paren_position(clause, prev, _prev2, level, _position) when clause in @position_clauses,
+    do: if(item_start?(prev), do: level)
+
+  defp paren_position(:none, prev, _prev2, _level, position),
+    do: if(item_start?(prev), do: position)
+
+  defp paren_position(_clause, _prev, _prev2, _level, _position), do: nil
+
+  defp item_start?({:name, _raw, down}), do: down in @grouping_sets
+  defp item_start?(prev), do: prev in [{:kw, "by"}, ",", "("]
+
+  defp scalar_function?({:name, _raw, down}), do: down in @scalar_functions
+  defp scalar_function?(_lexeme), do: false
+
+  # ---------------------------------------------------------------------------
+  # Verification: one pass over the annotated lexemes
+  # ---------------------------------------------------------------------------
+
+  defp verify(%{alias_list?: true}, _matcher, _rels) do
+    {:error,
+     "Query renames the columns of a table with protected columns through a column " <>
+       "alias list, which Lotus can't check against column policies. Alias columns in " <>
+       "the select list instead."}
+  end
+
+  # `context` holds what the whole statement tells; `cache` what is worked
+  # out from it only when needed: whether a name is protected, the sources
+  # FROM binds, the select lists, the outcome of a position.
+  defp verify(%{out: out} = notes, matcher, rels) do
+    context = %{
+      matcher: matcher,
+      names: column_names(matcher),
+      rels: rels,
+      out: out,
+      relations: notes.relations,
+      outputs: notes.outputs,
+      ctes: notes.ctes,
+      set_op?: notes.set_op?
+    }
+
+    walk(out, :bof, :bof, {:bof, []}, {:bof, []}, context, %{})
+  end
+
+  # Besides the lexemes before it, each one carries what precedes its
+  # `schema.table.` qualifier and the qualifier's names, so that the walk
+  # never looks back further than two lexemes.
+  defp walk([{lexeme, _, _, _} = entry | rest], prev, prev2, chain1, chain2, ctx, cache) do
+    chain = chain(prev, prev2, chain2)
+
+    case check_entry(entry, prev, prev2, chain, rest, ctx, cache) do
+      {:ok, cache} -> walk(rest, lexeme, prev, chain, chain1, ctx, cache)
+      {:error, _message} = error -> error
+    end
+  end
+
+  defp walk([], _prev, _prev2, _chain1, _chain2, _ctx, _cache), do: :ok
+
+  defp chain(".", {:name, raw, _down}, {before, qualifier}), do: {before, qualifier ++ [raw]}
+  defp chain(prev, _prev2, _chain2), do: {prev, []}
+
+  defp check_entry(
+         {{:name, raw, down}, _, clause, _} = entry,
+         prev,
+         _prev2,
+         chain,
+         rest,
+         ctx,
+         cache
+       ) do
+    if definition?(prev, clause),
+      do: {:ok, cache},
+      else: check_name(raw, down, entry, prev, chain, rest, ctx, cache)
+  end
+
+  # `count(*)` reads no column; `*` and `t.*` as select items keep the names,
+  # except across a set operation; `*` between operands multiplies them.
+  defp check_entry({"*", _, clause, _}, prev, prev2, {before, _qualifier}, rest, ctx, cache) do
+    next = next_lexeme(rest)
+
+    cond do
+      prev == "(" and next == ")" ->
+        {:ok, cache}
+
+      clause == :select and before in @select_starts and next in [")" | @item_ends] ->
+        star_ok(ctx, cache)
+
+      prev == "." ->
+        whole_row_error(qualifier(prev2))
+
+      true ->
+        {:ok, cache}
+    end
+  end
+
+  defp check_entry({{:int, n, level}, _, _, _}, _prev, _prev2, _chain, _rest, ctx, cache)
+       when level != nil,
+       do: check_position(n, level, ctx, cache)
+
+  # `TABLE t` is `SELECT * FROM t`.
+  defp check_entry({{:kw, "table"}, _, :none, _}, _prev, _prev2, _chain, _rest, ctx, cache),
+    do: star_ok(ctx, cache)
+
+  defp check_entry({:escaped_name, _, _, _}, _prev, _prev2, _chain, _rest, _ctx, _cache) do
+    {:error,
+     "Query uses a Unicode-escaped identifier (U&\"...\"), which Lotus can't check " <>
+       "against column policies. Write the name plainly."}
+  end
+
+  defp check_entry(_entry, _prev, _prev2, _chain, _rest, _ctx, cache), do: {:ok, cache}
+
+  # A protected column may stand only as a whole select item whose names
+  # reach the result; any other name may be a whole row.
+  defp check_name(raw, down, {_, reaches?, clause, level}, prev, chain, rest, ctx, cache) do
+    {before, qualifier} = chain
+
+    case protected?(raw, down, qualifier, ctx, cache) do
+      {true, cache} ->
+        if reaches? and clause == :select and not ctx.set_op? and before in @select_starts and
+             bare_end?(rest, down),
+           do: {:ok, cache},
+           else: protected_error(raw)
+
+      {false, cache} ->
+        if whole_row?(down, clause, level, prev, rest, ctx),
+          do: whole_row_error(raw),
+          else: {:ok, cache}
+    end
+  end
+
+  defp star_ok(%{set_op?: true}, _cache), do: set_op_error()
+  defp star_ok(_ctx, cache), do: {:ok, cache}
+
+  # An output alias or a CTE name names something; it reads nothing.
+  defp definition?({:kw, "as"}, _clause), do: true
+  defp definition?(prev, :with), do: prev in [{:kw, "with"}, {:kw, "recursive"}, ","]
+  defp definition?(_prev, _clause), do: false
+
+  defp bare_end?([{{:kw, "as"}, _, _, _} | rest], down) do
+    case rest do
+      [{{:name, _raw, ^down}, _, _, _} | rest] -> next_lexeme(rest) in @item_ends
+      _ -> false
+    end
+  end
+
+  defp bare_end?(rest, _down), do: next_lexeme(rest) in @item_ends
+
+  defp whole_row?(down, clause, level, prev, rest, ctx) do
+    next = next_lexeme(rest)
+
+    clause != :from and Map.has_key?(ctx.relations, down) and prev != "." and
+      next not in [".", "("] and not sorts_by_output?(down, clause, level, prev, next, ctx)
+  end
+
+  # A whole ORDER BY item that names an output column of its own query sorts
+  # by that column: the database reads an output name before a relation's
+  # row there. Not inside an expression, where output names don't reach.
+  defp sorts_by_output?(down, clause, level, prev, next, ctx) do
+    clause == :order and prev in [{:kw, "by"}, ","] and sort_item_end?(next) and
+      Map.has_key?(ctx.outputs, {level, down})
+  end
+
+  defp sort_item_end?({:name, _raw, down}), do: down in @sort_modifiers
+  defp sort_item_end?(next), do: next in @sort_item_ends
+
+  defp qualifier({:name, raw, _down}), do: raw
+  defp qualifier(_), do: "*"
+
+  # ---------------------------------------------------------------------------
+  # Protection: by name, or by the relation a qualifier names
+  # ---------------------------------------------------------------------------
 
   # A name qualified by a relation preflight found (`o.ssn` with `orders o`)
   # reads that relation's column, protected only if a policy for it is. Any
   # other name may read any relation's column of that name.
-  defp protected?(matcher, rels, name, nil), do: protected?(matcher, rels, name)
+  defp protected?(raw, down, qualifier, ctx, cache) do
+    {protected?, cache} = protected_by_name?(raw, down, ctx, cache)
 
-  defp protected?(matcher, rels, name, relation),
-    do: protected?(matcher, rels, name) and protected?(matcher, [relation], name)
-
-  defp protected?(matcher, rels, name) do
-    Enum.any?(Enum.uniq([name, String.downcase(name)]), fn n ->
-      case Visibility.column_policy_for(matcher, rels, n) do
-        %{action: action} when action != :allow -> true
-        _ -> false
+    if protected? and qualifier != [] do
+      case resolve(qualifier, ctx, cache) do
+        {nil, cache} -> {true, cache}
+        {relation, cache} -> {policy_protects?(ctx.matcher, [relation], raw, down), cache}
       end
-    end)
+    else
+      {protected?, cache}
+    end
+  end
+
+  # Asked each time a name stands, unless no column rule can name it.
+  defp protected_by_name?(raw, down, %{names: names} = ctx, cache) do
+    if names == :any or Map.has_key?(names, raw) or Map.has_key?(names, down),
+      do: {policy_protects?(ctx.matcher, ctx.rels, raw, down), cache},
+      else: {false, cache}
+  end
+
+  # The column names the matcher's column rules spell out exactly, or :any
+  # when one is a pattern. A rule's column matches a name only when the two
+  # are equal (`Lotus.Visibility.Matcher`), so no other name can be
+  # protected and the matcher needs no asking about it. Anything this
+  # doesn't recognize is read as :any.
+  defp column_names(%Matcher{column: %{patterns: [], exact: exact} = rules}) when is_map(exact) do
+    columns =
+      Enum.map(Map.get(rules, :schema_table, []), &elem(&1, 2)) ++
+        Enum.map(Map.get(rules, :table, []), &elem(&1, 1))
+
+    if Enum.all?(columns, &(is_binary(&1) and &1 != "*")),
+      do: Map.new(columns ++ Map.keys(exact), &{&1, true}),
+      else: :any
+  end
+
+  defp column_names(_matcher), do: :any
+
+  defp policy_protects?(matcher, rels, raw, down) do
+    restricts?(Visibility.column_policy_for(matcher, rels, raw)) or
+      (down != raw and restricts?(Visibility.column_policy_for(matcher, rels, down)))
+  end
+
+  defp restricts?(%{action: action}), do: action != :allow
+  defp restricts?(_policy), do: false
+
+  # Whether a name is protected once the sources are known (a select item's).
+  defp protected_name?(raw, down, qualifier, ctx, cache) do
+    {protected?, _cache} = protected?(raw, down, qualifier, ctx, cache)
+    protected?
   end
 
   # `t.*` over a relation with no protected column, wherever it stands.
-  defp safe_star?(_matcher, nil), do: false
-  defp safe_star?(matcher, relation), do: not Matcher.restricts_columns?(matcher, [relation])
+  defp safe_star?(qualifier, ctx, cache) do
+    case resolve(qualifier, ctx, cache) do
+      {nil, _cache} -> false
+      {relation, _cache} -> not Matcher.restricts_columns?(ctx.matcher, [relation])
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Qualifiers: the relation a qualified name reads, when it can be told
   # ---------------------------------------------------------------------------
 
+  # What FROM binds to `name`, and how often the name stands anywhere but
+  # before a dot. A statement with a few qualifiers is scanned for each; one
+  # with more has all its names worked out at once, so the check stays
+  # linear in the statement's size.
+  defp bound(name, ctx, cache) do
+    key = {:bound, name}
+
+    case cache do
+      %{^key => bound} ->
+        {bound, cache}
+
+      %{sources: {binds, counts}} ->
+        {{Map.get(binds, name, []), Map.get(counts, name, 0)}, cache}
+
+      %{scans: @max_scans} ->
+        bound(name, ctx, with_sources(cache, ctx))
+
+      _ ->
+        bound = scan(ctx.out, :bof, name, ctx.ctes, [], 0)
+        {bound, cache |> Map.put(key, bound) |> Map.update(:scans, 1, &(&1 + 1))}
+    end
+  end
+
+  defp scan([{lexeme, _reaches?, clause, _level} | rest] = entries, prev, name, ctes, binds, n) do
+    n =
+      case lexeme do
+        {:name, _raw, ^name} -> if next_lexeme(rest) == ".", do: n, else: n + 1
+        _ -> n
+      end
+
+    case binding(lexeme, clause, prev, entries, rest, ctes) do
+      {^name, target} -> scan(rest, lexeme, name, ctes, [target | binds], n)
+      _ -> scan(rest, lexeme, name, ctes, binds, n)
+    end
+  end
+
+  defp scan([], _prev, _name, _ctes, binds, n), do: {binds, n}
+
+  defp with_sources(%{sources: _} = cache, _ctx), do: cache
+  defp with_sources(cache, ctx), do: Map.put(cache, :sources, sources(ctx.out, ctx.ctes))
+
   # What the statement binds in FROM and JOIN, by lowercase name: a table
   # (`{:table, path}`, under its alias or else its name) or something whose
   # columns can be anything (`:opaque`: a CTE, a derived table, a function);
   # and how often each name stands anywhere but before a dot.
-  defp sources(out, ctes) do
-    Enum.reduce(0..(tuple_size(out) - 1)//1, {%{}, %{}}, fn i, {bindings, counts} ->
-      counts =
-        case elem(out, i) do
-          {{:name, name}, _reaches?, _clause, _level} ->
-            if at(out, i + 1) == ".",
-              do: counts,
-              else: Map.update(counts, String.downcase(name), 1, &(&1 + 1))
+  defp sources(out, ctes), do: sources(out, :bof, ctes, %{}, %{})
 
-          _ ->
-            counts
-        end
+  defp sources([{lexeme, _reaches?, clause, _level} | rest] = entries, prev, ctes, binds, counts) do
+    counts =
+      case lexeme do
+        {:name, _raw, down} ->
+          if next_lexeme(rest) == ".", do: counts, else: Map.update(counts, down, 1, &(&1 + 1))
 
-      case binding_at(out, i, ctes) do
-        nil -> {bindings, counts}
-        {name, target} -> {Map.update(bindings, name, [target], &[target | &1]), counts}
+        _ ->
+          counts
       end
-    end)
+
+    binds =
+      case binding(lexeme, clause, prev, entries, rest, ctes) do
+        nil -> binds
+        {name, target} -> Map.update(binds, name, [target], &[target | &1])
+      end
+
+    sources(rest, lexeme, ctes, binds, counts)
   end
 
-  defp binding_at(out, i, ctes) do
-    case elem(out, i) do
-      {{:name, _}, _reaches?, :from, _level} ->
-        if at(out, i - 1) in @table_starts, do: table_binding(out, i, ctes)
+  defp sources([], _prev, _ctes, binds, counts), do: {binds, counts}
 
-      {")", _reaches?, _clause, _level} ->
-        with {_lexeme, _reaches?, :from, _level} <- raw_at(out, i + 1),
-             name when is_binary(name) <- alias_at(out, i + 1) do
-          {String.downcase(name), :opaque}
-        else
-          _ -> nil
-        end
+  defp binding({:name, _, _}, :from, prev, entries, _rest, ctes) do
+    if prev in @table_starts, do: table_binding(entries, ctes)
+  end
 
-      _ ->
-        nil
+  defp binding(")", _clause, _prev, _entries, [{_lexeme, _reaches?, :from, _level} | _] = rest, _) do
+    case alias_of(rest) do
+      nil -> nil
+      {_raw, down} -> {down, :opaque}
     end
   end
 
-  defp table_binding(out, i, ctes) do
-    {path, j} = path_at(out, i, [])
-    path = Enum.map(path, &String.downcase/1)
+  defp binding(_lexeme, _clause, _prev, _entries, _rest, _ctes), do: nil
+
+  defp table_binding(entries, ctes) do
+    {path, rest} = path_of(entries, [])
+    path = Enum.map(path, &downcase/1)
 
     cond do
-      at(out, j) == "(" -> nil
-      cte?(path, ctes) -> {alias_at(out, j, List.last(path)), :opaque}
-      true -> {alias_at(out, j, List.last(path)), {:table, path}}
+      next_lexeme(rest) == "(" -> nil
+      cte?(path, ctes) -> {alias_name(rest, List.last(path)), :opaque}
+      true -> {alias_name(rest, List.last(path)), {:table, path}}
     end
   end
 
-  defp path_at(out, i, acc) do
-    {:name, name} = at(out, i)
-
-    if at(out, i + 1) == "." and name?(at(out, i + 2)),
-      do: path_at(out, i + 2, [name | acc]),
-      else: {Enum.reverse([name | acc]), i + 1}
-  end
-
-  defp alias_at(out, j, default) do
-    case alias_at(out, j) do
+  defp alias_name(rest, default) do
+    case alias_of(rest) do
       nil -> default
-      name -> String.downcase(name)
+      {_raw, down} -> down
     end
   end
 
-  defp alias_at(out, j) do
-    case {at(out, j), at(out, j + 1)} do
-      {{:kw, "as"}, {:name, name}} -> name
-      {{:name, name}, _next} -> name
-      _ -> nil
-    end
-  end
+  defp alias_of([{{:kw, "as"}, _, _, _}, {{:name, raw, down}, _, _, _} | _]), do: {raw, down}
+  defp alias_of([{{:name, raw, down}, _, _, _} | _]), do: {raw, down}
+  defp alias_of(_rest), do: nil
 
   # The relation of `rels` a qualifier (`[alias]`, `[table]` or
   # `[schema, table]`) names, or nil when it can't be told for sure: the name
   # is bound more than once, or stands elsewhere too (a column, another
   # alias), or binds no table preflight found, exactly once.
-  defp resolve([], _sources, _rels), do: nil
+  defp resolve(qualifier, ctx, cache) when length(qualifier) in [1, 2] do
+    path = Enum.map(qualifier, &downcase/1)
+    {bound, cache} = bound(List.last(path), ctx, cache)
+    {resolve_path(path, bound, ctx.rels), cache}
+  end
 
-  defp resolve(qualifier, {bindings, counts}, rels) when length(qualifier) <= 2 do
-    [name | _] = path = qualifier |> Enum.map(&String.downcase/1) |> Enum.reverse()
+  defp resolve(_qualifier, _ctx, cache), do: {nil, cache}
 
-    with [{:table, table}] <- Map.get(bindings, name),
-         1 <- Map.get(counts, name),
-         {:ok, path} <- relation_path(Enum.reverse(path), table),
+  defp resolve_path(path, bound, rels) do
+    with {[{:table, table}], 1} <- bound,
+         {:ok, path} <- relation_path(path, table),
          [relation] <- Enum.filter(rels, &relation?(&1, path)) do
       relation
     else
       _ -> nil
     end
   end
-
-  defp resolve(_qualifier, _sources, _rels), do: nil
 
   # `[alias]` names the table it is bound to; `[schema, table]` names a table
   # bound under its own name.
@@ -267,512 +893,128 @@ defmodule Lotus.Preflight.Columns do
   defp relation?(_relation, _path), do: false
 
   # ---------------------------------------------------------------------------
-  # Lexing: code becomes words and punctuation; literals and comments drop out
+  # Positions: ORDER BY 1, GROUP BY 1
   # ---------------------------------------------------------------------------
-
-  @lexeme ~r/[\p{L}_][\p{L}\p{N}_$]*|\d+(?:\.\d+)?(?:e[+-]?\d+)?|::|\S/iu
-
-  defp lex(sql, profile), do: sql |> Tokenizer.tokenize(profile) |> lex_tokens()
-
-  defp lex_tokens(tokens), do: tokens |> lex_tokens([]) |> Enum.reverse() |> Enum.concat()
-
-  # PostgreSQL's `U&"\0073sn"` spells a name with escapes this check doesn't
-  # decode, so it stands for a name that can't be compared.
-  defp lex_tokens([{:code, raw}, {:identifier, _} = identifier | rest], acc) do
-    if Regex.match?(~r/u&\z/i, raw),
-      do: lex_tokens(rest, [[:escaped_name], lex_code(String.slice(raw, 0..-3//1)) | acc]),
-      else: lex_tokens([identifier | rest], [lex_code(raw) | acc])
-  end
-
-  defp lex_tokens([token | rest], acc), do: lex_tokens(rest, [lex_token(token) | acc])
-  defp lex_tokens([], acc), do: acc
-
-  defp lex_token(token) do
-    case token do
-      {:code, raw} -> lex_code(raw)
-      {:identifier, raw} -> [{:name, unquote_identifier(raw)}]
-      {:string, _raw} -> [:lit]
-      {:variable, _name, _raw} -> [:lit]
-      {:block, inner} -> lex_tokens(inner)
-      {:comment, _raw} -> []
-    end
-  end
-
-  defp lex_code(raw) do
-    @lexeme
-    |> Regex.scan(raw)
-    |> Enum.map(fn [lexeme] ->
-      cond do
-        Regex.match?(~r/^[\p{L}_]/u, lexeme) -> word(String.downcase(lexeme), lexeme)
-        Regex.match?(~r/^[0-9]+$/, lexeme) -> {:int, lexeme}
-        Regex.match?(~r/^\d/, lexeme) -> :lit
-        true -> lexeme
-      end
-    end)
-  end
-
-  defp word(down, _raw) when down in @keywords, do: {:kw, down}
-  defp word(_down, raw), do: {:name, raw}
-
-  defp unquote_identifier(raw) do
-    q = String.first(raw)
-    raw |> String.slice(1..-2//1) |> String.replace(q <> q, q)
-  end
-
-  # ---------------------------------------------------------------------------
-  # Annotation: each lexeme with its clause, and whether its names reach the
-  # result
-  # ---------------------------------------------------------------------------
-
-  # Each frame is one level of parentheses: the clause its lexemes sit in
-  # (:none, :with, :select, :from, :join_cond, :order, :group, :other, :table or
-  # :table_order), whether the
-  # names of its select list reach the result, the level it is (a number
-  # for each frame, so that an ORDER BY finds its own query's output
-  # columns), and whether it holds the arguments of a scalar function in
-  # FROM. The names reach the result at the top level and in a derived
-  # table or CTE body nested only in such frames: a consumer reads them
-  # through `*` or by name, both checked where they appear. They don't in
-  # an expression, a function's arguments or a WHERE subquery.
-  defp annotate(lexemes) do
-    lexemes = List.to_tuple(lexemes)
-    size = tuple_size(lexemes)
-
-    init = %{
-      frames: [{:none, true, 0, false}],
-      levels: 0,
-      out: [],
-      relations: MapSet.new(),
-      ctes: MapSet.new(),
-      outputs: MapSet.new(),
-      scalar: nil,
-      set_op?: false,
-      alias_list?: false
-    }
-
-    state =
-      Enum.reduce(0..(size - 1)//1, init, fn i, state ->
-        lexeme = elem(lexemes, i)
-        prev = raw_at(lexemes, i - 1)
-        [{clause, reaches?, level, _scalar?} | _] = state.frames
-
-        state
-        |> note(lexeme, prev, raw_at(lexemes, i - 2), raw_at(lexemes, i + 1), clause, level)
-        |> Map.update!(:out, &[{lexeme, reaches?, clause, level} | &1])
-        |> step(lexeme, clause, prev)
-      end)
-
-    %{state | out: state.out |> Enum.reverse() |> List.to_tuple()}
-  end
-
-  # Relation names and aliases (in FROM) and CTE names (in WITH), so that a
-  # whole-row reference to one can be found; the output columns' aliases,
-  # for ORDER BY; and the renaming forms. Right after a scalar function's
-  # arguments close in FROM (`state.scalar` is :call), its alias names a
-  # value, not a row, and so does a column alias list after it.
-  defp note(state, lexeme, prev, prev2, next, clause, level) do
-    state
-    |> note(lexeme, prev, prev2, next, clause)
-    |> note_output(lexeme, prev, clause, level)
-    |> Map.put(:scalar, scalar_after(state.scalar, lexeme, clause))
-  end
-
-  defp note(%{scalar: :call} = state, {:name, _}, _prev, _prev2, _next, :from), do: state
-
-  defp note(%{scalar: {:alias, alias}} = state, "(", alias, _prev2, _next, :from), do: state
-
-  defp note(state, {:name, name}, _prev, _prev2, next, :from) when next != ".",
-    do: %{state | relations: MapSet.put(state.relations, String.downcase(name))}
-
-  defp note(state, "(", prev, prev2, _next, :from) do
-    if prev in [{:kw, "as"}, ")"] or (name?(prev) and alias_position?(prev2)),
-      do: %{state | alias_list?: true},
-      else: state
-  end
-
-  defp note(state, {:name, name}, prev, _prev2, next, :with)
-       when prev in [{:kw, "with"}, {:kw, "recursive"}, ","] do
-    name = String.downcase(name)
-
-    %{state | relations: MapSet.put(state.relations, name), ctes: MapSet.put(state.ctes, name)}
-    |> Map.update!(:alias_list?, &(&1 or next == "("))
-  end
-
-  defp note(state, {:kw, op}, _prev, _prev2, _next, _clause) when op in @set_ops,
-    do: %{state | set_op?: true}
-
-  defp note(state, _lexeme, _prev, _prev2, _next, _clause), do: state
-
-  defp note_output(state, {:name, name}, {:kw, "as"}, :select, level),
-    do: %{state | outputs: MapSet.put(state.outputs, {level, String.downcase(name)})}
-
-  defp note_output(state, _lexeme, _prev, _clause, _level), do: state
-
-  # After a scalar function's arguments close in FROM: an optional AS, then
-  # its alias, then perhaps the alias's column list.
-  defp scalar_after(:call, {:kw, "as"}, :from), do: :call
-  defp scalar_after(:call, {:name, _} = alias, :from), do: {:alias, alias}
-  defp scalar_after(_scalar, _lexeme, _clause), do: nil
-
-  # A name follows a table or subquery here, so a "(" after it opens a column
-  # alias list rather than a function's arguments.
-  defp alias_position?(lexeme), do: name?(lexeme) or lexeme in [")", {:kw, "as"}]
-
-  defp name?({:name, _}), do: true
-  defp name?(_), do: false
-
-  defp step(%{frames: [{_, reaches?, _, _} | _]} = state, "(", clause, prev) do
-    level = state.levels + 1
-    scalar? = clause == :from and scalar_function?(prev)
-    frame = {:none, reaches? and clause in [:from, :with], level, scalar?}
-    %{state | frames: [frame | state.frames], levels: level}
-  end
-
-  defp step(%{frames: [_]} = state, ")", _clause, _prev), do: state
-
-  defp step(%{frames: [{_, _, _, scalar?} | rest]} = state, ")", _clause, _prev),
-    do: %{state | frames: rest, scalar: if(scalar?, do: :call)}
-
-  defp step(state, {:kw, "select"}, _clause, _prev), do: set_clause(state, :select)
-
-  defp step(state, {:kw, "with"}, clause, _prev) when clause in [:none, :table, :table_order],
-    do: set_clause(state, :with)
-
-  defp step(state, {:kw, "from"}, :select, _prev), do: set_clause(state, :from)
-
-  # `TABLE t` reads as `SELECT * FROM t ...`, so its ORDER BY sorts by the
-  # table's columns, by position too. Otherwise :table and :table_order are
-  # :none.
-  defp step(state, {:kw, "table"}, :none, _prev), do: set_clause(state, :table)
-  defp step(state, {:kw, "order"}, :table, _prev), do: set_clause(state, :table_order)
-
-  defp step(state, {:kw, kw}, :table_order, _prev) when kw in @clause_ends and kw != "order",
-    do: set_clause(state, :table)
-
-  defp step(state, {:kw, "join"}, clause, _prev) when clause in [:from, :join_cond],
-    do: set_clause(state, :from)
-
-  defp step(state, {:kw, kw}, :from, _prev) when kw in ["on", "using"],
-    do: set_clause(state, :join_cond)
-
-  defp step(state, {:kw, "order"}, clause, _prev) when clause in @query_clauses,
-    do: set_clause(state, :order)
-
-  defp step(state, {:kw, "group"}, clause, _prev) when clause in @query_clauses,
-    do: set_clause(state, :group)
-
-  defp step(state, {:kw, kw}, clause, _prev) when kw in @clause_ends and clause in @query_clauses,
-    do: set_clause(state, :other)
-
-  defp step(state, {:kw, op}, _clause, _prev) when op in @set_ops, do: set_clause(state, :none)
-  defp step(state, _lexeme, _clause, _prev), do: state
-
-  defp scalar_function?({:name, name}), do: String.downcase(name) in @scalar_functions
-  defp scalar_function?(_lexeme), do: false
-
-  defp set_clause(%{frames: [{_, reaches?, level, scalar?} | rest]} = state, clause),
-    do: %{state | frames: [{clause, reaches?, level, scalar?} | rest]}
-
-  defp raw_at(_tuple, i) when i < 0, do: :bof
-  defp raw_at(tuple, i) when i >= tuple_size(tuple), do: :eof
-  defp raw_at(tuple, i), do: elem(tuple, i)
-
-  defp at(_tuple, i) when i < 0, do: :bof
-  defp at(tuple, i) when i >= tuple_size(tuple), do: :eof
-  defp at(tuple, i), do: tuple |> elem(i) |> elem(0)
-
-  # ---------------------------------------------------------------------------
-  # Verification
-  # ---------------------------------------------------------------------------
-
-  defp verify(%{alias_list?: true}, _matcher, _rels) do
-    {:error,
-     "Query renames the columns of a table with protected columns through a column " <>
-       "alias list, which Lotus can't check against column policies. Alias columns in " <>
-       "the select list instead."}
-  end
-
-  defp verify(%{out: out} = state, matcher, rels) do
-    sources = sources(out, state.ctes)
-    protected? = &protected?(matcher, rels, &1, resolve(&2, sources, rels))
-    state = Map.put(state, :safe_star?, &safe_star?(matcher, resolve(&1, sources, rels)))
-
-    0..(tuple_size(out) - 1)//1
-    |> Enum.find_value(:ok, fn i -> check_at(out, i, state, protected?) end)
-  end
-
-  # The names before `i`'s, each followed by a dot: `[schema, table]` for
-  # `schema.table.column`.
-  defp qualifier_at(out, i) do
-    if at(out, i - 1) == "." and name?(at(out, i - 2)) do
-      {:name, name} = at(out, i - 2)
-      qualifier_at(out, i - 2) ++ [name]
-    else
-      []
-    end
-  end
-
-  defp check_at(out, i, state, protected?) do
-    case at(out, i) do
-      {:name, name} ->
-        check_name(out, i, name, state, protected?)
-
-      "*" ->
-        check_star(out, i, state)
-
-      # `TABLE t` is `SELECT * FROM t`.
-      {:kw, "table"} ->
-        if state.set_op? and out |> elem(i) |> elem(2) == :none, do: set_op_error()
-
-      {:int, n} ->
-        check_position(out, i, n, state, protected?)
-
-      :escaped_name ->
-        {:error,
-         "Query uses a Unicode-escaped identifier (U&\"...\"), which Lotus can't check " <>
-           "against column policies. Write the name plainly."}
-
-      _ ->
-        nil
-    end
-  end
-
-  defp check_name(out, i, name, state, protected?) do
-    cond do
-      definition?(out, i) -> nil
-      protected?.(name, qualifier_at(out, i)) -> check_protected(out, i, name, state)
-      whole_row?(out, i, name, state) -> whole_row_error(name)
-      true -> nil
-    end
-  end
-
-  # An output alias or a CTE name names something; it reads nothing.
-  defp definition?(out, i) do
-    prev = at(out, i - 1)
-    {_lexeme, _reaches?, clause, _level} = elem(out, i)
-
-    prev == {:kw, "as"} or
-      (clause == :with and prev in [{:kw, "with"}, {:kw, "recursive"}, ","])
-  end
-
-  defp check_protected(out, i, name, state) do
-    {_lexeme, reaches?, clause, _level} = elem(out, i)
-
-    if reaches? and clause == :select and not state.set_op? and
-         bare_start?(out, i) and bare_end?(out, i, name),
-       do: nil,
-       else: protected_error(name)
-  end
-
-  # What precedes the item, past any `schema.table.` qualifier.
-  defp bare_start?(out, i) do
-    if at(out, i - 1) == "." and name?(at(out, i - 2)),
-      do: bare_start?(out, i - 2),
-      else: at(out, i - 1) in @select_starts
-  end
-
-  defp bare_end?(out, i, name) do
-    case at(out, i + 1) do
-      {:kw, "as"} ->
-        same_name?(at(out, i + 2), name) and at(out, i + 3) in @item_ends
-
-      next ->
-        next in @item_ends
-    end
-  end
-
-  defp same_name?({:name, alias}, name), do: String.downcase(alias) == String.downcase(name)
-  defp same_name?(_other, _name), do: false
-
-  defp whole_row?(out, i, name, state) do
-    {_lexeme, _reaches?, clause, _level} = elem(out, i)
-
-    clause != :from and MapSet.member?(state.relations, String.downcase(name)) and
-      at(out, i - 1) != "." and at(out, i + 1) not in [".", "("] and
-      not sorts_by_output?(out, i, name, state)
-  end
-
-  # A whole ORDER BY item that names an output column of its own query sorts
-  # by that column: the database reads an output name before a relation's
-  # row there. Not inside an expression, where output names don't reach.
-  defp sorts_by_output?(out, i, name, state) do
-    {_lexeme, _reaches?, clause, level} = elem(out, i)
-
-    clause == :order and at(out, i - 1) in [{:kw, "by"}, ","] and sort_item_end?(at(out, i + 1)) and
-      MapSet.member?(state.outputs, {level, String.downcase(name)})
-  end
-
-  defp sort_item_end?({:name, word}), do: String.downcase(word) in @sort_modifiers
-  defp sort_item_end?(next), do: next in @sort_item_ends
-
-  # `count(*)` reads no column; `*` and `t.*` as select items keep the names,
-  # except across a set operation; `*` between operands multiplies them.
-  defp check_star(out, i, state) do
-    {_lexeme, _reaches?, clause, _level} = elem(out, i)
-    prev = at(out, i - 1)
-    next = at(out, i + 1)
-
-    cond do
-      prev == "(" and next == ")" ->
-        nil
-
-      clause == :select and bare_start?(out, i) and next in [")" | @item_ends] ->
-        if state.set_op?, do: set_op_error(), else: nil
-
-      prev == "." ->
-        whole_row_error(qualifier(at(out, i - 2)))
-
-      true ->
-        nil
-    end
-  end
 
   # A whole ORDER BY or GROUP BY item that is an integer names the select
   # item at that position, so sorting or grouping by it reveals how that
-  # column's values order or repeat whatever the result shows of them. So
-  # does an item of DISTINCT ON, ROLLUP, CUBE or GROUPING SETS, and one in
-  # parentheses. The position must be a select item that is no protected
-  # column, with no `*` up to it, whose width can't be known here.
-  defp check_position(out, i, n, state, protected?) do
-    with {:ok, level} <- position_level(out, i),
-         {:error, message} <-
-           position_item(out, level, String.to_integer(n), state.safe_star?, protected?) do
-      {:error, "Query sorts or groups by position #{n}, " <> message}
-    else
-      _ -> nil
-    end
-  end
+  # column's values order or repeat whatever the result shows of them. The
+  # position must be a select item that is no protected column, with no `*`
+  # up to it, whose width can't be known here. Each select list of the
+  # query at `level` (a set operation has one per branch) must be safe.
+  defp check_position(n, level, ctx, cache) do
+    key = {:position, level, n}
 
-  defp position_level(out, i) do
-    {_lexeme, _reaches?, clause, level} = elem(out, i)
-    prev = at(out, i - 1)
-    next = at(out, i + 1)
+    case cache do
+      %{^key => :ok} ->
+        {:ok, cache}
 
-    cond do
-      clause in @position_clauses and prev in [{:kw, "by"}, ","] and not operator?(next) ->
-        {:ok, level}
-
-      clause == :none and prev in ["(", ","] and next in [")", ","] ->
-        out |> opening_paren(i - 1, level) |> paren_level(out)
-
-      true ->
-        nil
-    end
-  end
-
-  # Punctuation that continues an expression: the integer is an operand then.
-  defp operator?(next), do: is_binary(next) and next not in [",", ")", ";"]
-
-  # The "(" that opened the frame of `level`: levels count up as frames
-  # open, so it is the last lexeme before `i` of a lower level.
-  defp opening_paren(_out, i, _level) when i < 0, do: nil
-
-  defp opening_paren(out, i, level) do
-    if out |> elem(i) |> elem(3) < level, do: i, else: opening_paren(out, i - 1, level)
-  end
-
-  defp paren_level(nil, _out), do: nil
-
-  defp paren_level(j, out) do
-    {_paren, _reaches?, clause, level} = elem(out, j)
-
-    case {clause, at(out, j - 1), at(out, j - 2)} do
-      {:select, {:kw, "on"}, {:kw, "distinct"}} ->
-        {:ok, level}
-
-      {clause, prev, _prev2} when clause in @position_clauses ->
-        if item_start?(prev), do: {:ok, level}
-
-      {:none, prev, _prev2} ->
-        if item_start?(prev), do: out |> opening_paren(j - 1, level) |> paren_level(out)
+      %{^key => error} ->
+        error
 
       _ ->
-        nil
-    end
-  end
+        cache = with_lists(cache, ctx)
+        lists = Map.get(cache.lists, level, [])
 
-  # What may precede a whole grouping or sort item, or a list of them.
-  defp item_start?({:name, name}), do: String.downcase(name) in ~w(rollup cube sets)
-  defp item_start?(prev), do: prev in [{:kw, "by"}, ",", "("]
+        outcome =
+          if lists == [],
+            do: {:error, unknown_position()},
+            else: Enum.find_value(lists, :ok, &list_position(&1, String.to_integer(n)))
 
-  # Each select list of the query at `level` (a set operation has one per
-  # branch): position `n` must be safe in all of them.
-  defp position_item(out, level, n, safe_star?, protected?) do
-    case select_lists(out, level) do
-      [] -> {:error, unknown_position()}
-      lists -> Enum.find_value(lists, :ok, &list_position(&1, n, safe_star?, protected?))
+        case outcome do
+          :ok -> {:ok, Map.put(cache, key, :ok)}
+          {:error, message} -> {:error, "Query sorts or groups by position #{n}, " <> message}
+        end
     end
   end
 
   # Up to a `*` the position is the item's. From a `t.*` over a relation
   # with no protected column (whose width isn't known here) it may be any
   # later item, so all of those must be safe.
-  defp list_position(items, n, safe_star?, protected?) do
-    {before, rest} = Enum.split(items, max(n - 1, 0))
-
-    case Enum.split_while(before, &(not star_item?(&1))) do
-      _ when n < 1 ->
+  defp list_position({items, first_star, from_star_safe?}, n) do
+    cond do
+      n < 1 ->
         {:error, unknown_position()}
 
-      {_before, []} when rest == [] ->
+      first_star != nil and first_star <= n ->
+        if(from_star_safe?, do: nil, else: {:error, unknown_position()})
+
+      n > tuple_size(items) ->
         {:error, unknown_position()}
 
-      {_before, []} ->
-        if star_item?(hd(rest)),
-          do: items_position(rest, safe_star?, protected?),
-          else: item_position(hd(rest), protected?)
-
-      {_before, from_star} ->
-        items_position(from_star ++ rest, safe_star?, protected?)
+      true ->
+        item_position(elem(items, n - 1))
     end
   end
 
-  defp item_position(item, protected?) do
-    if name = protected_item(item, protected?), do: {:error, protected_position(name)}
+  defp item_position({_item, nil}), do: nil
+  defp item_position({_item, name}), do: {:error, protected_position(name)}
+
+  defp with_lists(%{lists: _} = cache, _ctx), do: cache
+
+  defp with_lists(cache, ctx) do
+    cache = with_sources(cache, ctx)
+
+    lists =
+      ctx.out
+      |> collect_lists(%{})
+      |> Map.new(fn {level, lists} ->
+        {level, lists |> :lists.reverse() |> Enum.map(&prepare_list(&1, ctx, cache))}
+      end)
+
+    Map.put(cache, :lists, lists)
   end
 
-  defp items_position(items, safe_star?, protected?) do
-    if Enum.all?(items, &safe_item?(&1, safe_star?, protected?)),
-      do: nil,
-      else: {:error, unknown_position()}
-  end
+  # The select items of each SELECT, by level, as the lexemes of that level
+  # (what nested parentheses hold is checked where it stands). Lists, items
+  # and lexemes are gathered in reverse.
+  defp collect_lists([{lexeme, _reaches?, clause, level} | rest], lists) do
+    lists =
+      case {lexeme, clause} do
+        {{:kw, "select"}, _clause} ->
+          Map.update(lists, level, [[[]]], &[[[]] | &1])
 
-  defp safe_item?(["*"], _safe_star?, _protected?), do: false
+        {",", :select} ->
+          update_list(lists, level, &[[] | &1])
 
-  defp safe_item?(item, safe_star?, protected?) do
-    if star_item?(item),
-      do: item |> Enum.drop(-2) |> Enum.flat_map(&name_of/1) |> safe_star?.(),
-      else: protected_item(item, protected?) == nil
-  end
+        {lexeme, :select} ->
+          update_list(lists, level, fn [item | items] -> [[lexeme | item] | items] end)
 
-  defp name_of({:name, name}), do: [name]
-  defp name_of(_lexeme), do: []
-
-  # The select items of each SELECT at `level`, as the lexemes of that level
-  # (what nested parentheses hold is checked where it stands), without the
-  # keywords that start the first item or end the list.
-  defp select_lists(out, level) do
-    0..(tuple_size(out) - 1)//1
-    |> Enum.reduce([], fn i, lists ->
-      case elem(out, i) do
-        {{:kw, "select"}, _reaches?, _clause, ^level} -> [[[]] | lists]
-        {",", _reaches?, :select, ^level} -> add_item(lists)
-        {lexeme, _reaches?, :select, ^level} -> add_lexeme(lists, lexeme)
-        _ -> lists
+        _ ->
+          lists
       end
-    end)
-    |> Enum.reverse()
-    |> Enum.map(fn items ->
-      items |> Enum.map(&Enum.reverse/1) |> Enum.reverse() |> clean_items()
-    end)
+
+    collect_lists(rest, lists)
   end
 
-  defp add_item([items | lists]), do: [[[] | items] | lists]
-  defp add_item([]), do: []
+  defp collect_lists([], lists), do: lists
 
-  defp add_lexeme([[item | items] | lists], lexeme), do: [[[lexeme | item] | items] | lists]
-  defp add_lexeme([], _lexeme), do: []
+  defp update_list(lists, level, fun) do
+    case lists do
+      %{^level => [items | rest]} -> %{lists | level => [fun.(items) | rest]}
+      _ -> lists
+    end
+  end
 
+  # Each item with the first protected name it reads; the position of the
+  # first `*` or `t.*` (from 1); and whether every item from there is safe.
+  defp prepare_list(reversed_items, ctx, cache) do
+    items =
+      reversed_items
+      |> Enum.reduce([], fn item, acc -> [:lists.reverse(item) | acc] end)
+      |> clean_items()
+
+    first_star = Enum.find_index(items, &star_item?/1)
+
+    from_star_safe? =
+      first_star != nil and
+        items |> Enum.drop(first_star) |> Enum.all?(&safe_item?(&1, ctx, cache))
+
+    items = items |> Enum.map(&{&1, protected_item(&1, ctx, cache)}) |> List.to_tuple()
+    {items, first_star && first_star + 1, from_star_safe?}
+  end
+
+  # Without the keywords that start the first item or end the list.
   defp clean_items([first | items]) do
     first =
       case first do
@@ -789,46 +1031,46 @@ defmodule Lotus.Preflight.Columns do
 
   # `*` or `t.*`.
   defp star_item?(["*"]), do: true
-  defp star_item?([{:name, _}, "." | rest]), do: star_item?(rest)
+  defp star_item?([{:name, _, _}, "." | rest]), do: star_item?(rest)
   defp star_item?(_item), do: false
 
-  # The first protected name the item reads (an alias after AS reads none).
-  defp protected_item(item, protected?) do
-    out = List.to_tuple(item)
+  defp safe_item?(["*"], _ctx, _cache), do: false
 
-    Enum.find_value(0..(tuple_size(out) - 1)//1, fn i ->
-      case raw_at(out, i) do
-        {:name, name} ->
-          if raw_at(out, i - 1) != {:kw, "as"} and protected?.(name, item_qualifier(out, i)),
-            do: name
-
-        _ ->
-          nil
-      end
-    end)
+  defp safe_item?(item, ctx, cache) do
+    if star_item?(item),
+      do: item |> Enum.drop(-2) |> Enum.flat_map(&raw_name/1) |> safe_star?(ctx, cache),
+      else: protected_item(item, ctx, cache) == nil
   end
 
-  defp item_qualifier(out, i) do
-    if raw_at(out, i - 1) == "." and name?(raw_at(out, i - 2)) do
-      {:name, name} = raw_at(out, i - 2)
-      item_qualifier(out, i - 2) ++ [name]
-    else
-      []
+  defp raw_name({:name, raw, _down}), do: [raw]
+  defp raw_name(_lexeme), do: []
+
+  # The first protected name the item reads (an alias after AS reads none).
+  defp protected_item(item, ctx, cache), do: protected_item(item, :bof, :bof, [], [], ctx, cache)
+
+  defp protected_item([lexeme | rest], prev, prev2, qualifier1, qualifier2, ctx, cache) do
+    qualifier =
+      case {prev, prev2} do
+        {".", {:name, raw, _down}} -> qualifier2 ++ [raw]
+        _ -> []
+      end
+
+    case lexeme do
+      {:name, raw, down} when prev != {:kw, "as"} ->
+        if protected_name?(raw, down, qualifier, ctx, cache),
+          do: raw,
+          else: protected_item(rest, lexeme, prev, qualifier, qualifier1, ctx, cache)
+
+      _ ->
+        protected_item(rest, lexeme, prev, qualifier, qualifier1, ctx, cache)
     end
   end
 
-  defp protected_position(name) do
-    "protected column #{name}, which reveals how its values order or repeat whatever " <>
-      "the result shows of them. Sort or group by another column."
-  end
+  defp protected_item([], _prev, _prev2, _qualifier1, _qualifier2, _ctx, _cache), do: nil
 
-  defp unknown_position do
-    "which Lotus can't match to a select item (it follows a * or is past the select " <>
-      "list), so it can't check it against column policies. Sort by the column's name."
-  end
-
-  defp qualifier({:name, name}), do: name
-  defp qualifier(_), do: "*"
+  # ---------------------------------------------------------------------------
+  # Errors
+  # ---------------------------------------------------------------------------
 
   defp protected_error(name) do
     {:error,
@@ -848,5 +1090,15 @@ defmodule Lotus.Preflight.Columns do
     {:error,
      "Query combines * with UNION, INTERSECT or EXCEPT over a table with protected " <>
        "columns, which renames them after the first branch. Select the columns by name."}
+  end
+
+  defp protected_position(name) do
+    "protected column #{name}, which reveals how its values order or repeat whatever " <>
+      "the result shows of them. Sort or group by another column."
+  end
+
+  defp unknown_position do
+    "which Lotus can't match to a select item (it follows a * or is past the select " <>
+      "list), so it can't check it against column policies. Sort by the column's name."
   end
 end
