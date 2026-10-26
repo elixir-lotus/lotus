@@ -4,6 +4,7 @@ defmodule Lotus.Visibility.MatcherTest do
 
   alias Lotus.Visibility
   alias Lotus.Visibility.Matcher
+  alias Lotus.Visibility.Policy
 
   describe "compile/2" do
     test "returns a matcher and leaves a matcher unchanged" do
@@ -147,6 +148,56 @@ defmodule Lotus.Visibility.MatcherTest do
 
       assert %{action: :omit} =
                Visibility.column_policy_for(folded_allows, [{"public", "users"}], "ssn")
+    end
+
+    test "a name over several relations gets the strictest policy any of them has" do
+      users = {"public", "users"}
+      orders = {"public", "orders"}
+
+      for rules <- [
+            [{"orders", "ssn", :allow}, {"users", "ssn", :mask}],
+            [{"users", "ssn", :mask}, {"orders", "ssn", :allow}]
+          ] do
+        matcher = Visibility.compile(%{column: rules})
+
+        assert %{action: :mask} = Visibility.column_policy_for(matcher, [users, orders], "ssn")
+        assert %{action: :mask} = Visibility.column_policy_for(matcher, [orders, users], "ssn")
+        assert %{action: :allow} = Visibility.column_policy_for(matcher, [orders], "ssn")
+      end
+
+      # A relation without a rule for the name falls back to the column-only
+      # rule, which still counts.
+      fallback = Visibility.compile(%{column: [{"orders", "ssn", :allow}, {"ssn", :omit}]})
+      assert %{action: :omit} = Visibility.column_policy_for(fallback, [orders, users], "ssn")
+      assert %{action: :allow} = Visibility.column_policy_for(fallback, [orders], "ssn")
+    end
+
+    test "policies rank error, omit, then masks by what they show, then allow" do
+      ranked = [
+        :error,
+        :omit,
+        [mask: :null],
+        [mask: {:fixed, "x"}],
+        [mask: :sha256],
+        [mask: {:partial, keep_last: 4}],
+        :allow
+      ]
+
+      tables = Enum.map(1..length(ranked), &"t#{&1}")
+      rels = Enum.map(tables, &{"public", &1})
+
+      for {policy, i} <- Enum.with_index(ranked), policy != :allow do
+        # This policy and every less strict one, on the later relations.
+        rules = for {p, j} <- Enum.with_index(ranked), j >= i, do: {Enum.at(tables, j), "c", p}
+        expected = Policy.normalize_column_policy(policy)
+
+        assert Visibility.column_policy_for(
+                 Visibility.compile(%{column: Enum.reverse(rules)}),
+                 rels,
+                 "c"
+               ) ==
+                 expected
+      end
     end
 
     test "filter and validate helpers take a matcher" do

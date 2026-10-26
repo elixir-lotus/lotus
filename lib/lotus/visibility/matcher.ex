@@ -252,14 +252,21 @@ defmodule Lotus.Visibility.Matcher do
   end
 
   @doc false
+  # A result column's name alone doesn't tell which of `relations` it came
+  # from, so it gets the strictest policy any of them has for that name: a
+  # rule that allows the name for one relation never unmasks another's
+  # column. Of policies equally strict, the first relation's wins.
   @spec column_policy(t(), [{String.t() | nil, String.t()}] | nil, String.t()) :: term() | nil
   def column_policy(%__MODULE__{column: column}, relations, column_name) do
-    rels = relations || []
+    case relations || [] do
+      [] ->
+        relation_policy(column, [], column_name)
 
-    stricter(
-      find_policy(column, rels, column_name, false),
-      find_policy(column, rels, column_name, true)
-    )
+      rels ->
+        rels
+        |> Enum.map(&relation_policy(column, [&1], column_name))
+        |> Enum.reduce(&stricter(&2, &1))
+    end
   end
 
   # A database may return a column's name in another case than the rule
@@ -267,6 +274,13 @@ defmodule Lotus.Visibility.Matcher do
   # also match ignoring case. Matching by exact case too, and keeping the
   # stricter policy of the two, never leaves a column less protected than
   # an exact match would.
+  defp relation_policy(column, rels, column_name) do
+    stricter(
+      find_policy(column, rels, column_name, false),
+      find_policy(column, rels, column_name, true)
+    )
+  end
+
   defp find_policy(column, rels, column_name, fold?) do
     find_schema_table_column(column.schema_table, rels, column_name, fold?) ||
       find_table_column(column.table, rels, column_name, fold?) ||

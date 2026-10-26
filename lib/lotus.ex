@@ -765,31 +765,26 @@ defmodule Lotus do
   defp current_entry(lookup, _adapter, _runner_opts), do: lookup
 
   defp authorize_and_store(adapter, statement, runner_opts, cache, lookup, pagination_meta) do
-    with {:ok, %{relations: relations, rules: rules} = authorization} <-
+    with {:ok, %{rules: rules} = authorization} <-
            Runner.authorize_phases(adapter, statement, runner_opts),
          {:ok, %{result: %Result{} = res}} <-
            store_execution(cache, lookup, rules, fn ->
-             execute_authorized(
-               adapter,
-               statement,
-               relations,
-               rules,
-               runner_opts,
-               pagination_meta
-             )
+             execute_authorized(adapter, statement, authorization, runner_opts, pagination_meta)
            end) do
       # When another caller stores the entry while this one waits for the lock,
       # the result comes from the cache, but this call was authorized on fresh
       # preflight relations with origin `:executed`, and the gate must not run
       # twice.
-      authorization = Map.delete(authorization, :rules)
+      authorization = Map.drop(authorization, [:rules, :columns])
       {:ok, Map.merge(authorization, %{statement: statement, result: res, origin: :executed})}
     end
   end
 
-  defp execute_authorized(adapter, statement, relations, rules, runner_opts, pagination_meta) do
+  defp execute_authorized(adapter, statement, authorization, runner_opts, pagination_meta) do
+    %{relations: relations, rules: rules} = authorization
+
     with {:ok, %Result{} = res} <-
-           Runner.execute_authorized(adapter, statement, relations, runner_opts) do
+           Runner.execute_authorized(adapter, statement, authorization, runner_opts) do
       {:ok,
        %{result: merge_pagination_meta(res, pagination_meta), relations: relations, rules: rules}}
     end

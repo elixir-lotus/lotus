@@ -68,6 +68,24 @@
   than one case gets the strictest of their policies, so no column is less
   protected than before. Schema and table names still match by exact case.
 
+- **A rule that allows a column on one table no longer unmasks another
+  table's column of the same name.** With `{"orders", "ssn", :allow}` and
+  `{"users", "ssn", :mask}`, a statement joining both returned `u.ssn`
+  unmasked: the result names the column `ssn` only, and the first rule that
+  matched any joined table (orders' allow) applied, both to the result and
+  to the check that refuses renamed or wrapped protected columns
+  (`upper(ssn)` ran). A result column that is a qualified column as is
+  (`u.ssn`, `o.ssn AS ssn`), whose qualifier names one table for sure, now
+  gets that table's policy, so `u.ssn` is masked and `o.ssn` shown. Any
+  other column (unqualified, through `*`, from a subquery, CTE or set
+  operation) gets the strictest policy of the tables the statement touches
+  for its name: `:error`, then `:omit`, then `:mask` (`:null`, a fixed
+  value, `:sha256`, then a partial mask), then `:allow`. The check before
+  the statement runs judges each column the same way.
+  `Lotus.Visibility.column_policy_for/4` over several relations returns that
+  strictest policy, and `Lotus.Preflight.Columns.result_sources/4` (new)
+  says which relation each result column comes from.
+
 ### Added
 
 - **Read-only per data source.** `config :lotus, data_source_read_only:

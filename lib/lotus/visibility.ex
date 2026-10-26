@@ -395,7 +395,11 @@ defmodule Lotus.Visibility do
   accessed relations and source.
 
   `source` is a source name, a compiled matcher or a raw rule set (see
-  `t:source/0`). Rules support patterns on schema, table, and column names.
+  `t:source/0`). Rules support patterns on schema, table, and column names;
+  a rule's column matches the name in any case. Over several relations the
+  name may be any of their columns, so this returns the strictest policy
+  any of them has for it (`:error`, `:omit`, `:mask`, then `:allow`). Pass
+  the one relation a column comes from to get that relation's policy.
   Returns a normalized policy map or nil.
   """
   @spec column_policy_for(source(), [{String.t() | nil, String.t()}] | nil, String.t(), term()) ::

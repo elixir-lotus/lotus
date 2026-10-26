@@ -788,6 +788,31 @@ database may return it in another case than the rule spells it
 returned or in lowercase. When rules match a name in more than one case,
 the strictest of their policies applies.
 
+A statement over several tables returns a column by name only, so a rule
+for one of them can't tell which table's column it is. A result column
+selected as a qualified column as is (`SELECT u.ssn`, `SELECT o.ssn AS
+ssn`), whose qualifier names one table for sure, gets that table's policy.
+Any other result column — unqualified, through `*` or `t.*`, from a
+subquery, a CTE, a function or a set operation — gets the strictest policy
+any of the tables has for its name: `:error`, then `:omit`, then `:mask`
+(`:null`, a fixed value, `:sha256`, then a partial mask), then `:allow`.
+
+```elixir
+column_visibility: %{
+  default: [
+    {"orders", "ssn", :allow},
+    {"users", "ssn", :mask}
+  ]
+}
+```
+
+```sql
+SELECT u.ssn FROM users u JOIN orders o ON ...   -- masked: users' policy
+SELECT o.ssn FROM users u JOIN orders o ON ...   -- shown: orders' policy
+SELECT ssn FROM users u JOIN orders o ON ...     -- masked: the strictest
+SELECT * FROM users u JOIN orders o ON ...       -- both ssn columns masked
+```
+
 ### Column rules and preflight
 
 The first two forms need to know which tables the result came from.

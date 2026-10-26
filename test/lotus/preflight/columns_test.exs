@@ -387,6 +387,68 @@ defmodule Lotus.Preflight.ColumnsTest do
     assert {:error, _} = Columns.check("SELECT upper(pin) FROM cards", @postgres, matcher, [])
   end
 
+  describe "the relation a result column comes from" do
+    @users {"public", "users"}
+    @orders {"public", "orders"}
+    @both [@users, @orders]
+    @per_table Visibility.compile(%{
+                 column: [{"orders", "ssn", :allow}, {"users", "ssn", :mask}]
+               })
+
+    defp sources(sql, matcher \\ @per_table, relations \\ @both),
+      do: Columns.result_sources(sql, @postgres, matcher, relations)
+
+    test "is the relation a qualified column as is names" do
+      join = "FROM users u JOIN orders o ON o.user_id = u.id"
+
+      assert {:ok, [{:relation, @users}]} = sources("SELECT u.ssn #{join}")
+      assert {:ok, [{:relation, @orders}]} = sources("SELECT o.ssn #{join}")
+
+      assert {:ok, [{:relation, @orders}, {:relation, @users}]} =
+               sources(~s|SELECT DISTINCT o.ssn, u.ssn AS "SSN" #{join}|)
+
+      assert {:ok, [{:relation, @users}, :unresolved]} =
+               sources(
+                 "SELECT public.users.ssn, upper(o.ssn) FROM public.users JOIN orders o ON true"
+               )
+    end
+
+    test "is unresolved for a column whose relation the statement doesn't tell" do
+      assert {:ok, [:unresolved, :unresolved]} =
+               sources("SELECT ssn, x.ssn FROM (SELECT ssn FROM users) x JOIN orders o ON true")
+
+      assert {:ok, [:unresolved]} =
+               sources("SELECT o.ssn FROM orders o JOIN users o ON true")
+
+      assert {:ok, [{:relation, @orders}]} =
+               sources("SELECT o.ssn, * FROM orders o JOIN users u ON true")
+
+      assert {:ok, []} = sources("SELECT u.*, o.ssn FROM orders o JOIN users u ON true")
+    end
+
+    test "is unknown across a set operation, or without a protected column" do
+      assert {:ok, nil} = sources("SELECT u.name FROM users u UNION SELECT o.name FROM orders o")
+      assert {:ok, nil} = sources("SELECT o.ssn FROM orders o", @per_table, [@orders])
+    end
+
+    test "decides the check: a column is protected by its own relation's policy" do
+      join = "FROM users u JOIN orders o ON o.user_id = u.id"
+
+      assert {:ok, _} = sources("SELECT upper(o.ssn) #{join}")
+      assert {:error, _} = sources("SELECT upper(u.ssn) #{join}")
+
+      # Unqualified, the name may be either table's, so the strictest
+      # policy applies whatever order the rules come in.
+      assert {:error, _} = sources("SELECT upper(ssn) #{join}")
+
+      reversed =
+        Visibility.compile(%{column: [{"users", "ssn", :mask}, {"orders", "ssn", :allow}]})
+
+      assert {:error, _} = sources("SELECT upper(ssn) #{join}", reversed)
+      assert {:ok, _} = sources("SELECT upper(o.ssn) #{join}", reversed)
+    end
+  end
+
   test "a rule protects its column in any case" do
     upper = Visibility.compile(%{column: [{"users", "SSN", :omit}]})
 
