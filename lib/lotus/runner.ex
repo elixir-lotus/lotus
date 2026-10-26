@@ -71,10 +71,17 @@ defmodule Lotus.Runner do
 
   @typedoc """
   What authorizing a statement produced: the relations preflight proved it
-  touches, the assigns its `:before_execute` plugs left, and the fingerprint
-  of the visibility rules it was checked against (see `rules_fingerprint/2`).
+  touches, the assigns its `:before_execute` plugs left, the fingerprint of
+  the visibility rules it was checked against (see `rules_fingerprint/2`),
+  and the relation each result column comes from, when the column check
+  could tell (see `Lotus.Preflight.Columns.result_sources/4`).
   """
-  @type authorization :: %{relations: relations(), assigns: assigns(), rules: binary()}
+  @type authorization :: %{
+          required(:relations) => relations(),
+          required(:assigns) => assigns(),
+          required(:rules) => binary(),
+          optional(:columns) => Columns.sources()
+        }
 
   @typedoc """
   What a run produced, as `:after_query` sees it: the statement that ran, its
@@ -261,10 +268,10 @@ defmodule Lotus.Runner do
     outcome = %{statement: statement, relations: nil, origin: :streamed}
 
     case authorize_phases(adapter, statement, opts) do
-      {:ok, %{relations: relations, assigns: assigns}} ->
+      {:ok, %{relations: relations} = authorization} ->
         outcome = %{outcome | relations: relations}
 
-        case stream_span(adapter, statement, relations, assigns, opts, fun) do
+        case stream_span(adapter, statement, authorization, opts, fun) do
           {:ok, value, summary} ->
             {:ok, _} = finish({:ok, summary}, start_time, meta, outcome)
             {:ok, value}
@@ -280,7 +287,7 @@ defmodule Lotus.Runner do
 
   # The query span of a stream. Its stop carries the columns and the number
   # of rows streamed, as a result with no rows.
-  defp stream_span(adapter, statement, relations, assigns, opts, fun) do
+  defp stream_span(adapter, statement, authorization, opts, fun) do
     telemetry_meta = %{
       source: adapter.name,
       statement: statement,
@@ -289,7 +296,7 @@ defmodule Lotus.Runner do
 
     start_time = Telemetry.query_start(telemetry_meta)
 
-    case stream_read_only(adapter, statement, relations, assigns, opts, fun) do
+    case stream_read_only(adapter, statement, authorization, opts, fun) do
       {:ok, value, %{columns: cols, rows: rows}} ->
         summary = Result.new(cols, [], num_rows: rows, meta: %{streamed: true})
 
@@ -309,7 +316,7 @@ defmodule Lotus.Runner do
   # The chunks are shaped as `fun` pulls them, inside the transaction. What
   # the span reports (the columns and the rows streamed) is kept in a table
   # private to this call, deleted when it returns.
-  defp stream_read_only(adapter, statement, relations, assigns, opts, fun) do
+  defp stream_read_only(adapter, statement, authorization, opts, fun) do
     %Statement{body: body, params: params, session: session} = statement
     chunk_size = Keyword.get(opts, :chunk_size, @default_chunk_size)
 
@@ -324,7 +331,7 @@ defmodule Lotus.Runner do
 
           chunks =
             Stream.map(raw, fn chunk ->
-              result = shape_chunk(adapter, statement, relations, assigns, opts, chunk, ref)
+              result = shape_chunk(adapter, statement, authorization, opts, chunk, ref)
               :ets.insert(tally, {:columns, result.columns})
               :ets.update_counter(tally, :rows, length(result.rows))
               result
@@ -352,12 +359,14 @@ defmodule Lotus.Runner do
 
   # The rows of a chunk with the column policies applied, through
   # `:after_query`. A refusal stops the stream: it is thrown to
-  # `stream_read_only/6`, which returns it.
-  defp shape_chunk(adapter, statement, relations, assigns, opts, chunk, ref) do
+  # `stream_read_only/5`, which returns it.
+  defp shape_chunk(adapter, statement, authorization, opts, chunk, ref) do
+    %{relations: relations, assigns: assigns} = authorization
+    columns = {relations, Map.get(authorization, :columns)}
     scope = Keyword.get(opts, :scope)
 
     with {:ok, %Result{} = result} <-
-           tag(:execute, handle_query_result({:ok, chunk}, 0, adapter, relations, scope)),
+           tag(:execute, handle_query_result({:ok, chunk}, 0, adapter, columns, scope)),
          outcome = %{
            statement: statement,
            result: %{result | duration_ms: nil},
@@ -604,9 +613,8 @@ defmodule Lotus.Runner do
           | {:error, {module(), atom(), term()}}
   def execute_phases(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
     query_span(adapter, statement, opts, fn ->
-      with {:ok, %{relations: relations} = authorization} <-
-             authorize_phases(adapter, statement, opts),
-           {:ok, %Result{} = res} <- execute_authorized(adapter, statement, relations, opts) do
+      with {:ok, authorization} <- authorize_phases(adapter, statement, opts),
+           {:ok, %Result{} = res} <- execute_authorized(adapter, statement, authorization, opts) do
         {:ok, Map.put(authorization, :result, res)}
       end
     end)
@@ -622,11 +630,17 @@ defmodule Lotus.Runner do
     # Preflight hands its relations back as a value, and they travel down the
     # pipeline explicitly. Nothing crosses a statement boundary through the
     # process dictionary.
-    with {:ok, %{relations: relations, matcher: matcher}} <-
+    with {:ok, %{relations: relations, matcher: matcher, columns: columns}} <-
            check_phases(adapter, statement, opts),
          {:ok, assigns} <-
            tag(:before_execute, before_execute(adapter, statement, relations, :executed, opts)) do
-      {:ok, %{relations: relations, assigns: assigns, rules: Matcher.fingerprint(matcher)}}
+      {:ok,
+       %{
+         relations: relations,
+         assigns: assigns,
+         rules: Matcher.fingerprint(matcher),
+         columns: columns
+       }}
     end
   end
 
@@ -679,19 +693,32 @@ defmodule Lotus.Runner do
          {:ok, matcher} <- tag(:preflight, matcher(adapter, opts)),
          {:ok, relations} <-
            tag(:preflight, preflight_visibility(adapter, statement, matcher, opts)),
-         :ok <- tag(:preflight, check_columns(adapter, statement, relations, matcher)) do
-      {:ok, %{relations: relations, matcher: matcher}}
+         {:ok, columns} <- tag(:preflight, check_columns(adapter, statement, relations, matcher)) do
+      {:ok, %{relations: relations, matcher: matcher, columns: columns}}
     end
   end
 
   @doc false
   # The query and column policy enforcement, for a statement
-  # `authorize_phases/3` let through with these relations.
-  @spec execute_authorized(Adapter.t(), Statement.t(), relations(), opts()) ::
+  # `authorize_phases/3` let through: with its authorization, a result
+  # column gets its own relation's policy when the column check could tell
+  # it; with the relations alone, the strictest any of them has.
+  @spec execute_authorized(Adapter.t(), Statement.t(), authorization() | relations(), opts()) ::
           {:ok, query_result()} | {:error, {module(), atom(), term()}}
-  def execute_authorized(%Adapter{} = adapter, %Statement{} = statement, relations, opts \\ []) do
-    tag(:execute, exec_read_only(adapter, statement, relations, opts))
+  def execute_authorized(adapter, statement, authorization, opts \\ [])
+
+  def execute_authorized(
+        %Adapter{} = adapter,
+        %Statement{} = statement,
+        %{relations: relations} = authorization,
+        opts
+      ) do
+    columns = {relations, Map.get(authorization, :columns)}
+    tag(:execute, exec_read_only(adapter, statement, columns, opts))
   end
+
+  def execute_authorized(%Adapter{} = adapter, %Statement{} = statement, relations, opts),
+    do: tag(:execute, exec_read_only(adapter, statement, {relations, nil}, opts))
 
   @doc false
   # `[:lotus, :query, *]` telemetry around `fun`, which authorizes and executes
@@ -728,15 +755,15 @@ defmodule Lotus.Runner do
   # they end with it; a source that cannot apply them does not run it. A
   # statement cancelled with `Lotus.cancel/1` is the cancelled error, whatever
   # its transaction returned.
-  defp exec_read_only(%Adapter{} = adapter, %Statement{} = statement, relations, opts) do
+  defp exec_read_only(%Adapter{} = adapter, %Statement{} = statement, columns, opts) do
     cancel = Cancel.prepare(adapter, opts)
-    Cancel.result(cancel, exec_in_transaction(adapter, statement, relations, opts, cancel))
+    Cancel.result(cancel, exec_in_transaction(adapter, statement, columns, opts, cancel))
   end
 
   defp exec_in_transaction(
          adapter,
          %Statement{body: body, params: params, session: session},
-         relations,
+         columns,
          opts,
          cancel
        ) do
@@ -746,7 +773,7 @@ defmodule Lotus.Runner do
         with :ok <- Adapter.setup_session(adapter, session || %{}, opts),
              {elapsed_us, res} when is_integer(elapsed_us) <-
                timed_execute(cancel, adapter, body, params, opts) do
-          handle_query_result(res, elapsed_us, adapter, relations, Keyword.get(opts, :scope))
+          handle_query_result(res, elapsed_us, adapter, columns, Keyword.get(opts, :scope))
         end
       end,
       opts
@@ -772,11 +799,13 @@ defmodule Lotus.Runner do
     end)
   end
 
+  # `columns` is `{relations, sources}`: the relations preflight found, and
+  # the relation each result column comes from (`Columns.sources()`).
   defp handle_query_result(
          {:ok, %{columns: cols, rows: rows} = raw},
          elapsed_us,
          %Adapter{} = adapter,
-         relations,
+         {relations, sources},
          scope
        ) do
     num_rows = Map.get(raw, :num_rows, length(rows || []))
@@ -785,7 +814,7 @@ defmodule Lotus.Runner do
 
     rels = Relations.to_list(relations)
     matcher = Visibility.matcher_for(adapter.name, scope)
-    policies = Enum.map(cols || [], &Visibility.column_policy_for(matcher, rels, &1))
+    policies = column_policies(matcher, cols || [], rels, sources)
 
     case enforce_column_policies(cols || [], rows || [], policies) do
       {:error, msg} ->
@@ -808,13 +837,28 @@ defmodule Lotus.Runner do
     end
   end
 
-  defp handle_query_result({:error, err}, _elapsed_us, _adapter, _relations, _scope) do
+  defp handle_query_result({:error, err}, _elapsed_us, _adapter, _columns, _scope) do
     {:error, err}
   end
 
-  defp handle_query_result(other, _elapsed_us, _adapter, _relations, _scope) do
+  defp handle_query_result(other, _elapsed_us, _adapter, _columns, _scope) do
     other
   end
+
+  # A column the column check traced to its relation gets that relation's
+  # policy; any other, the strictest of all the relations' for its name.
+  defp column_policies(matcher, cols, rels, sources) do
+    unresolved = Stream.repeatedly(fn -> :unresolved end)
+
+    cols
+    |> Enum.zip(Stream.concat(sources || [], unresolved))
+    |> Enum.map(fn {col, source} ->
+      Visibility.column_policy_for(matcher, source_relations(source, rels), col)
+    end)
+  end
+
+  defp source_relations({:relation, relation}, _rels), do: [relation]
+  defp source_relations(:unresolved, rels), do: rels
 
   defp maybe_put_total_count(meta, %{total_count: n}) when is_integer(n) and n >= 0,
     do: Map.put(meta, :total_count, n)
@@ -912,20 +956,21 @@ defmodule Lotus.Runner do
   end
 
   # Column policies apply by result column name, so a SQL statement that
-  # renames or transforms a protected column is refused before it runs.
+  # renames or transforms a protected column is refused before it runs. On
+  # success, the relation each result column comes from, when it can tell.
   # A statement preflight skipped (EXPLAIN, SHOW) returns no column values.
-  defp check_columns(_adapter, _statement, {:skipped, _reason}, _matcher), do: :ok
+  defp check_columns(_adapter, _statement, {:skipped, _reason}, _matcher), do: {:ok, nil}
 
   defp check_columns(%Adapter{} = adapter, %Statement{body: body}, relations, matcher)
        when is_binary(body) do
     if String.starts_with?(Adapter.query_language(adapter), "sql") do
-      Columns.check(body, Adapter.lexical_profile(adapter), matcher, relations)
+      Columns.result_sources(body, Adapter.lexical_profile(adapter), matcher, relations)
     else
-      :ok
+      {:ok, nil}
     end
   end
 
-  defp check_columns(_adapter, _statement, _relations, _matcher), do: :ok
+  defp check_columns(_adapter, _statement, _relations, _matcher), do: {:ok, nil}
 
   # Returns what preflight knows about the statement: a list of
   # `{schema, table}`, `{:unrestricted, reason}` for an adapter that cannot

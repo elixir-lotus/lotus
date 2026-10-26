@@ -26,12 +26,15 @@ defmodule Lotus.Preflight.Columns do
       `GROUPING SETS`), which reveals how its values order or repeat, or by a
       position it can't match to a select item (at or after a `*`).
 
-  A column is protected by name, whatever relation it is read from, unless
-  the name is qualified (`o.ssn`, `orders.ssn`, `public.orders.ssn`) by a
-  relation the check can tell for sure: an alias or table name bound exactly
-  once in the statement's FROM and JOIN clauses, standing nowhere else, to a
-  table preflight found (not a CTE, derived table or function). Such a name
-  reads that table's column, protected only if a policy for that table is.
+  A column is protected by name, by the strictest policy any relation the
+  statement touches has for it, unless the name is qualified (`o.ssn`,
+  `orders.ssn`, `public.orders.ssn`) by a relation the check can tell for
+  sure: an alias or table name bound exactly once in the statement's FROM
+  and JOIN clauses, standing nowhere else, to a table preflight found (not a
+  CTE, derived table or function). Such a name reads that table's column,
+  protected only if a policy for that table is. `result_sources/4` hands the
+  runner the same decision for each result column, so the policy it applies
+  to a column is the one this check judged it by.
 
   The check reads tokens, not a parse tree, so it fails closed: whatever it
   can't prove keeps the name is refused. `SELECT *` and `SELECT t.*` pass,
@@ -88,13 +91,40 @@ defmodule Lotus.Preflight.Columns do
   # Punctuation the check steers by, kept as literals.
   @punctuation ~w|( ) , . * ; [ ]|
 
+  @typedoc """
+  Where a result column comes from: the relation whose column it is, when
+  the select item is that column as is under a qualifier that names one
+  relation for sure (see the moduledoc), or `:unresolved`.
+  """
+  @type source :: {:relation, Relations.relation()} | :unresolved
+
+  @typedoc """
+  The sources of a statement's result columns, by position. A column past
+  the end of the list (one at or after a `*` or `t.*`) is `:unresolved`.
+  `nil` when nothing is known: a set operation, a statement whose result
+  isn't a plain select list, or no column policy to check.
+  """
+  @type sources :: [source()] | nil
+
   @doc """
   Checks `sql` against the column policies of `matcher` for the relations
   preflight found. Returns `:ok` or `{:error, message}`.
   """
   @spec check(String.t(), Profile.t(), Matcher.t(), Relations.outcome()) ::
           :ok | {:error, String.t()}
-  def check(sql, %Profile{} = profile, %Matcher{} = matcher, relations) when is_binary(sql) do
+  def check(sql, profile, matcher, relations) do
+    with {:ok, _sources} <- result_sources(sql, profile, matcher, relations), do: :ok
+  end
+
+  @doc """
+  `check/4`, returning on success where each result column comes from (see
+  `t:sources/0`), so that a column policy can apply by the column's own
+  relation rather than by its name across every relation.
+  """
+  @spec result_sources(String.t(), Profile.t(), Matcher.t(), Relations.outcome()) ::
+          {:ok, sources()} | {:error, String.t()}
+  def result_sources(sql, %Profile{} = profile, %Matcher{} = matcher, relations)
+      when is_binary(sql) do
     rels = Relations.to_list(relations)
 
     if Matcher.restricts_columns?(matcher, rels) do
@@ -103,11 +133,11 @@ defmodule Lotus.Preflight.Columns do
       |> annotate()
       |> verify(matcher, rels)
     else
-      :ok
+      {:ok, nil}
     end
   end
 
-  def check(_sql, _profile, _matcher, _relations), do: :ok
+  def result_sources(_sql, _profile, _matcher, _relations), do: {:ok, nil}
 
   @doc false
   # The tables a statement names in FROM and JOIN, as name paths
@@ -555,7 +585,8 @@ defmodule Lotus.Preflight.Columns do
       set_op?: notes.set_op?
     }
 
-    walk(out, :bof, :bof, {:bof, []}, {:bof, []}, context, %{})
+    with {:ok, cache} <- walk(out, :bof, :bof, {:bof, []}, {:bof, []}, context, %{}),
+         do: {:ok, column_sources(context, cache)}
   end
 
   # Besides the lexemes before it, each one carries what precedes its
@@ -570,7 +601,7 @@ defmodule Lotus.Preflight.Columns do
     end
   end
 
-  defp walk([], _prev, _prev2, _chain1, _chain2, _ctx, _cache), do: :ok
+  defp walk([], _prev, _prev2, _chain1, _chain2, _ctx, cache), do: {:ok, cache}
 
   defp chain(".", {:name, raw, _down}, {before, qualifier}), do: {before, qualifier ++ [raw]}
   defp chain(prev, _prev2, _chain2), do: {prev, []}
@@ -704,23 +735,23 @@ defmodule Lotus.Preflight.Columns do
 
   # Asked each time a name stands, unless no column rule can name it.
   defp protected_by_name?(raw, down, %{names: names} = ctx, cache) do
-    if names == :any or Map.has_key?(names, raw) or Map.has_key?(names, down),
+    if names == :any or Map.has_key?(names, down),
       do: {policy_protects?(ctx.matcher, ctx.rels, raw, down), cache},
       else: {false, cache}
   end
 
-  # The column names the matcher's column rules spell out exactly, or :any
-  # when one is a pattern. A rule's column matches a name only when the two
-  # are equal (`Lotus.Visibility.Matcher`), so no other name can be
-  # protected and the matcher needs no asking about it. Anything this
-  # doesn't recognize is read as :any.
+  # The column names the matcher's column rules spell out exactly, in
+  # lowercase, or :any when one is a pattern. A rule's column matches a name
+  # only when the two are equal ignoring case (`Lotus.Visibility.Matcher`),
+  # so no other name can be protected and the matcher needs no asking about
+  # it. Anything this doesn't recognize is read as :any.
   defp column_names(%Matcher{column: %{patterns: [], exact: exact} = rules}) when is_map(exact) do
     columns =
       Enum.map(Map.get(rules, :schema_table, []), &elem(&1, 2)) ++
         Enum.map(Map.get(rules, :table, []), &elem(&1, 1))
 
     if Enum.all?(columns, &(is_binary(&1) and &1 != "*")),
-      do: Map.new(columns ++ Map.keys(exact), &{&1, true}),
+      do: Map.new(columns ++ Map.keys(exact), &{String.downcase(&1), true}),
       else: :any
   end
 
@@ -999,10 +1030,7 @@ defmodule Lotus.Preflight.Columns do
   # Each item with the first protected name it reads; the position of the
   # first `*` or `t.*` (from 1); and whether every item from there is safe.
   defp prepare_list(reversed_items, ctx, cache) do
-    items =
-      reversed_items
-      |> Enum.reduce([], fn item, acc -> [:lists.reverse(item) | acc] end)
-      |> clean_items()
+    items = reversed_items |> list_items() |> Enum.map(&clean_item/1)
 
     first_star = Enum.find_index(items, &star_item?/1)
 
@@ -1014,8 +1042,11 @@ defmodule Lotus.Preflight.Columns do
     {items, first_star && first_star + 1, from_star_safe?}
   end
 
-  # Without the keywords that start the first item or end the list.
-  defp clean_items([first | items]) do
+  # The items of a list gathered in reverse, in order, without the keywords
+  # that start the first item.
+  defp list_items(reversed_items) do
+    [first | items] = Enum.reduce(reversed_items, [], &[:lists.reverse(&1) | &2])
+
     first =
       case first do
         [{:kw, "distinct"}, {:kw, "on"}, "(" | rest] -> rest
@@ -1023,8 +1054,11 @@ defmodule Lotus.Preflight.Columns do
         _ -> first
       end
 
-    Enum.map([first | items], fn item -> Enum.reject(item, &list_keyword?/1) end)
+    [first | items]
   end
+
+  # Without the keywords that end the list.
+  defp clean_item(item), do: Enum.reject(item, &list_keyword?/1)
 
   defp list_keyword?({:kw, kw}), do: kw != "as"
   defp list_keyword?(_lexeme), do: false
@@ -1067,6 +1101,53 @@ defmodule Lotus.Preflight.Columns do
   end
 
   defp protected_item([], _prev, _prev2, _qualifier1, _qualifier2, _ctx, _cache), do: nil
+
+  # ---------------------------------------------------------------------------
+  # Sources: the relation each result column comes from
+  # ---------------------------------------------------------------------------
+
+  # The top-level select list's items up to the first `*` or `t.*`, whose
+  # width can't be known here. A set operation's result takes the first
+  # branch's names over every branch's values, so it has none.
+  defp column_sources(%{set_op?: true}, _cache), do: nil
+
+  defp column_sources(ctx, cache) do
+    case ctx.out |> collect_lists(%{}) |> Map.get(0) do
+      [reversed_items] ->
+        reversed_items
+        |> list_items()
+        |> Enum.take_while(&(not star_item?(clean_item(&1))))
+        |> Enum.map_reduce(cache, &item_source(&1, ctx, &2))
+        |> elem(0)
+
+      _ ->
+        nil
+    end
+  end
+
+  # A qualified column as is (`o.ssn`, `public.orders.ssn`, perhaps `AS ssn`)
+  # comes from the relation its qualifier names, when that can be told.
+  defp item_source(item, ctx, cache) do
+    with {[_ | _] = qualifier, [{:name, _raw, down} | rest]} <- split_qualifier(item, []),
+         true <- bare_tail?(rest, down),
+         {{_schema, _table} = relation, cache} <- resolve(qualifier, ctx, cache) do
+      {{:relation, relation}, cache}
+    else
+      _ -> {:unresolved, cache}
+    end
+  end
+
+  defp split_qualifier([{:name, raw, _down}, "." | rest], acc),
+    do: split_qualifier(rest, [raw | acc])
+
+  defp split_qualifier(rest, acc), do: {:lists.reverse(acc), rest}
+
+  # The last item ends with the keyword that ends the list (`FROM`).
+  defp bare_tail?([], _down), do: true
+  defp bare_tail?([{:kw, kw}], _down), do: kw != "as"
+  defp bare_tail?([{:kw, "as"}, {:name, _raw, down}], down), do: true
+  defp bare_tail?([{:kw, "as"}, {:name, _raw, down}, {:kw, kw}], down), do: kw != "as"
+  defp bare_tail?(_rest, _down), do: false
 
   # ---------------------------------------------------------------------------
   # Errors

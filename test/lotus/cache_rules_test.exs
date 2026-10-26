@@ -173,5 +173,13 @@ defmodule Lotus.CacheRulesTest do
       refute Matcher.fingerprint(a) == Matcher.fingerprint(b)
       refute Matcher.fingerprint(a) == Matcher.fingerprint(Matcher.deny_all())
     end
+
+    test "is not the one results were cached under before columns matched in any case" do
+      matcher = Lotus.Visibility.compile(%{column: [{"users", "ssn", :mask}]})
+      term = matcher |> Map.from_struct() |> :erlang.term_to_binary([:deterministic])
+      before = :sha256 |> :crypto.hash(term) |> Base.encode16(case: :lower)
+
+      refute Matcher.fingerprint(matcher) == before
+    end
   end
 end
