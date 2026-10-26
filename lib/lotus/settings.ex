@@ -3,8 +3,8 @@ defmodule Lotus.Settings do
   Settings a host changes while Lotus runs, over its config.
 
   Most of Lotus's config is fixed when the app deploys. A few settings are
-  the kind an admin changes in the app: whether statements may write, the
-  default page size, how each data source is described to the AI, the AI
+  the kind an admin changes in the app: whether statements may write, on
+  every source or on one, the default page size, how each data source is described to the AI, the AI
   provider and key, delivery and the result cache. A module that implements
   this behaviour answers them at run time:
 
@@ -31,11 +31,25 @@ defmodule Lotus.Settings do
 
   require Logger
 
-  @overridable [:read_only, :default_page_size, :data_source_descriptions, :ai, :delivery, :cache]
+  @overridable [
+    :read_only,
+    :data_source_read_only,
+    :default_page_size,
+    :data_source_descriptions,
+    :ai,
+    :delivery,
+    :cache
+  ]
 
   @typedoc "A setting a `Lotus.Settings` module may answer."
   @type key ::
-          :read_only | :default_page_size | :data_source_descriptions | :ai | :delivery | :cache
+          :read_only
+          | :data_source_read_only
+          | :default_page_size
+          | :data_source_descriptions
+          | :ai
+          | :delivery
+          | :cache
 
   @doc "The setting `key` over the config, or `:default` to keep the config's."
   @callback get(key :: key()) :: {:ok, term()} | :default

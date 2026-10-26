@@ -128,6 +128,15 @@ defmodule Lotus do
   def data_source_description(name), do: Config.data_source_description(name)
 
   @doc """
+  Whether statements on a data source are read-only unless a call says
+  otherwise, for a UI to show it. See `Lotus.Config.read_only?/1` for what
+  decides it: the source's own setting, `config :lotus,
+  data_source_read_only: %{name => boolean}`, then the global `read_only`.
+  """
+  @spec read_only?(String.t()) :: boolean()
+  def read_only?(source_name) when is_binary(source_name), do: Config.read_only?(source_name)
+
+  @doc """
   Returns the default data source as a {name, module} tuple.
 
   - If there's only one data source configured, returns it
@@ -557,7 +566,7 @@ defmodule Lotus do
 
   defp execute_query(q, adapter, body, params, vars, opts) do
     search_path = Keyword.get(opts, :search_path) || q.search_path
-    runner_opts = opts |> prepare_final_opts(search_path) |> Keyword.put(:vars, vars)
+    runner_opts = opts |> prepare_final_opts(adapter, search_path) |> Keyword.put(:vars, vars)
 
     execute_with_options(adapter, body, params, opts, runner_opts, vars, q.id)
   end
@@ -756,14 +765,18 @@ defmodule Lotus do
     Lotus.Cache.put(Keyword.fetch!(cache, :key), val, ttl, options)
   end
 
-  defp prepare_final_opts(opts, nil),
-    do: Keyword.put_new_lazy(opts, :read_only, &Config.read_only?/0)
+  defp prepare_final_opts(opts, adapter, nil), do: put_read_only(opts, adapter)
 
-  defp prepare_final_opts(opts, search_path) do
+  defp prepare_final_opts(opts, adapter, search_path) do
     opts
     |> Keyword.put(:search_path, search_path)
-    |> Keyword.put_new_lazy(:read_only, &Config.read_only?/0)
+    |> put_read_only(adapter)
   end
+
+  # A call's `read_only:` goes over the source's default, which goes over the
+  # global one (`Lotus.Config.read_only?/1`).
+  defp put_read_only(opts, %Adapter{} = adapter),
+    do: Keyword.put_new_lazy(opts, :read_only, fn -> Config.read_only?(adapter) end)
 
   defp build_cache_tags(query_id, repo_name, opts) do
     base_tags =
@@ -835,9 +848,10 @@ defmodule Lotus do
 
   ## Options
 
-    * `:read_only` — when `true` (default), blocks write operations (INSERT, UPDATE,
+    * `:read_only` — when `true`, blocks write operations (INSERT, UPDATE,
       DELETE, DDL) at both the application and database level. Set to `false` to allow
-      write queries.
+      write queries. Defaults to the source's setting (`read_only?/1`), which
+      is `true` unless configured otherwise.
 
   ## Examples
 
@@ -873,7 +887,7 @@ defmodule Lotus do
     runner_opts =
       opts
       |> Keyword.delete(:repo)
-      |> Keyword.put_new_lazy(:read_only, &Config.read_only?/0)
+      |> put_read_only(adapter)
 
     execute_with_options(adapter, statement, params, opts, runner_opts, params, nil)
   end
@@ -923,7 +937,10 @@ defmodule Lotus do
       case Query.compile(q, vars, compile_opts) do
         {:ok, %Statement{body: body, params: params}} ->
           search_path = Keyword.get(opts, :search_path) || q.search_path
-          runner_opts = opts |> prepare_final_opts(search_path) |> Keyword.put(:vars, vars)
+
+          runner_opts =
+            opts |> prepare_final_opts(adapter, search_path) |> Keyword.put(:vars, vars)
+
           stream_with_options(adapter, body, params, opts, runner_opts, fun)
 
         {:error, _} = err ->
@@ -952,7 +969,7 @@ defmodule Lotus do
     runner_opts =
       opts
       |> Keyword.delete(:repo)
-      |> Keyword.put_new_lazy(:read_only, &Config.read_only?/0)
+      |> put_read_only(adapter)
 
     stream_with_options(adapter, statement, params, opts, runner_opts, fun)
   end

@@ -42,6 +42,17 @@
 
 ### Added
 
+- **Read-only per data source.** `config :lotus, data_source_read_only:
+  %{"staging" => false, "main" => true}` sets whether each source's
+  statements may write, over the global `read_only`. A resolver can set it
+  on the source itself, in the new `read_only` field of
+  `%Lotus.Source.Adapter{}` (`nil`, the default, follows the config), as
+  Lotus Pro does for the sources its admins connect. A call's `read_only:`
+  still goes over both. `Lotus.Settings` may answer `:data_source_read_only`
+  at run time. `Lotus.Config.read_only?/1` and `Lotus.read_only?/1` say what
+  a source does. Statements, saved queries, streams, exports and dashboard
+  cards follow it; the AI and MCP paths stay read-only.
+
 - **Sources connected from settings** (`Lotus.Source.Adapter.Connection`,
   `Lotus.Source.Connections`). An adapter can describe the form that
   connects one of its sources (a host, a port, a user, a password; a URL

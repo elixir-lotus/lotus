@@ -11,6 +11,8 @@ defmodule Lotus.Source.Adapter do
     * `state`       — opaque connection state managed by the adapter
     * `source_type` — an atom identifying the database kind (`:postgres`, `:mysql`, etc.)
     * `capabilities` — the capability behaviours `module` declares (see below)
+    * `read_only`   — whether statements on this source are read-only, or `nil`
+      to follow the config (see `Lotus.Config.read_only?/1`)
 
   ## Implementing an adapter
 
@@ -204,11 +206,12 @@ defmodule Lotus.Source.Adapter do
           module: module(),
           state: term(),
           source_type: source_type(),
-          capabilities: [capability()] | nil
+          capabilities: [capability()] | nil,
+          read_only: boolean() | nil
         }
 
   @enforce_keys [:name, :module, :source_type]
-  defstruct [:name, :module, :state, :source_type, capabilities: nil]
+  defstruct [:name, :module, :state, :source_type, capabilities: nil, read_only: nil]
 
   @capability_behaviours [
     introspection: Lotus.Source.Adapter.Introspection,

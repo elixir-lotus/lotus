@@ -256,6 +256,23 @@ config :lotus,
 
 When `true`, Lotus blocks write operations (INSERT, UPDATE, DELETE, DDL) at the application level and runs statements in a read-only transaction where the adapter supports it. See [Enabling Write Queries](#enabling-write-queries) below.
 
+#### `data_source_read_only`
+
+```elixir
+config :lotus,
+  read_only: true,
+  data_source_read_only: %{"staging" => false}
+```
+
+**Type**: `%{String.t() => boolean()}`
+**Default**: `%{}`
+
+Whether each data source is read-only, by name, over the global `read_only`. Here
+`"staging"` takes writes and every other source stays read-only. A resolver can set
+the source's own `read_only` field (`%Lotus.Source.Adapter{read_only: false}`), which
+goes over this map, and a call's `read_only:` option goes over both.
+`Lotus.read_only?/1` says what a source does.
+
 #### `unique_names`
 
 Determines whether query names must be unique across all saved queries.
@@ -608,6 +625,8 @@ config :lotus,
   read_only: false
 ```
 
+To allow writes on one source only, see [`data_source_read_only`](#data_source_read_only).
+
 You can also enable writes per query without changing the global config:
 
 ```elixir
@@ -803,6 +822,10 @@ Lotus.unique_names?()
 # Read-only mode
 Lotus.Config.read_only?()
 # true
+
+# Read-only mode of one source
+Lotus.Config.read_only?("staging")
+# false
 
 # The whole validated configuration
 Lotus.Config.all()
