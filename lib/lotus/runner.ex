@@ -8,12 +8,18 @@ defmodule Lotus.Runner do
   allow write operations.
 
   What counts as a write is the adapter's judgement, via
-  `c:Lotus.Source.Adapter.Preflight.sanitize_query/3`.
+  `c:Lotus.Source.Adapter.Preflight.sanitize_query/3`. `writes?/2` asks it
+  without running the statement.
+
+  A statement on a source that declares `Lotus.Source.Adapter.Cancel` can be
+  stopped while it runs: pass `on_cancel_token: fun`, and give the token
+  `fun` receives to `Lotus.cancel/1`. See `Lotus.Runner.Cancel`.
   """
 
   alias Lotus.{Middleware, Preflight, Result, Telemetry, Visibility}
   alias Lotus.Preflight.{Columns, Relations}
   alias Lotus.Query.Statement
+  alias Lotus.Runner.Cancel
   alias Lotus.Source.Adapter
   alias Lotus.Visibility.{Mask, Matcher, Policy}
 
@@ -22,6 +28,7 @@ defmodule Lotus.Runner do
           timeout: non_neg_integer(),
           statement_timeout_ms: non_neg_integer(),
           read_only: boolean(),
+          on_cancel_token: (Cancel.t() -> any()),
           search_path: String.t() | nil,
           scope: term(),
           context: term(),
@@ -650,6 +657,22 @@ defmodule Lotus.Runner do
          do: {:ok, relations}
   end
 
+  @doc """
+  Whether a statement would change data, by the judgement that refuses it
+  in read-only mode: `c:Lotus.Source.Adapter.Preflight.sanitize_query/3`
+  refuses it with `read_only: true` and takes it with `read_only: false`.
+
+  Does not run the statement. A statement refused either way (two
+  statements, say) cannot run at all, so it does not write. An adapter
+  without `Lotus.Source.Adapter.Preflight` refuses nothing, so nothing it
+  runs counts as a write.
+  """
+  @spec writes?(Adapter.t(), Statement.t()) :: boolean()
+  def writes?(%Adapter{} = adapter, %Statement{} = statement) do
+    match?({:error, _}, Adapter.sanitize_query(adapter, statement, read_only: true)) and
+      Adapter.sanitize_query(adapter, statement, read_only: false) == :ok
+  end
+
   defp check_phases(adapter, statement, opts) do
     with :ok <- tag(:sanitize, Adapter.sanitize_query(adapter, statement, sanitize_opts(opts))),
          :ok <- tag(:preflight, source_visible(adapter, opts)),
@@ -702,24 +725,27 @@ defmodule Lotus.Runner do
   defp vars(opts), do: Keyword.get(opts, :vars) || %{}
 
   # The statement's session settings are applied inside its transaction, so
-  # they end with it; a source that cannot apply them does not run it.
-  defp exec_read_only(
-         %Adapter{} = adapter,
+  # they end with it; a source that cannot apply them does not run it. A
+  # statement cancelled with `Lotus.cancel/1` is the cancelled error, whatever
+  # its transaction returned.
+  defp exec_read_only(%Adapter{} = adapter, %Statement{} = statement, relations, opts) do
+    cancel = Cancel.prepare(adapter, opts)
+    Cancel.result(cancel, exec_in_transaction(adapter, statement, relations, opts, cancel))
+  end
+
+  defp exec_in_transaction(
+         adapter,
          %Statement{body: body, params: params, session: session},
          relations,
-         opts
+         opts,
+         cancel
        ) do
     Adapter.transaction(
       adapter,
       fn _state ->
-        timeout = Keyword.get(opts, :timeout, 15_000)
-
-        with :ok <- Adapter.setup_session(adapter, session || %{}, opts) do
-          {elapsed_us, res} =
-            :timer.tc(fn ->
-              Adapter.execute_query(adapter, body, params, opts ++ [timeout: timeout])
-            end)
-
+        with :ok <- Adapter.setup_session(adapter, session || %{}, opts),
+             {elapsed_us, res} when is_integer(elapsed_us) <-
+               timed_execute(cancel, adapter, body, params, opts) do
           handle_query_result(res, elapsed_us, adapter, relations, Keyword.get(opts, :scope))
         end
       end,
@@ -731,6 +757,19 @@ defmodule Lotus.Runner do
     end
   rescue
     e -> {:error, Adapter.format_error(adapter, e)}
+  end
+
+  # The query, timed, and stoppable with `Lotus.cancel/1` when the caller
+  # asked for a token (see `Lotus.Runner.Cancel`). A cancelled statement is
+  # `{:error, reason}`.
+  defp timed_execute(cancel, adapter, body, params, opts) do
+    timeout = Keyword.get(opts, :timeout, 15_000)
+
+    Cancel.run(cancel, opts, fn ->
+      :timer.tc(fn ->
+        Adapter.execute_query(adapter, body, params, opts ++ [timeout: timeout])
+      end)
+    end)
   end
 
   defp handle_query_result(

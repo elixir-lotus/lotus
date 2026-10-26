@@ -73,7 +73,10 @@ defmodule Lotus.Config do
           "primary" => "the app's users, orders and invoices"
         },
         unique_names: false,           # Defaults to true
-        read_only: false               # Defaults to true; set to false to allow writes
+        read_only: false,              # Defaults to true; set to false to allow writes
+        data_source_read_only: %{      # Overrides read_only for one source
+          "staging" => false
+        }
   """
 
   @type t :: %{
@@ -83,6 +86,7 @@ defmodule Lotus.Config do
           data_sources: %{String.t() => module() | map()},
           default_source: String.t() | nil,
           data_source_descriptions: %{String.t() => String.t()},
+          data_source_read_only: %{String.t() => boolean()},
           default_page_size: pos_integer() | nil,
           table_visibility: map(),
           column_visibility: map(),
@@ -168,6 +172,12 @@ defmodule Lotus.Config do
       default: %{},
       doc:
         "A short description of each data source, by name (e.g. `%{\"support\" => \"helpdesk tickets and agents\"}`). The AI assistant and the MCP server show it to the model, so it picks the right source."
+    ],
+    data_source_read_only: [
+      type: {:map, :string, :boolean},
+      default: %{},
+      doc:
+        "Whether each data source is read-only, by name (e.g. `%{\"staging\" => false, \"main\" => true}`). A source named here takes this over the global `:read_only`; a source's own `read_only` field (`Lotus.Source.Adapter`) and a call's `read_only:` option take precedence over it. See `Lotus.Config.read_only?/1`."
     ],
     default_page_size: [
       type: {:or, [:pos_integer, nil]},
@@ -423,8 +433,9 @@ defmodule Lotus.Config do
       default: nil,
       doc: """
       A module implementing `Lotus.Settings`, which changes some settings at
-      run time over this config: `:read_only`, `:default_page_size`,
-      `:data_source_descriptions`, `:ai`, `:delivery` and `:cache`. Lotus Pro
+      run time over this config: `:read_only`, `:data_source_read_only`,
+      `:default_page_size`, `:data_source_descriptions`, `:ai`, `:delivery`
+      and `:cache`. Lotus Pro
       sets it, for the settings its admins change in the app.
       """
     ],
@@ -623,6 +634,7 @@ defmodule Lotus.Config do
       :data_sources,
       :default_source,
       :data_source_descriptions,
+      :data_source_read_only,
       :default_page_size,
       :table_visibility,
       :column_visibility,
@@ -655,9 +667,48 @@ defmodule Lotus.Config do
 
   @doc """
   Returns whether queries are restricted to read-only operations.
+
+  This is the global setting. `read_only?/1` answers for one source.
   """
   @spec read_only?() :: boolean()
   def read_only?, do: setting(:read_only)
+
+  @doc """
+  Returns whether statements on a data source are read-only by default.
+
+  The first of these that says wins:
+
+    1. The source's own `read_only` field, `true` or `false`
+       (`Lotus.Source.Adapter`). A resolver sets it, as Lotus Pro does for
+       the sources its admins connect in the app.
+    2. The source's entry in `:data_source_read_only`.
+    3. The global `:read_only` (`read_only?/0`).
+
+  Both settings may be answered at run time by `Lotus.Settings`. A call's
+  `read_only:` option goes over all of them.
+
+  Given a name, the source is looked up through the resolver for its own
+  field. A name the resolver does not know follows steps 2 and 3.
+  """
+  @spec read_only?(String.t() | Lotus.Source.Adapter.t()) :: boolean()
+  def read_only?(%Lotus.Source.Adapter{read_only: read_only}) when is_boolean(read_only),
+    do: read_only
+
+  def read_only?(%Lotus.Source.Adapter{name: name}), do: configured_read_only?(name)
+
+  def read_only?(name) when is_binary(name) do
+    case source_resolver().resolve(name, nil) do
+      {:ok, %Lotus.Source.Adapter{} = adapter} -> read_only?(adapter)
+      _not_found -> configured_read_only?(name)
+    end
+  end
+
+  defp configured_read_only?(name) do
+    case Map.get(setting(:data_source_read_only) || %{}, name) do
+      read_only when is_boolean(read_only) -> read_only
+      _ -> read_only?()
+    end
+  end
 
   @doc """
   Returns whether the given source is allowed to return
@@ -822,6 +873,7 @@ defmodule Lotus.Config do
   def get(key)
       when key in [
              :read_only,
+             :data_source_read_only,
              :default_page_size,
              :data_source_descriptions,
              :ai,

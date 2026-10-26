@@ -74,6 +74,7 @@ defmodule Lotus do
           timeout: non_neg_integer(),
           statement_timeout_ms: non_neg_integer(),
           read_only: boolean(),
+          on_cancel_token: (Runner.Cancel.t() -> any()),
           search_path: binary() | nil,
           repo: binary() | module() | nil,
           vars: map(),
@@ -126,6 +127,88 @@ defmodule Lotus do
   `config :lotus, data_source_descriptions: %{name => description}`, or `nil`.
   """
   def data_source_description(name), do: Config.data_source_description(name)
+
+  @doc """
+  Whether statements on a data source are read-only unless a call says
+  otherwise, for a UI to show it. See `Lotus.Config.read_only?/1` for what
+  decides it: the source's own setting, `config :lotus,
+  data_source_read_only: %{name => boolean}`, then the global `read_only`.
+  """
+  @spec read_only?(String.t()) :: boolean()
+  def read_only?(source_name) when is_binary(source_name), do: Config.read_only?(source_name)
+
+  @doc """
+  Whether a running statement on a data source can be stopped with
+  `cancel/1`: whether its adapter declares `Lotus.Source.Adapter.Cancel`.
+  The built-in PostgreSQL and MySQL sources can; SQLite cannot.
+  """
+  @spec cancellable?(String.t() | module()) :: boolean()
+  def cancellable?(source), do: source |> Source.resolve!(nil) |> Adapter.capability?(:cancel)
+
+  @doc """
+  Stops a running statement, from any process.
+
+  Takes the token the `:on_cancel_token` function of `run_statement/3` or
+  `run_query/2` received. The statement's call returns
+  `{:error, "The query was cancelled."}`, which middleware and telemetry
+  see as an error, and which the result cache does not store.
+
+  Returns `:ok` once the database was asked to stop it, or
+  `{:error, reason}`: the database refused, or the statement is not running
+  any more.
+
+      parent = self()
+
+      Task.start(fn ->
+        Lotus.run_statement("SELECT pg_sleep(60)", [],
+          on_cancel_token: &send(parent, {:cancel_token, &1})
+        )
+      end)
+
+      receive do
+        {:cancel_token, token} -> Lotus.cancel(token)
+      end
+  """
+  @spec cancel(Runner.Cancel.t()) :: :ok | {:error, term()}
+  defdelegate cancel(token), to: Runner.Cancel
+
+  @doc """
+  Whether a statement would change data, so a UI can ask the person before
+  it runs it. Does not run the statement.
+
+  It is the judgement that refuses a statement in read-only mode
+  (`c:Lotus.Source.Adapter.Preflight.sanitize_query/3`): `true` when the
+  source would refuse it read-only and take it otherwise. See
+  `Lotus.Runner.writes?/2`. `{{var}}` variables and `[[ ]]` optional
+  clauses are read as the editor writes them; their values do not change
+  the answer.
+
+  ## Options
+
+    * `:repo` - The data source, as `run_statement/3` takes it. Defaults to
+      the default source.
+
+  ## Examples
+
+      Lotus.writes?("DELETE FROM users WHERE id = {{id}}")
+      # => true
+
+      Lotus.writes?("SELECT * FROM users", repo: "warehouse")
+      # => false
+  """
+  @spec writes?(Statement.body(), keyword()) :: boolean()
+  def writes?(statement, opts \\ []) do
+    adapter = Source.resolve!(Keyword.get(opts, :repo), nil)
+    statement = Statement.new(statement)
+
+    analyzable =
+      case Adapter.prepare_for_analysis(adapter, statement) do
+        {:ok, %Statement{} = prepared} -> prepared
+        {:error, _reason} -> statement
+      end
+
+    Runner.writes?(adapter, analyzable)
+  end
 
   @doc """
   Returns the default data source as a {name, module} tuple.
@@ -509,6 +592,11 @@ defmodule Lotus do
   - `:date` - Cast from ISO8601 string to Date struct
 
 
+  ## Options
+
+  Those of `run_statement/3`, including `:read_only` and `:on_cancel_token`,
+  plus `:vars`.
+
   ### Windowed pagination
   Pass `window: [limit: pos_integer, offset: non_neg_integer, count: :none | :exact]` to
   return only a page of rows from the original query. When `count: :exact`, Lotus will
@@ -557,7 +645,7 @@ defmodule Lotus do
 
   defp execute_query(q, adapter, body, params, vars, opts) do
     search_path = Keyword.get(opts, :search_path) || q.search_path
-    runner_opts = opts |> prepare_final_opts(search_path) |> Keyword.put(:vars, vars)
+    runner_opts = opts |> prepare_final_opts(adapter, search_path) |> Keyword.put(:vars, vars)
 
     execute_with_options(adapter, body, params, opts, runner_opts, vars, q.id)
   end
@@ -756,14 +844,18 @@ defmodule Lotus do
     Lotus.Cache.put(Keyword.fetch!(cache, :key), val, ttl, options)
   end
 
-  defp prepare_final_opts(opts, nil),
-    do: Keyword.put_new_lazy(opts, :read_only, &Config.read_only?/0)
+  defp prepare_final_opts(opts, adapter, nil), do: put_read_only(opts, adapter)
 
-  defp prepare_final_opts(opts, search_path) do
+  defp prepare_final_opts(opts, adapter, search_path) do
     opts
     |> Keyword.put(:search_path, search_path)
-    |> Keyword.put_new_lazy(:read_only, &Config.read_only?/0)
+    |> put_read_only(adapter)
   end
+
+  # A call's `read_only:` goes over the source's default, which goes over the
+  # global one (`Lotus.Config.read_only?/1`).
+  defp put_read_only(opts, %Adapter{} = adapter),
+    do: Keyword.put_new_lazy(opts, :read_only, fn -> Config.read_only?(adapter) end)
 
   defp build_cache_tags(query_id, repo_name, opts) do
     base_tags =
@@ -835,9 +927,15 @@ defmodule Lotus do
 
   ## Options
 
-    * `:read_only` — when `true` (default), blocks write operations (INSERT, UPDATE,
+    * `:read_only` — when `true`, blocks write operations (INSERT, UPDATE,
       DELETE, DDL) at both the application and database level. Set to `false` to allow
-      write queries.
+      write queries. Defaults to the source's setting (`read_only?/1`), which
+      is `true` unless configured otherwise.
+    * `:on_cancel_token` — a function of one argument, called with a token
+      when the statement starts, in the process that runs it, on a source
+      that can cancel (`cancellable?/1`). Pass the token to `cancel/1` to
+      stop the statement. It is called again for the count of a
+      `window: [count: :exact]` run. Not called on any other source.
 
   ## Examples
 
@@ -873,7 +971,7 @@ defmodule Lotus do
     runner_opts =
       opts
       |> Keyword.delete(:repo)
-      |> Keyword.put_new_lazy(:read_only, &Config.read_only?/0)
+      |> put_read_only(adapter)
 
     execute_with_options(adapter, statement, params, opts, runner_opts, params, nil)
   end
@@ -923,7 +1021,10 @@ defmodule Lotus do
       case Query.compile(q, vars, compile_opts) do
         {:ok, %Statement{body: body, params: params}} ->
           search_path = Keyword.get(opts, :search_path) || q.search_path
-          runner_opts = opts |> prepare_final_opts(search_path) |> Keyword.put(:vars, vars)
+
+          runner_opts =
+            opts |> prepare_final_opts(adapter, search_path) |> Keyword.put(:vars, vars)
+
           stream_with_options(adapter, body, params, opts, runner_opts, fun)
 
         {:error, _} = err ->
@@ -952,7 +1053,7 @@ defmodule Lotus do
     runner_opts =
       opts
       |> Keyword.delete(:repo)
-      |> Keyword.put_new_lazy(:read_only, &Config.read_only?/0)
+      |> put_read_only(adapter)
 
     stream_with_options(adapter, statement, params, opts, runner_opts, fun)
   end

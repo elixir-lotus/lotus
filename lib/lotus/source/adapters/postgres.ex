@@ -8,6 +8,9 @@ defmodule Lotus.Source.Adapters.Postgres do
 
   Dialect behaviour comes from
   `Lotus.Source.Adapters.Ecto.Dialects.Postgres`: schemas, `EXPLAIN (FORMAT JSON)` query plans, a session `search_path`, and `statement_timeout`.
+
+  It also declares `Lotus.Source.Adapter.Session`, `Lotus.Source.Adapter.Streaming`
+  and `Lotus.Source.Adapter.Cancel`.
   """
 
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
@@ -60,6 +63,42 @@ defmodule Lotus.Source.Adapters.Postgres do
          "Session settings must be custom settings named prefix.name, got: " <>
            Enum.map_join(refused, ", ", &inspect/1)}
     end
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  @behaviour Lotus.Source.Adapter.Cancel
+
+  @doc """
+  The pid of the backend the statement runs on, from `pg_backend_pid()`,
+  read inside the statement's transaction.
+  """
+  @impl Lotus.Source.Adapter.Cancel
+  def cancel_handle(state) do
+    EctoAdapter.with_repo(state, fn repo ->
+      case repo.query("SELECT pg_backend_pid()") do
+        {:ok, %{rows: [[pid]]}} when is_integer(pid) -> {:ok, pid}
+        {:ok, _other} -> {:error, "Could not read the backend pid"}
+        {:error, error} -> {:error, Exception.message(error)}
+      end
+    end)
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  @doc """
+  Stops the statement running on a backend with `pg_cancel_backend/1`, on
+  another connection of the pool.
+  """
+  @impl Lotus.Source.Adapter.Cancel
+  def cancel(state, pid) when is_integer(pid) do
+    EctoAdapter.with_repo(state, fn repo ->
+      case repo.query("SELECT pg_cancel_backend($1)", [pid]) do
+        {:ok, %{rows: [[true]]}} -> :ok
+        {:ok, _other} -> {:error, "The database did not cancel the query"}
+        {:error, error} -> {:error, Exception.message(error)}
+      end
+    end)
   rescue
     e -> {:error, Exception.message(e)}
   end

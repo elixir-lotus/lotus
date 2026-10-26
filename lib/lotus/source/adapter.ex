@@ -11,6 +11,8 @@ defmodule Lotus.Source.Adapter do
     * `state`       — opaque connection state managed by the adapter
     * `source_type` — an atom identifying the database kind (`:postgres`, `:mysql`, etc.)
     * `capabilities` — the capability behaviours `module` declares (see below)
+    * `read_only`   — whether statements on this source are read-only, or `nil`
+      to follow the config (see `Lotus.Config.read_only?/1`)
 
   ## Implementing an adapter
 
@@ -48,6 +50,8 @@ defmodule Lotus.Source.Adapter do
       are consumed, for large exports
     * `Lotus.Source.Adapter.Connection` — the form that connects a source
       from settings a person types, and the source those settings make
+    * `Lotus.Source.Adapter.Cancel` — stopping a running statement from
+      another process
 
   For example, a search engine adapter that filters and sorts but has no
   schemas:
@@ -68,8 +72,9 @@ defmodule Lotus.Source.Adapter do
   what is missing. `use Lotus.Source.Adapters.Ecto` declares every
   capability but `Session`, which only `Lotus.Source.Adapters.Postgres`
   declares, `Streaming`, which the built-in Postgres, MySQL and SQLite
-  adapters declare, and `Connection`, which it declares when given a
-  `:connection` option, as the built-in ones are.
+  adapters declare, `Connection`, which it declares when given a
+  `:connection` option, as the built-in ones are, and `Cancel`, which the
+  built-in Postgres and MySQL adapters declare.
 
   The `:capabilities` field of `%Adapter{}` holds the declared
   capabilities. `with_capabilities/1` fills it when the adapter is built,
@@ -170,6 +175,7 @@ defmodule Lotus.Source.Adapter do
           | :session
           | :streaming
           | :connection
+          | :cancel
 
   @typedoc """
   What a statement cost the engine, as `execute_query/4` may report it. Every
@@ -198,17 +204,19 @@ defmodule Lotus.Source.Adapter do
           | {:session, Lotus.Source.Adapter.Session}
           | {:streaming, Lotus.Source.Adapter.Streaming}
           | {:connection, Lotus.Source.Adapter.Connection}
+          | {:cancel, Lotus.Source.Adapter.Cancel}
 
   @type t :: %__MODULE__{
           name: String.t(),
           module: module(),
           state: term(),
           source_type: source_type(),
-          capabilities: [capability()] | nil
+          capabilities: [capability()] | nil,
+          read_only: boolean() | nil
         }
 
   @enforce_keys [:name, :module, :source_type]
-  defstruct [:name, :module, :state, :source_type, capabilities: nil]
+  defstruct [:name, :module, :state, :source_type, capabilities: nil, read_only: nil]
 
   @capability_behaviours [
     introspection: Lotus.Source.Adapter.Introspection,
@@ -218,7 +226,8 @@ defmodule Lotus.Source.Adapter do
     editor: Lotus.Source.Adapter.Editor,
     session: Lotus.Source.Adapter.Session,
     streaming: Lotus.Source.Adapter.Streaming,
-    connection: Lotus.Source.Adapter.Connection
+    connection: Lotus.Source.Adapter.Connection,
+    cancel: Lotus.Source.Adapter.Cancel
   ]
 
   @capability_map Map.new(@capability_behaviours)
@@ -841,6 +850,30 @@ defmodule Lotus.Source.Adapter do
   def stream_query(%__MODULE__{module: mod, state: state} = adapter, body, params, opts) do
     if has?(adapter, :streaming),
       do: mod.stream_query(state, body, params, opts),
+      else: {:error, :unsupported}
+  end
+
+  @doc """
+  Return the handle of the statement about to run, inside its transaction
+  (see `Lotus.Source.Adapter.Cancel`). An adapter without the `:cancel`
+  capability returns `{:error, :unsupported}`.
+  """
+  @spec cancel_handle(t()) :: {:ok, term()} | {:error, term()}
+  def cancel_handle(%__MODULE__{module: mod, state: state} = adapter) do
+    if has?(adapter, :cancel),
+      do: mod.cancel_handle(state),
+      else: {:error, :unsupported}
+  end
+
+  @doc """
+  Stop the statement a handle from `cancel_handle/1` names, from another
+  process (see `Lotus.Source.Adapter.Cancel`). An adapter without the
+  `:cancel` capability returns `{:error, :unsupported}`.
+  """
+  @spec cancel(t(), term()) :: :ok | {:error, term()}
+  def cancel(%__MODULE__{module: mod, state: state} = adapter, handle) do
+    if has?(adapter, :cancel),
+      do: mod.cancel(state, handle),
       else: {:error, :unsupported}
   end
 

@@ -393,7 +393,7 @@ makes a useful starting point for a new adapter.
 source needs — `execute_query/4`, `transaction/3`, `list_tables/3`,
 `describe_table/3`, `builtin_denies/1`, `health_check/1`, `disconnect/1`,
 `format_error/2` and `source_type/1`. The rest of the contract is split into
-seven capability behaviours. Declare the ones your source supports and
+eight capability behaviours. Declare the ones your source supports and
 implement every callback of each; Lotus uses a documented default for the
 ones you leave out (see
 [Core and Capability Behaviours](#core-and-capability-behaviours)). A useful
@@ -554,7 +554,7 @@ A real adapter implements `extract_accessed_resources/2` instead of opting
 out.
 
 ## Core and Capability Behaviours
-The contract is a core behaviour and seven capability behaviours, the way
+The contract is a core behaviour and eight capability behaviours, the way
 `Ecto.Adapter` is split into `Ecto.Adapter.Queryable`, `Ecto.Adapter.Schema`
 and the rest. Each capability groups callbacks that only make sense
 together, so the compiler checks that a capability is implemented
@@ -597,6 +597,8 @@ MyApp.Adapters.Echo
   editor         declared
   session        not declared
   streaming      not declared
+  connection     not declared
+  cancel         not declared
 ```
 
 **`Lotus.Source.Adapter.Introspection`**
@@ -665,6 +667,13 @@ MyApp.Adapters.Echo
 | Callback | Default without the capability | When to implement |
 |---|---|---|
 | `stream_query/4` | the statement runs whole, and its rows are handed over in chunks | Return a lazy stream of `%{columns, rows}` chunks of at most `opts[:max_rows]` rows, read from the source as it is enumerated, so `Lotus.stream_query/3` and `Lotus.Export.stream/4` hold one chunk at a time. Lotus enumerates it inside your `transaction/3`. The built-in Ecto adapters use `Ecto.Adapters.SQL.stream/4`. |
+
+**`Lotus.Source.Adapter.Cancel`**
+
+| Callback | Default without the capability | When to implement |
+|---|---|---|
+| `cancel_handle/1` | the statement cannot be stopped; `Lotus.cancellable?/1` is `false` | Return what names the statement in the engine (a backend pid, a connection id, a job id). Lotus calls it inside your `transaction/3`, on the statement's connection, just before `execute_query/4`. |
+| `cancel/2` | — | Stop the statement a handle names, from another process: on another pooled connection, or through the engine's API, never the statement's own connection. `Lotus.Source.Adapters.Postgres` runs `pg_cancel_backend/1`, `Lotus.Source.Adapters.MySQL` `KILL QUERY`. Lotus calls it only while the statement's transaction is open, and asks again until the statement returns. |
 
 **Optional callbacks of `Lotus.Source.Adapter`:**
 
