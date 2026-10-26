@@ -64,6 +64,10 @@
   `pg_cancel_backend/1`, MySQL with `CONNECTION_ID()` and `KILL QUERY`.
   SQLite does not. `Lotus.cancellable?/1` says whether a source can.
 
+- **Ask whether a statement writes.** `Lotus.writes?/2` says whether a
+  statement would change data, by the judgement that refuses it in
+  read-only mode, without running it, so a UI can ask the person first.
+
 - **Sources connected from settings** (`Lotus.Source.Adapter.Connection`,
   `Lotus.Source.Connections`). An adapter can describe the form that
   connects one of its sources (a host, a port, a user, a password; a URL

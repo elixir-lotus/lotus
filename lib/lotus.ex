@@ -173,6 +173,44 @@ defmodule Lotus do
   defdelegate cancel(token), to: Runner.Cancel
 
   @doc """
+  Whether a statement would change data, so a UI can ask the person before
+  it runs it. Does not run the statement.
+
+  It is the judgement that refuses a statement in read-only mode
+  (`c:Lotus.Source.Adapter.Preflight.sanitize_query/3`): `true` when the
+  source would refuse it read-only and take it otherwise. See
+  `Lotus.Runner.writes?/2`. `{{var}}` variables and `[[ ]]` optional
+  clauses are read as the editor writes them; their values do not change
+  the answer.
+
+  ## Options
+
+    * `:repo` - The data source, as `run_statement/3` takes it. Defaults to
+      the default source.
+
+  ## Examples
+
+      Lotus.writes?("DELETE FROM users WHERE id = {{id}}")
+      # => true
+
+      Lotus.writes?("SELECT * FROM users", repo: "warehouse")
+      # => false
+  """
+  @spec writes?(Statement.body(), keyword()) :: boolean()
+  def writes?(statement, opts \\ []) do
+    adapter = Source.resolve!(Keyword.get(opts, :repo), nil)
+    statement = Statement.new(statement)
+
+    analyzable =
+      case Adapter.prepare_for_analysis(adapter, statement) do
+        {:ok, %Statement{} = prepared} -> prepared
+        {:error, _reason} -> statement
+      end
+
+    Runner.writes?(adapter, analyzable)
+  end
+
+  @doc """
   Returns the default data source as a {name, module} tuple.
 
   - If there's only one data source configured, returns it

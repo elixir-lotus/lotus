@@ -8,7 +8,8 @@ defmodule Lotus.Runner do
   allow write operations.
 
   What counts as a write is the adapter's judgement, via
-  `c:Lotus.Source.Adapter.Preflight.sanitize_query/3`.
+  `c:Lotus.Source.Adapter.Preflight.sanitize_query/3`. `writes?/2` asks it
+  without running the statement.
 
   A statement on a source that declares `Lotus.Source.Adapter.Cancel` can be
   stopped while it runs: pass `on_cancel_token: fun`, and give the token
@@ -654,6 +655,22 @@ defmodule Lotus.Runner do
   def check_statement(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
     with {:ok, %{relations: relations}} <- adapter |> check_phases(statement, opts) |> untag(),
          do: {:ok, relations}
+  end
+
+  @doc """
+  Whether a statement would change data, by the judgement that refuses it
+  in read-only mode: `c:Lotus.Source.Adapter.Preflight.sanitize_query/3`
+  refuses it with `read_only: true` and takes it with `read_only: false`.
+
+  Does not run the statement. A statement refused either way (two
+  statements, say) cannot run at all, so it does not write. An adapter
+  without `Lotus.Source.Adapter.Preflight` refuses nothing, so nothing it
+  runs counts as a write.
+  """
+  @spec writes?(Adapter.t(), Statement.t()) :: boolean()
+  def writes?(%Adapter{} = adapter, %Statement{} = statement) do
+    match?({:error, _}, Adapter.sanitize_query(adapter, statement, read_only: true)) and
+      Adapter.sanitize_query(adapter, statement, read_only: false) == :ok
   end
 
   defp check_phases(adapter, statement, opts) do
