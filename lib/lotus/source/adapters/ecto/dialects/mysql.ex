@@ -16,6 +16,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   alias __MODULE__.EditorConfig
   alias Lotus.Query.Filter
   alias Lotus.Query.Statement
+  alias Lotus.Query.Tokenizer.Profile
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
   alias Lotus.SQL.FilterInjector
   alias Lotus.SQL.SortInjector
@@ -482,7 +483,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   @impl true
   def extract_accessed_resources(repo, %Statement{body: sql, params: params, meta: meta}) do
     opts = Map.to_list(meta)
-    alias_map = EctoHelpers.parse_alias_map(sql)
+    alias_map = EctoHelpers.parse_alias_map(sql, Profile.for_language(query_language()))
     explain = "EXPLAIN FORMAT=JSON " <> sql
 
     # Route through execute_in_transaction so EXPLAIN runs under
@@ -564,22 +565,53 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
 
   defp collect_query_block(_, acc), do: acc
 
-  defp extract_tables_from_sql(sql) do
-    table_regex =
-      ~r/(?:FROM|JOIN)\s+(?:(`?)([a-zA-Z_][a-zA-Z0-9_]*)\1\.)?(`?)([a-zA-Z_][a-zA-Z0-9_]*)\3(?:\s+(?:AS\s+)?[a-zA-Z_][a-zA-Z0-9_]*)?/i
-
-    Regex.scan(table_regex, sql)
-    |> Enum.map(fn
-      [_, _, schema, _, table] when schema != "" -> {schema, table}
-      [_, "", "", _, table] -> {nil, table}
-      # Regex future-proofing: if the capture groups change (e.g. someone adds
-      # an optional alias capture), unmatched shapes fall through to nil and
-      # are filtered out rather than crashing preflight.
-      _ -> nil
-    end)
-    |> Enum.reject(&is_nil/1)
+  # The table after each FROM and JOIN in the statement's code, as
+  # `{schema, table}`. A FROM or JOIN inside a string, a comment or a quoted
+  # identifier is not code, and a backquoted name may hold any character.
+  @doc false
+  def extract_tables_from_sql(sql) do
+    sql
+    |> EctoHelpers.sql_lexemes(Profile.for_language(query_language()))
+    |> table_refs([])
+    |> Enum.reverse()
     |> Enum.uniq()
   end
+
+  defp table_refs([{:word, keyword} | rest], acc) do
+    acc =
+      if String.downcase(keyword) in ["from", "join"],
+        do: table_ref(rest, acc),
+        else: acc
+
+    table_refs(rest, acc)
+  end
+
+  defp table_refs([_lexeme | rest], acc), do: table_refs(rest, acc)
+  defp table_refs([], acc), do: acc
+
+  defp table_ref([schema, {:punct, "."}, table | _rest], acc) do
+    with {:ok, schema} <- table_name(schema), {:ok, table} <- table_name(table) do
+      [{schema, table} | acc]
+    else
+      _ -> acc
+    end
+  end
+
+  defp table_ref([table | _rest], acc) do
+    case table_name(table) do
+      {:ok, table} -> [{nil, table} | acc]
+      :error -> acc
+    end
+  end
+
+  defp table_ref([], acc), do: acc
+
+  defp table_name({:identifier, raw}), do: {:ok, EctoHelpers.unquote_identifier(raw)}
+
+  defp table_name({:word, <<c, _::binary>> = word}) when c in ?a..?z or c in ?A..?Z or c == ?_,
+    do: {:ok, word}
+
+  defp table_name(_lexeme), do: :error
 
   defp choose_relations(explain_rels, sql_rels, sql) do
     if should_use_sql_relations?(explain_rels, sql),
@@ -598,7 +630,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
 
   @impl true
   def transform_statement(%Statement{body: sql} = statement) do
-    alias Lotus.Query.Tokenizer.Profile
     alias Lotus.SQL.Transformer
 
     profile = Profile.for_language(query_language())
