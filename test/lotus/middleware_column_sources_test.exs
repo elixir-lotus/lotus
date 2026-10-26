@@ -10,7 +10,7 @@ defmodule Lotus.MiddlewareColumnSourcesTest do
 
   alias Lotus.Cache.ETS
   alias Lotus.{Config, Fixtures, Middleware, Result, Runner}
-  alias Lotus.Query.Statement
+  alias Lotus.Query.{Filter, Sort, Statement}
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
   alias Lotus.Test.Repo
 
@@ -99,9 +99,21 @@ defmodule Lotus.MiddlewareColumnSourcesTest do
       assert sources() == [:unresolved]
     end
 
-    test "are :unresolved for a statement wrapped for a window" do
-      assert {:ok, _} = run("SELECT u.name, p.title #{@join}", window: [limit: 5])
-      assert sources() == [:unresolved, :unresolved]
+    test "are the statement's own through the window, filter and sort wrappers" do
+      sql = "SELECT u.name, p.title, upper(p.title) AS t #{@join}"
+      expected = [{:relation, @users}, {:relation, @posts}, :unresolved]
+
+      assert {:ok, _} = run(sql, window: [limit: 5])
+      assert sources() == expected
+
+      assert {:ok, _} =
+               run(sql,
+                 window: [limit: 5, offset: 0, count: :exact],
+                 filters: [Filter.new("title", :neq, "nope")],
+                 sorts: [Sort.new("name", :desc)]
+               )
+
+      assert sources() == expected
     end
 
     test "follow the columns a column policy omits" do
@@ -119,6 +131,62 @@ defmodule Lotus.MiddlewareColumnSourcesTest do
       assert {:ok, %Result{rows: rows}} = run("SELECT p.inserted_at, u.inserted_at #{@join}")
       assert Enum.all?(rows, fn [posted, joined] -> posted != "X" and joined == "X" end)
       assert sources() == [{:relation, @posts}, {:relation, @users}]
+    end
+  end
+
+  describe "a paged run over two tables that both have ssn" do
+    @ssn_join "FROM cs_users u JOIN cs_orders o ON o.user_id = u.id"
+
+    setup do
+      Repo.query!("CREATE TABLE cs_users (id integer, ssn text)")
+      Repo.query!("CREATE TABLE cs_orders (id integer, user_id integer, ssn text)")
+      Repo.query!("INSERT INTO cs_users (id, ssn) VALUES (1, 'user-ssn'), (2, 'user-ssn-2')")
+
+      Repo.query!(
+        "INSERT INTO cs_orders (id, user_id, ssn) VALUES (7, 1, 'order-ssn'), (8, 2, 'order-ssn-2')"
+      )
+
+      rules([
+        {"cs_orders", "ssn", :allow},
+        {"cs_users", "ssn", [action: :mask, mask: {:fixed, "X"}]}
+      ])
+    end
+
+    @cs_users {"public", "cs_users"}
+    @cs_orders {"public", "cs_orders"}
+
+    test "a windowed run masks only the column of the table that masks it" do
+      assert {:ok, %Result{columns: ["ssn", "ssn"], rows: rows}} =
+               run("SELECT u.ssn, o.ssn #{@ssn_join} ORDER BY o.id", window: [limit: 10])
+
+      assert rows == [["X", "order-ssn"], ["X", "order-ssn-2"]]
+      assert sources() == [{:relation, @cs_users}, {:relation, @cs_orders}]
+    end
+
+    test "a filtered, sorted, windowed run masks only that column too" do
+      assert {:ok, %Result{columns: ["id", "ssn", "ssn"], rows: rows}} =
+               run("SELECT o.id AS id, u.ssn, o.ssn #{@ssn_join}",
+                 window: [limit: 10, offset: 0, count: :exact],
+                 filters: [Filter.new("id", :gte, 7)],
+                 sorts: [Sort.new("id", :desc)]
+               )
+
+      assert rows == [[8, "X", "order-ssn-2"], [7, "X", "order-ssn"]]
+
+      assert sources() == [
+               {:relation, @cs_orders},
+               {:relation, @cs_users},
+               {:relation, @cs_orders}
+             ]
+    end
+
+    test "a column the wrapped statement can't trace still gets the strictest policy" do
+      assert {:ok, %Result{columns: columns, rows: [row | _]}} =
+               run("SELECT * #{@ssn_join}", window: [limit: 10])
+
+      assert for({"ssn", i} <- Enum.with_index(columns), do: Enum.at(row, i)) == ["X", "X"]
+
+      assert Enum.all?(sources(), &(&1 == :unresolved))
     end
   end
 

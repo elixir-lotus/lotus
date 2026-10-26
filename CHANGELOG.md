@@ -98,7 +98,11 @@
   relations to an `:unresolved` column. Lotus now works the sources out for
   every SQL statement, not only when a column policy applies, and stores
   them with a cached result; a result cached before has every column
-  `:unresolved`. The key is new, so existing plugs are unaffected. See
+  `:unresolved`. A statement run with `window:`, `filters:` or `sorts:`,
+  which Lotus wraps in `SELECT * FROM (...)` or `WITH _base AS (...) SELECT
+  * FROM _base ...`, has the sources of the statement the caller wrote, for
+  this key and for Lotus's own column policies, which applied the strictest
+  policy to every column of such a run before. The key is new, so existing plugs are unaffected. See
   "The `:column_sources` payload" in `Lotus.Middleware`.
 
 - **Read-only per data source.** `config :lotus, data_source_read_only:

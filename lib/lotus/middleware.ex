@@ -110,9 +110,16 @@ defmodule Lotus.Middleware do
     * `:unresolved` — anything else: an unqualified name over a join, an
       expression, a column at or after `*`, every column of a set operation
       or of a statement Lotus could not read, a non-SQL source, and every
-      column of a result cached before Lotus stored sources. A statement run
-      with `window:` is wrapped in `SELECT * FROM (...)`, so its columns are
-      `:unresolved` too.
+      column of a result cached before Lotus stored sources.
+
+  A statement that only selects `*` from one derived table or CTE, and
+  filters, sorts or cuts its rows, has that statement's columns, so its
+  columns have that statement's sources. That covers the wrappers of
+  `window:`, `filters:` and `sorts:` (`SELECT * FROM (...) AS lotus_sub
+  LIMIT ...`, `WITH _base AS (...) SELECT * FROM _base WHERE ...`), so a
+  paged, filtered or sorted run reports the sources of the statement the
+  caller wrote. Any other wrapper (one that adds, renames or reorders
+  columns, joins, or combines with a set operation) keeps its own sources.
 
   This is the decision Lotus applies its own column policies by, and a plug
   with column rules of its own applies them the same way: a traced column

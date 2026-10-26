@@ -444,6 +444,70 @@ defmodule Lotus.Preflight.ColumnsTest do
                sources("SELECT u.name FROM users u UNION SELECT o.name FROM orders o", none)
     end
 
+    test "passes through a wrapper that selects * from one derived table or CTE" do
+      none = Visibility.compile(%{})
+      inner = "SELECT u.ssn, o.ssn AS ssn, lower(o.ssn) AS l FROM users u JOIN orders o ON true"
+      expected = [{:relation, @users}, {:relation, @orders}, :unresolved]
+
+      paged = "SELECT * FROM (#{inner}) AS lotus_sub LIMIT $1 OFFSET $2"
+      filtered = ~s|WITH _base AS (#{inner}) SELECT * FROM _base WHERE "id" = $1|
+      sorted = ~s|WITH _sorted AS (#{filtered}) SELECT * FROM _sorted ORDER BY "id" DESC|
+
+      for sql <- [
+            paged,
+            filtered,
+            sorted,
+            "SELECT * FROM (#{sorted}) AS lotus_sub LIMIT $2 OFFSET $3;",
+            "SELECT * FROM (#{inner}) AS limited_query LIMIT 10",
+            "SELECT * FROM (#{inner}) t WHERE x IN (SELECT 1) ORDER BY x FETCH FIRST 5 ROWS ONLY",
+            "SELECT * FROM (#{inner}) t"
+          ],
+          matcher <- [none, @per_table] do
+        assert {:ok, ^expected} = sources(sql, matcher), sql
+      end
+    end
+
+    test "keeps a wrapper's own sources when it may change the columns" do
+      none = Visibility.compile(%{})
+      inner = "SELECT u.ssn FROM users u JOIN orders o ON true"
+
+      for sql <- [
+            "SELECT *, 1 AS one FROM (#{inner}) t",
+            "SELECT * FROM (#{inner}) t JOIN orders o2 ON true",
+            "SELECT * FROM (#{inner}) t, orders o2",
+            "SELECT * FROM (#{inner}) t UNION SELECT o.ssn FROM orders o",
+            "SELECT * FROM (#{inner}) t ORDER BY 1 UNION ALL SELECT 'x'",
+            "WITH a AS (#{inner}), b AS (SELECT 1) SELECT * FROM a",
+            "WITH a AS (#{inner}) SELECT * FROM b",
+            "WITH RECURSIVE a AS (#{inner}) SELECT * FROM a",
+            "WITH a AS (#{inner}) SELECT * FROM a JOIN orders o2 ON true",
+            "SELECT DISTINCT * FROM (#{inner}) t"
+          ] do
+        assert {:ok, sources} = sources(sql, none)
+        assert sources in [nil, []], sql
+      end
+
+      assert {:ok, nil} = sources("SELECT * FROM (#{inner}) AS t(a)", none)
+    end
+
+    test "has the inner statement's sources, nothing more, through a wrapper" do
+      none = Visibility.compile(%{})
+
+      assert {:ok, nil} =
+               sources(
+                 "SELECT * FROM (SELECT u.ssn FROM users u UNION SELECT o.ssn FROM orders o) t",
+                 none
+               )
+
+      assert {:ok, [{:relation, @users}]} =
+               sources("SELECT * FROM (SELECT u.ssn, * FROM users u JOIN orders o ON true) t")
+
+      assert {:ok, [:unresolved]} =
+               sources(
+                 "WITH c AS (SELECT ssn FROM users u JOIN orders o ON true) SELECT * FROM c"
+               )
+    end
+
     test "is unknown, and nothing refused, for a column alias list without a protected column" do
       none = Visibility.compile(%{})
 

@@ -75,7 +75,9 @@ defmodule Lotus.Runner do
   `u.ssn` or `u.ssn AS ssn`, under a qualifier that names one relation);
   `:unresolved` is any other (an expression, an unqualified name over more
   than one relation, a column at or after a `*`, every column of a set
-  operation). See `Lotus.Preflight.Columns.result_sources/4`.
+  operation). A statement that only selects `*` from one derived table or
+  CTE (the wrappers of `window:`, `filters:` and `sorts:`) has the sources
+  of the statement inside. See `Lotus.Preflight.Columns.result_sources/4`.
 
   A plug that applies column rules of its own applies a traced column's own
   relation's rule, and to an `:unresolved` column the strictest rule any of

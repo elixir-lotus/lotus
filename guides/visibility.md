@@ -796,6 +796,11 @@ Any other result column — unqualified, through `*` or `t.*`, from a
 subquery, a CTE, a function or a set operation — gets the strictest policy
 any of the tables has for its name: `:error`, then `:omit`, then `:mask`
 (`:null`, a fixed value, `:sha256`, then a partial mask), then `:allow`.
+A statement that only selects `*` from one subquery or CTE and filters,
+sorts or cuts its rows (`SELECT * FROM (...) t LIMIT 10`, and the wrappers
+Lotus adds for a window, filters and sorts) has the columns of the
+statement inside, so each column gets the policy that statement would give
+it: a paged run of `SELECT u.ssn, o.ssn ...` masks `u.ssn` only.
 
 ```elixir
 column_visibility: %{
