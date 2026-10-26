@@ -11,6 +11,35 @@ defmodule Lotus.Query.Tokenizer.Profile do
   An adapter that declares a `dialect_spec` in its editor config can refine
   a base profile with `from_dialect_spec/2`, so one declaration drives both
   the editor's highlighter and the server-side tokenizer.
+
+  ## Fields
+
+    * `:string_quotes` — quotes that open a string literal closed by the
+      same quote; a doubled quote stays inside
+    * `:identifier_quotes` — quotes that open a quoted identifier closed by
+      the same quote; a doubled quote stays inside. `"["` here is read as
+      `bracket_identifiers?: true`.
+    * `:line_comments` — markers that start a comment running to the end of
+      the line
+    * `:block_comments?` — `/* ... */` comments
+    * `:nested_block_comments?` — block comments nest (PostgreSQL)
+    * `:dollar_quotes?` — `$$...$$` and `$tag$...$tag$` strings (PostgreSQL)
+    * `:backslash_escapes?` — a backslash escapes the next byte in every
+      string literal (MySQL, JSON)
+    * `:escape_string_prefix?` — `E'...'` strings take backslash escapes
+      even when plain strings do not (PostgreSQL)
+    * `:bracket_identifiers?` — `[name]` quotes an identifier, closed by the
+      first `]` (SQLite, SQL Server)
+    * `:dash_comment_needs_space?` — `--` starts a comment only before
+      whitespace, a control character or the end of input (MySQL)
+    * `:executable_comments?` — `/*! ... */`, `/*!50000 ... */` and
+      `/*M! ... */` are code, not comments (MySQL, MariaDB)
+    * `:line_comment_ends_at_cr?` — a carriage return ends a line comment as
+      well as a line feed (PostgreSQL)
+
+  The built-in profiles assume each engine's default settings: PostgreSQL
+  with `standard_conforming_strings` on, MySQL without `ANSI_QUOTES` or
+  `NO_BACKSLASH_ESCAPES`.
   """
 
   @type t :: %__MODULE__{
@@ -20,7 +49,12 @@ defmodule Lotus.Query.Tokenizer.Profile do
           block_comments?: boolean(),
           nested_block_comments?: boolean(),
           dollar_quotes?: boolean(),
-          backslash_escapes?: boolean()
+          backslash_escapes?: boolean(),
+          escape_string_prefix?: boolean(),
+          bracket_identifiers?: boolean(),
+          dash_comment_needs_space?: boolean(),
+          executable_comments?: boolean(),
+          line_comment_ends_at_cr?: boolean()
         }
 
   defstruct string_quotes: ["'"],
@@ -29,7 +63,12 @@ defmodule Lotus.Query.Tokenizer.Profile do
             block_comments?: true,
             nested_block_comments?: false,
             dollar_quotes?: false,
-            backslash_escapes?: false
+            backslash_escapes?: false,
+            escape_string_prefix?: false,
+            bracket_identifiers?: false,
+            dash_comment_needs_space?: false,
+            executable_comments?: false,
+            line_comment_ends_at_cr?: false
 
   @doc """
   Returns the built-in profile for a query language identifier such as
