@@ -142,6 +142,79 @@ defmodule Lotus.Preflight.ColumnsTest do
     end
   end
 
+  describe "a sort or grouping by position" do
+    for sql <- [
+          "SELECT ssn FROM users ORDER BY 1",
+          "SELECT name, ssn FROM users ORDER BY 2 DESC",
+          "SELECT name, ssn FROM users ORDER BY 1, 2",
+          "SELECT name, ssn FROM users ORDER BY 2 NULLS FIRST LIMIT 5",
+          "SELECT name, ssn FROM users ORDER BY 2 COLLATE \"C\"",
+          "SELECT ssn FROM users GROUP BY 1",
+          "SELECT name, ssn FROM users GROUP BY 1, 2 WITH ROLLUP",
+          "SELECT u.ssn, u.name FROM users u ORDER BY 1",
+          "SELECT public.users.ssn FROM public.users ORDER BY 1",
+          "SELECT ssn AS ssn, name FROM users ORDER BY 1",
+          "SELECT DISTINCT name, ssn FROM users ORDER BY 2",
+          "SELECT name, ssn FROM users ORDER BY (2)",
+          "SELECT name, ssn FROM users ORDER BY ((2))",
+          "SELECT name, ssn FROM users GROUP BY ROLLUP (1, 2)",
+          "SELECT name, ssn FROM users GROUP BY CUBE (2)",
+          "SELECT name, ssn FROM users GROUP BY GROUPING SETS ((2), ())",
+          "SELECT DISTINCT ON (1) ssn, name FROM users",
+          "SELECT * FROM (SELECT ssn FROM users ORDER BY 1) t",
+          "WITH c AS (SELECT name, ssn FROM users ORDER BY 2) SELECT * FROM c",
+          "SELECT t.name, t.ssn FROM (SELECT name, ssn FROM users) t ORDER BY 2"
+        ] do
+      test "refuses a position that is a protected column: #{sql}" do
+        assert {:error, "Query sorts or groups by position " <> _} = check(unquote(sql))
+      end
+    end
+
+    for sql <- [
+          "SELECT * FROM users ORDER BY 3",
+          "SELECT * FROM users ORDER BY 1",
+          "SELECT u.*, name FROM users u ORDER BY 2",
+          "SELECT name, u.* FROM users u GROUP BY 2",
+          "SELECT name FROM users ORDER BY 2",
+          "SELECT name FROM users ORDER BY 0",
+          "TABLE users ORDER BY 3",
+          "TABLE users ORDER BY name, 2 DESC",
+          "TABLE public.users ORDER BY (1)",
+          "SELECT * FROM (TABLE users ORDER BY 1 LIMIT 5) t",
+          "SELECT name FROM users WHERE id IN (SELECT id FROM users GROUP BY 2)"
+        ] do
+      test "refuses a position it can't match to a select item: #{sql}" do
+        assert {:error, "Query sorts or groups by position " <> rest} = check(unquote(sql))
+        assert rest =~ "can't match to a select item"
+      end
+    end
+
+    for sql <- [
+          "SELECT name, ssn FROM users ORDER BY 1",
+          "SELECT name, ssn FROM users ORDER BY 1 DESC, name",
+          "SELECT name, * FROM users ORDER BY 1",
+          "SELECT name AS ssn FROM users ORDER BY 1",
+          "SELECT name, count(*) FROM users GROUP BY 1 ORDER BY 2 DESC",
+          "SELECT name FROM users UNION SELECT name FROM users ORDER BY 1",
+          "SELECT name, ssn FROM users ORDER BY 2 + 0",
+          "SELECT name, ssn FROM users ORDER BY 2::int",
+          "SELECT name, ssn FROM users ORDER BY coalesce(name, 2)",
+          "SELECT name, ssn FROM users LIMIT 2 OFFSET 2",
+          "SELECT name, ssn FROM users WHERE id IN (1, 2)",
+          "SELECT name, ssn, row_number() OVER (ORDER BY 2) AS n FROM users",
+          "SELECT name, ssn, rank() OVER (PARTITION BY 1, 2 ORDER BY name) AS n FROM users",
+          "SELECT name, string_agg(name, ',' ORDER BY 2) FROM users GROUP BY name",
+          ~s(WITH _sorted AS (SELECT name, ssn FROM users ORDER BY 1\) SELECT * FROM _sorted ORDER BY "name" DESC),
+          "TABLE users",
+          "TABLE users ORDER BY name LIMIT 5 OFFSET 2",
+          "TABLE users ORDER BY name LIMIT 1, 2"
+        ] do
+      test "passes a position that is no protected column: #{sql}" do
+        assert :ok = check(unquote(sql))
+      end
+    end
+  end
+
   test "a Unicode-escaped identifier can't be compared, so it is refused" do
     assert {:error, "Query uses a Unicode-escaped identifier" <> _} =
              check(~S(SELECT U&"\0073sn" AS x FROM users))
