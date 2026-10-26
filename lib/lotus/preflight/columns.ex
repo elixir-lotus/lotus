@@ -19,8 +19,8 @@ defmodule Lotus.Preflight.Columns do
     * refer to a whole row (`SELECT u`, `to_json(u)`, `row(u.*)`);
     * rename columns with a column alias list (`AS t(a, b)`,
       `WITH c(a, b) AS ...`);
-    * combine `*` with `UNION`, `INTERSECT` or `EXCEPT`, whose result takes
-      the first branch's column names;
+    * combine `*` or `TABLE t` with `UNION`, `INTERSECT` or `EXCEPT`, whose
+      result takes the first branch's column names;
     * sort or group by the position of a protected column (`SELECT ssn ...
       ORDER BY 1`, also in `GROUP BY`, `DISTINCT ON`, `ROLLUP`, `CUBE` and
       `GROUPING SETS`), which reveals how its values order or repeat, or by a
@@ -519,6 +519,10 @@ defmodule Lotus.Preflight.Columns do
 
       "*" ->
         check_star(out, i, state)
+
+      # `TABLE t` is `SELECT * FROM t`.
+      {:kw, "table"} ->
+        if state.set_op? and out |> elem(i) |> elem(2) == :none, do: set_op_error()
 
       {:int, n} ->
         check_position(out, i, n, state, protected?)

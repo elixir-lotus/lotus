@@ -52,6 +52,13 @@
   `TABLE t ORDER BY 3`). `SELECT name, ssn FROM users ORDER BY 1` still
   runs.
 
+- **`TABLE t` in a set operation no longer bypasses a column policy.**
+  `SELECT name, email FROM orders UNION ALL TABLE users` ran and returned
+  the first columns of `users`, a protected one among them, under the
+  names `name` and `email`, which no policy matches. `TABLE t` is
+  `SELECT * FROM t`, so with `UNION`, `INTERSECT` or `EXCEPT` it is now
+  refused as `*` is.
+
 ### Added
 
 - **Read-only per data source.** `config :lotus, data_source_read_only:

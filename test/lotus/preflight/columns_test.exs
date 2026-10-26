@@ -91,6 +91,19 @@ defmodule Lotus.Preflight.ColumnsTest do
                check("SELECT name, name FROM users UNION SELECT * FROM users")
     end
 
+    # `TABLE users` is `SELECT * FROM users`: after a first branch it would
+    # return ssn under that branch's names.
+    for sql <- [
+          "SELECT name, email FROM orders UNION ALL TABLE users",
+          "SELECT id, name FROM users EXCEPT TABLE public.users",
+          "TABLE users INTERSECT SELECT id, name FROM users",
+          "(TABLE users) UNION (SELECT id, name FROM users)"
+        ] do
+      test "refuses TABLE across a set operation: #{sql}" do
+        assert {:error, "Query combines * with UNION" <> _} = check(unquote(sql))
+      end
+    end
+
     test "fails closed on the alias of a function in FROM" do
       assert {:error, "Query reads whole rows of g" <> _} =
                check("SELECT u.name, g FROM users u, get_users() g")
