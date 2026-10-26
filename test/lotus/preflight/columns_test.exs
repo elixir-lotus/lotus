@@ -426,9 +426,29 @@ defmodule Lotus.Preflight.ColumnsTest do
       assert {:ok, []} = sources("SELECT u.*, o.ssn FROM orders o JOIN users u ON true")
     end
 
-    test "is unknown across a set operation, or without a protected column" do
+    test "is unknown across a set operation" do
       assert {:ok, nil} = sources("SELECT u.name FROM users u UNION SELECT o.name FROM orders o")
-      assert {:ok, nil} = sources("SELECT o.ssn FROM orders o", @per_table, [@orders])
+    end
+
+    test "is told without a protected column too, for a plug with rules of its own" do
+      none = Visibility.compile(%{})
+      join = "FROM users u JOIN orders o ON o.user_id = u.id"
+
+      assert {:ok, [{:relation, @orders}]} =
+               sources("SELECT o.ssn FROM orders o", @per_table, [@orders])
+
+      assert {:ok, [{:relation, @users}, {:relation, @orders}, :unresolved, :unresolved]} =
+               sources("SELECT u.ssn, o.ssn AS ssn, ssn, lower(u.name) #{join}", none)
+
+      assert {:ok, nil} =
+               sources("SELECT u.name FROM users u UNION SELECT o.name FROM orders o", none)
+    end
+
+    test "is unknown, and nothing refused, for a column alias list without a protected column" do
+      none = Visibility.compile(%{})
+
+      assert {:ok, nil} = sources("SELECT u.a FROM users AS u(a, b)", none, [@users])
+      assert :ok = Columns.check("SELECT u.a FROM users AS u(a, b)", @postgres, none, [@users])
     end
 
     test "decides the check: a column is protected by its own relation's policy" do

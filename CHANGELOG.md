@@ -88,6 +88,19 @@
 
 ### Added
 
+- **`:after_query` carries the source of each result column.** The payload
+  has a new key, `:column_sources`: one entry per column of `:result`, in
+  order, `{:relation, {schema, table}}` for a column the column check traced
+  to that relation for sure (`u.ssn`, `u.ssn AS ssn`), `:unresolved` for any
+  other. It is the decision Lotus applies its own column policies by, so a
+  plug with column rules of its own (Lotus Pro's) can apply each column's
+  rule from its own relation over a join, and the strictest rule of the
+  relations to an `:unresolved` column. Lotus now works the sources out for
+  every SQL statement, not only when a column policy applies, and stores
+  them with a cached result; a result cached before has every column
+  `:unresolved`. The key is new, so existing plugs are unaffected. See
+  "The `:column_sources` payload" in `Lotus.Middleware`.
+
 - **Read-only per data source.** `config :lotus, data_source_read_only:
   %{"staging" => false, "main" => true}` sets whether each source's
   statements may write, over the global `read_only`. A resolver can set it
