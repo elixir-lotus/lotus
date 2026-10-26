@@ -50,8 +50,9 @@
   Lotus Pro does for the sources its admins connect. A call's `read_only:`
   still goes over both. `Lotus.Settings` may answer `:data_source_read_only`
   at run time. `Lotus.Config.read_only?/1` and `Lotus.read_only?/1` say what
-  a source does. Statements, saved queries, streams, exports and dashboard
-  cards follow it; the AI and MCP paths stay read-only.
+  a source does. Statements, saved queries, streams and exports follow it;
+  dashboards (their cards and filter options), schedules, and the AI and
+  MCP paths always run read-only.
 
 - **Stop a running statement.** `Lotus.run_statement/3` and
   `Lotus.run_query/2` take `on_cancel_token: fun`, called with a token as

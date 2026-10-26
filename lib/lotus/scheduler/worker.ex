@@ -126,7 +126,8 @@ defmodule Lotus.Scheduler.Worker do
   end
 
   defp execute(%Schedule{query: %Query{} = query, params: params}, opts) do
-    case Lotus.run_query(query, [vars: params || %{}] ++ opts) do
+    # A schedule only reads, whatever the source allows.
+    case Lotus.run_query(query, [vars: params || %{}, read_only: true] ++ opts) do
       {:ok, %Result{num_rows: rows} = result} ->
         {:ok, rows || 0, %{}, [%{title: query.name, result: result}]}
 

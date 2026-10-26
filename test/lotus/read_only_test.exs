@@ -176,6 +176,32 @@ defmodule Lotus.ReadOnlyTest do
     end
   end
 
+  describe "dashboards" do
+    import Lotus.Fixtures
+
+    alias Lotus.Dashboards
+
+    setup do
+      configure(data_source_read_only: %{"postgres" => false})
+      query = query_fixture(%{statement: @write, data_source: "postgres"})
+      dashboard = dashboard_fixture()
+      card = dashboard_card_fixture(dashboard, %{card_type: :query, query_id: query.id})
+      %{dashboard: dashboard, card: card}
+    end
+
+    test "a card runs read-only on a source that takes writes", %{card: card} do
+      assert refused?(Dashboards.run_dashboard_card(card))
+      assert refused?(Dashboards.run_dashboard_card(card, read_only: false))
+    end
+
+    test "a dashboard's cards run read-only", %{dashboard: dashboard, card: card} do
+      for parallel <- [true, false] do
+        results = Dashboards.run_dashboard(dashboard, parallel: parallel, read_only: false)
+        assert refused?(results[card.id])
+      end
+    end
+  end
+
   defmodule FalseResolver do
     @moduledoc false
     def resolve(name, _fallback) do

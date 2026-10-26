@@ -220,6 +220,28 @@ defmodule Lotus.Schedules.AlertTest do
       {run, Schedules.get_schedule!(schedule.id).state}
     end
 
+    test "runs read-only, on a source that takes writes too", %{query: query} do
+      previous = Application.get_env(:lotus, :data_source_read_only)
+      Application.put_env(:lotus, :data_source_read_only, %{"postgres" => false})
+      Config.reload!()
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:lotus, :data_source_read_only, previous),
+          else: Application.delete_env(:lotus, :data_source_read_only)
+
+        Config.reload!()
+      end)
+
+      returns(query, "UPDATE test_users SET age = age + 1 RETURNING age AS open")
+      before = Repo.all(from(u in "test_users", select: u.age))
+      schedule = alert(query, %{condition: "above", column: "open", threshold: 0})
+
+      assert {%ScheduleRun{status: "failed", error: error}, _state} = run(schedule)
+      assert error =~ "read-only"
+      assert Repo.all(from(u in "test_users", select: u.age)) == before
+    end
+
     test "sends when it starts firing and when it recovers, not while it stays", %{query: query} do
       schedule = alert(query, %{condition: "above", column: "open", threshold: 500})
 
