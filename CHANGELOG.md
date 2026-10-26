@@ -302,6 +302,20 @@
 
 ### Changed
 
+- **`Lotus.Query.Tokenizer` is a byte-level scanner, 50 to 80 times
+  faster.** It walked the statement one character at a time, tried every
+  delimiter of the profile at every character and copied each character
+  into the result. It now skips code with a jump table on the bytes that
+  can start a delimiter, runs one loop per region, and returns tokens that
+  are sub-binaries of the statement, without regular expressions. A
+  megabyte of mixed SQL takes about 10 ms instead of 600 to 800 ms, and
+  10 MB about 140 ms instead of 9 to 15 s; `bench/tokenizer.exs` measures
+  it. The token shapes and the API are unchanged. `Lotus.Query.Tokenizer.Profile`
+  gained `:escape_string_prefix?`, `:bracket_identifiers?`,
+  `:dash_comment_needs_space?`, `:executable_comments?` and
+  `:line_comment_ends_at_cr?`, set by the built-in profiles below, and
+  `from_dialect_spec/2` reads `:space_after_dashes`.
+
 - **Breaking: adapter capabilities are declared behaviours.**
   `Lotus.Source.Adapter` is now the core behaviour with the nine required
   callbacks. The optional callbacks moved to five capability behaviours —
@@ -325,6 +339,31 @@
   that reads it is refused (#332).
 
 ### Fixed
+
+- **The tokenizer follows each dialect's lexical rules more closely.** Each
+  of these hid code from the read-only and single-statement checks, or
+  took template syntax out of SQL:
+  - PostgreSQL `E'...'` strings take backslash escapes, so the `\'` in
+    `E'it\'s; {{x}}'` no longer ends the string. The `E` must stand alone
+    (`nameE'x'` is a plain string).
+  - A PostgreSQL dollar quote cannot start inside an identifier:
+    `SELECT foo$bar$ FROM t WHERE a = $1` is code, not a string running to
+    the end. Tags may hold non-ASCII letters.
+  - A carriage return ends a PostgreSQL line comment, as the server reads
+    it, so `-- x\rDROP TABLE t` shows the `DROP`.
+  - `[[` after an identifier character or the keyword `ARRAY`, or inside
+    an open `[`, is a bracket, not an optional block, and `]]` closes a
+    block only once the single `[` brackets in it are closed. So
+    `ARRAY[[1,2],[3,4]]`, `arr[1][2]` and `[[AND x = arr[y[1]]]]` keep
+    their SQL.
+  - MySQL's `--` starts a comment only before whitespace or a control
+    character: `5--1` is code.
+  - MySQL's executable comments (`/*! ... */`, `/*!50000 ... */`,
+    MariaDB's `/*M! ... */`) are code, since MySQL runs them; a statement
+    hidden in one is now seen by the read-only check. Optimizer hints
+    (`/*+ ... */`) stay comments.
+  - SQLite's `[bracketed identifiers]` are identifiers, so a `--`, a quote
+    or a `{{x}}` inside one is part of the name.
 
 - **Sources a resolver adds at runtime are sources everywhere.**
   `Lotus.list_data_source_names/0`, which the dashboard's source pickers,

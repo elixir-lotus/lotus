@@ -45,6 +45,27 @@ defmodule Lotus.Query.Tokenizer.ProfileTest do
              } = Profile.for_language("sql:sqlite")
     end
 
+    test "turns on each dialect's extra rules and nothing else" do
+      extras = [
+        :escape_string_prefix?,
+        :bracket_identifiers?,
+        :dash_comment_needs_space?,
+        :executable_comments?,
+        :line_comment_ends_at_cr?
+      ]
+
+      on = fn language ->
+        profile = Profile.for_language(language)
+        Enum.filter(extras, &Map.fetch!(profile, &1))
+      end
+
+      assert on.("sql:postgres") == [:escape_string_prefix?, :line_comment_ends_at_cr?]
+      assert on.("sql:mysql") == [:dash_comment_needs_space?, :executable_comments?]
+      assert on.("sql:sqlite") == [:bracket_identifiers?]
+      assert on.("sql") == []
+      assert on.("json:elasticsearch") == []
+    end
+
     test "uses json string rules and no comments for a json language" do
       assert %Profile{
                string_quotes: ["\""],
@@ -118,6 +139,18 @@ defmodule Lotus.Query.Tokenizer.ProfileTest do
 
       assert profile.dollar_quotes?
       assert profile.backslash_escapes?
+    end
+
+    test "reads space_after_dashes as the MySQL dash comment rule" do
+      profile =
+        Profile.from_dialect_spec(Profile.for_language("sql"), %{space_after_dashes: true})
+
+      assert profile.dash_comment_needs_space?
+
+      profile =
+        Profile.from_dialect_spec(Profile.for_language("sql:mysql"), %{space_after_dashes: false})
+
+      refute profile.dash_comment_needs_space?
     end
 
     test "ignores keys it does not understand" do

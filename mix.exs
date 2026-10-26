@@ -65,7 +65,8 @@ defmodule Lotus.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40", only: [:dev, :test], runtime: false},
-      {:mimic, "~> 2.0", only: :test}
+      {:mimic, "~> 2.0", only: :test},
+      {:stream_data, "~> 1.1", only: :test}
     ]
   end
 
