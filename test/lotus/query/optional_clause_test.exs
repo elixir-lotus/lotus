@@ -176,4 +176,22 @@ defmodule Lotus.Query.OptionalClauseTest do
       assert OptionalClause.strip_brackets("[[a [[b]] c]]") == "a b c"
     end
   end
+
+  describe "process/3 with a JSON request" do
+    @json Lotus.Query.Tokenizer.Profile.for_language("json:elasticsearch")
+
+    test "keeps or drops an item of an array, comma and all" do
+      text = ~S|{"filter": [{"match_all": {}} [[, {"term": {"a": "{{a}}"}}]]]}|
+
+      assert OptionalClause.process(text, %{}, @json) == ~S|{"filter": [{"match_all": {}} ]}|
+
+      assert OptionalClause.process(text, %{"a" => "x"}, @json) ==
+               ~S|{"filter": [{"match_all": {}} , {"term": {"a": "{{a}}"}}]}|
+    end
+
+    test "leaves a nested array alone" do
+      text = ~S|{"geo": {"points": [[1, 2], [3, 4]]}}|
+      assert OptionalClause.process(text, %{}, @json) == text
+    end
+  end
 end

@@ -94,6 +94,12 @@ defmodule Lotus.Query.Tokenizer do
         `ARRAY` (with only whitespace in between). Otherwise its first `[`
         is a single bracket, so `ARRAY[[1,2],[3,4]]` and `ARRAY [[1]]` are
         code.
+      * With `json_blocks?` (JSON languages), `[[` also opens a block when
+        the code before it, whitespace aside, ends a JSON value (`}`, `]`,
+        `"`, a digit or a letter), even inside an array: in valid JSON no
+        `[` follows a value, so `[{"a": 1} [[, {"b": {{b}}}]]]` holds a
+        block. After `[`, `,`, `:` or `{` the rule above decides, so the
+        nested array in `"c": [[1, 2], [3, 4]]` stays an array.
       * A single `]` closes the innermost open single `[` of the current
         level. Only when none is open does `]]` close a block, and only
         when a block is open; otherwise `]` is code. So in
@@ -373,7 +379,8 @@ defmodule Lotus.Query.Tokenizer do
     :cr,
     :dash_space,
     :executable,
-    :brackets
+    :brackets,
+    :json_blocks
   ])
 
   defp context(text, %Profile{} = profile) do
@@ -398,7 +405,8 @@ defmodule Lotus.Query.Tokenizer do
       cr: profile.line_comment_ends_at_cr?,
       dash_space: profile.dash_comment_needs_space?,
       executable: profile.executable_comments?,
-      brackets: profile.bracket_identifiers? or "[" in profile.identifier_quotes
+      brackets: profile.bracket_identifiers? or "[" in profile.identifier_quotes,
+      json_blocks: profile.json_blocks?
     )
   end
 
@@ -638,7 +646,7 @@ defmodule Lotus.Query.Tokenizer do
       match?([^at | _], disabled) ->
         resume(rest, at + 2, ctx, start, {acc, stack, depth, tl(disabled)})
 
-      depth == 0 and block_opener?(ctx, at) ->
+      (depth == 0 and block_opener?(ctx, at)) or after_json_value?(ctx, at) ->
         frame = {flush(ctx, start, at, acc), depth, at}
         resume(rest, at + 2, ctx, at + 2, {[], [frame | stack], 0, disabled})
 
@@ -837,6 +845,24 @@ defmodule Lotus.Query.Tokenizer do
   defp block_opener?(ctx, at) do
     not ident_byte?(byte_at(ctx, at - 1)) and not after_array_keyword?(ctx, at)
   end
+
+  # With `json_blocks?`, the code before `at`, whitespace aside, ends a JSON
+  # value. In valid JSON a `[` never follows a value, so the `[[` there can
+  # only open a block, whether or not a single `[` is open. After `[`, `,`,
+  # `:` or `{` it may start a nested array (`[[1, 2], [3, 4]]`), and the
+  # rule above decides.
+  defp after_json_value?(ctx(json_blocks: true, text: text), at) do
+    case skip_whitespace_back(text, at) do
+      0 -> false
+      pos -> json_value_end?(:binary.at(text, pos - 1))
+    end
+  end
+
+  defp after_json_value?(_ctx, _at), do: false
+
+  defp json_value_end?(byte) when byte in [?}, ?], ?"], do: true
+  defp json_value_end?(byte) when byte in ?0..?9 or byte in ?a..?z or byte in ?A..?Z, do: true
+  defp json_value_end?(_byte), do: false
 
   # The keyword `ARRAY`, in any case and as a whole word, then only
   # whitespace before `at`.

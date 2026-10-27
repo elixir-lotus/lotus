@@ -22,7 +22,7 @@ defmodule Lotus.Middleware do
   |-------|-----------|--------------|
   | `:before_query` | First, before sanitization, preflight and execution | `:statement` (`%Lotus.Query.Statement{}`), `:source`, `:context`, `:vars` |
   | `:before_execute` | After sanitization and preflight pass, before execution — or, on a cache hit, before the stored result is returned | `:statement` (`%Lotus.Query.Statement{}`), `:relations`, `:origin`, `:assigns`, `:source`, `:context`, `:vars` |
-  | `:after_query` | After execution, before result returned to caller | `:result`, `:statement` (`%Lotus.Query.Statement{}`), `:relations`, `:origin`, `:assigns`, `:source`, `:context`, `:vars` |
+  | `:after_query` | After execution, before result returned to caller | `:result`, `:statement` (`%Lotus.Query.Statement{}`), `:relations`, `:column_sources`, `:origin`, `:assigns`, `:source`, `:context`, `:vars` |
   | `:after_list_schemas` | After schema discovery and visibility filtering | `:schemas`, `:source`, `:scope`, `:context` |
   | `:after_list_tables` | After table discovery and visibility filtering | `:tables`, `:source`, `:scope`, `:context` |
   | `:after_describe_table` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
@@ -96,6 +96,40 @@ defmodule Lotus.Middleware do
   made them: the result cache never stores them, so one caller's assigns never
   reach another.
 
+  #### The `:column_sources` payload
+
+  `:after_query` carries, under `:column_sources`, where each column of
+  `:result` comes from: a list with one entry per column of
+  `result.columns`, in the same order, after the column policies dropped the
+  columns they omit (see `t:Lotus.Runner.column_sources/0`).
+
+    * `{:relation, {schema, table}}` — the column check traced the column to
+      that relation for sure: the select item is a qualified column as is
+      (`u.ssn`, `u.ssn AS ssn`) under a qualifier bound to one relation of
+      `:relations`.
+    * `:unresolved` — anything else: an unqualified name over a join, an
+      expression, a column at or after `*`, every column of a set operation
+      or of a statement Lotus could not read, a non-SQL source, and every
+      column of a result cached before Lotus stored sources.
+
+  A statement that only selects `*` from one derived table or CTE, and
+  filters, sorts or cuts its rows, has that statement's columns, so its
+  columns have that statement's sources. That covers the wrappers of
+  `window:`, `filters:` and `sorts:` (`SELECT * FROM (...) AS lotus_sub
+  LIMIT ...`, `WITH _base AS (...) SELECT * FROM _base WHERE ...`), so a
+  paged, filtered or sorted run reports the sources of the statement the
+  caller wrote. Any other wrapper (one that adds, renames or reorders
+  columns, joins, or combines with a set operation) keeps its own sources.
+
+  This is the decision Lotus applies its own column policies by, and a plug
+  with column rules of its own applies them the same way: a traced column
+  gets its own relation's rule, an `:unresolved` one the strictest rule any
+  relation of `:relations` has for its name. Treat `:unresolved` as "could be
+  any of them", never as "none of them". The key is there on a cache hit and
+  on every chunk of a stream. A plug that changes `result.columns` should
+  change `:column_sources` to match, or replace it with a list of
+  `:unresolved` of the new length.
+
   #### Derived statements
 
   `window: [count: :exact]` runs a second statement, derived from the page
@@ -120,7 +154,8 @@ defmodule Lotus.Middleware do
   the relations preflight found are stored with it, so `:before_execute` carries
   them whether the result came from the source or from the cache. On a miss,
   sanitization, preflight and `:before_execute` run before the entry is written,
-  and the entry holds the result and the relations, never the assigns.
+  and the entry holds the result, the relations and the column sources, never
+  the assigns.
   Middleware is therefore safe to make context-dependent — per-user access
   control, audit — without keying the cache on `:context`.
 

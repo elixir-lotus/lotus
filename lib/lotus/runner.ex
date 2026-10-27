@@ -58,9 +58,32 @@ defmodule Lotus.Runner do
   proved the statement touches.
 
   This is the unit the result cache stores, so that a caller serving a result
-  from the cache can still hand the relations to `:before_execute`.
+  from the cache can still hand the relations to `:before_execute`, and the
+  source of each result column to `:after_query` (see `t:column_sources/0`).
   """
-  @type execution :: %{result: query_result(), relations: relations()}
+  @type execution :: %{
+          required(:result) => query_result(),
+          required(:relations) => relations(),
+          optional(:column_sources) => column_sources()
+        }
+
+  @typedoc """
+  Where each column of a result comes from, by position: one entry per
+  column of the result, in its order, after the column policies dropped the
+  columns they omit. `{:relation, {schema, table}}` is a column the column
+  check traced to that relation for sure (a qualified column as is, such as
+  `u.ssn` or `u.ssn AS ssn`, under a qualifier that names one relation);
+  `:unresolved` is any other (an expression, an unqualified name over more
+  than one relation, a column at or after a `*`, every column of a set
+  operation). A statement that only selects `*` from one derived table or
+  CTE (the wrappers of `window:`, `filters:` and `sorts:`) has the sources
+  of the statement inside. See `Lotus.Preflight.Columns.result_sources/4`.
+
+  A plug that applies column rules of its own applies a traced column's own
+  relation's rule, and to an `:unresolved` column the strictest rule any of
+  the relations has for its name, as Lotus does for its column policies.
+  """
+  @type column_sources :: [Columns.source()]
 
   @typedoc """
   What the `:before_execute` plugs of a call left under `:assigns`, handed to
@@ -85,15 +108,16 @@ defmodule Lotus.Runner do
 
   @typedoc """
   What a run produced, as `:after_query` sees it: the statement that ran, its
-  result, the relations, where the result came from, and the assigns of
-  `:before_execute`.
+  result, the relations, where the result came from, the assigns of
+  `:before_execute`, and the source of each result column, when known.
   """
   @type outcome :: %{
           required(:statement) => Statement.t(),
           required(:result) => query_result(),
           required(:relations) => relations(),
           required(:origin) => origin(),
-          optional(:assigns) => assigns()
+          optional(:assigns) => assigns(),
+          optional(:column_sources) => column_sources()
         }
 
   @typedoc """
@@ -365,14 +389,15 @@ defmodule Lotus.Runner do
     columns = {relations, Map.get(authorization, :columns)}
     scope = Keyword.get(opts, :scope)
 
-    with {:ok, %Result{} = result} <-
+    with {:ok, %{result: %Result{} = result, column_sources: column_sources}} <-
            tag(:execute, handle_query_result({:ok, chunk}, 0, adapter, columns, scope)),
          outcome = %{
            statement: statement,
            result: %{result | duration_ms: nil},
            relations: relations,
            origin: :streamed,
-           assigns: assigns
+           assigns: assigns,
+           column_sources: column_sources
          },
          {:ok, %Result{} = result} <- tag(:after_query, after_query(adapter, outcome, opts)) do
       result
@@ -515,10 +540,14 @@ defmodule Lotus.Runner do
 
   The payload carries the statement that ran, the result, the relations
   preflight found for it — the same value `:before_execute` received — the
-  origin, `:executed` or `:cached`, and the assigns the `:before_execute` plugs
-  of this call left, `%{}` when the outcome has none. It runs whether the
-  result came from the cache or from the source. A plug that changes the result
-  changes what this call returns; the stored entry keeps the raw execution.
+  origin, `:executed` or `:cached`, the assigns the `:before_execute` plugs
+  of this call left, `%{}` when the outcome has none, and under
+  `:column_sources` the source of each column of the result (see
+  `t:column_sources/0`). When the outcome carries no sources, or a list
+  that does not match the result's columns, every column is `:unresolved`.
+  It runs whether the result came from the cache or from the source. A plug
+  that changes the result changes what this call returns; the stored entry
+  keeps the raw execution.
   """
   @spec after_query(Adapter.t(), outcome(), opts()) :: {:ok, query_result()} | {:error, term()}
   def after_query(%Adapter{} = adapter, %{result: %Result{} = result} = outcome, opts \\ []) do
@@ -529,6 +558,7 @@ defmodule Lotus.Runner do
       relations: outcome.relations,
       origin: outcome.origin,
       assigns: Map.get(outcome, :assigns, %{}),
+      column_sources: column_sources(result, Map.get(outcome, :column_sources)),
       context: Keyword.get(opts, :context),
       vars: vars(opts)
     }
@@ -542,6 +572,17 @@ defmodule Lotus.Runner do
       {:halt, reason} -> {:error, reason}
     end
   end
+
+  # One source per result column. A list that does not match the columns
+  # (none stored with an older cache entry, or a step that changed them)
+  # tells nothing about any column, so every one is `:unresolved`: a plug
+  # then applies the strictest rule, never a looser one.
+  defp column_sources(%Result{columns: columns}, sources)
+       when is_list(columns) and is_list(sources) and length(columns) == length(sources),
+       do: sources
+
+  defp column_sources(%Result{columns: columns}, _sources),
+    do: Enum.map(columns || [], fn _ -> :unresolved end)
 
   @doc """
   Runs the `:before_execute` pipeline for a statement and the relations it
@@ -597,7 +638,13 @@ defmodule Lotus.Runner do
   no query events.
   """
   @spec execute_statement(Adapter.t(), Statement.t(), opts()) ::
-          {:ok, %{result: query_result(), relations: relations(), assigns: assigns()}}
+          {:ok,
+           %{
+             required(:result) => query_result(),
+             required(:relations) => relations(),
+             required(:assigns) => assigns(),
+             optional(atom()) => term()
+           }}
           | {:error, term()}
   def execute_statement(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
     adapter
@@ -609,13 +656,20 @@ defmodule Lotus.Runner do
   # `execute_statement/3` with the failing phase named in the error, for
   # `run/4`. The phase travels as `{:error, {Lotus.Runner, phase, reason}}`.
   @spec execute_phases(Adapter.t(), Statement.t(), opts()) ::
-          {:ok, %{result: query_result(), relations: relations(), assigns: assigns()}}
+          {:ok,
+           %{
+             required(:result) => query_result(),
+             required(:relations) => relations(),
+             required(:assigns) => assigns(),
+             optional(atom()) => term()
+           }}
           | {:error, {module(), atom(), term()}}
   def execute_phases(%Adapter{} = adapter, %Statement{} = statement, opts \\ []) do
     query_span(adapter, statement, opts, fn ->
       with {:ok, authorization} <- authorize_phases(adapter, statement, opts),
-           {:ok, %Result{} = res} <- execute_authorized(adapter, statement, authorization, opts) do
-        {:ok, Map.put(authorization, :result, res)}
+           {:ok, %{result: %Result{}} = executed} <-
+             execute_authorized(adapter, statement, authorization, opts) do
+        {:ok, Map.merge(authorization, executed)}
       end
     end)
   end
@@ -702,9 +756,11 @@ defmodule Lotus.Runner do
   # The query and column policy enforcement, for a statement
   # `authorize_phases/3` let through: with its authorization, a result
   # column gets its own relation's policy when the column check could tell
-  # it; with the relations alone, the strictest any of them has.
+  # it; with the relations alone, the strictest any of them has. Returns the
+  # result with the source of each of its columns.
   @spec execute_authorized(Adapter.t(), Statement.t(), authorization() | relations(), opts()) ::
-          {:ok, query_result()} | {:error, {module(), atom(), term()}}
+          {:ok, %{result: query_result(), column_sources: column_sources()}}
+          | {:error, {module(), atom(), term()}}
   def execute_authorized(adapter, statement, authorization, opts \\ [])
 
   def execute_authorized(
@@ -814,6 +870,7 @@ defmodule Lotus.Runner do
 
     rels = Relations.to_list(relations)
     matcher = Visibility.matcher_for(adapter.name, scope)
+    sources = pad_sources(cols || [], sources)
     policies = column_policies(matcher, cols || [], rels, sources)
 
     case enforce_column_policies(cols || [], rows || [], policies) do
@@ -827,13 +884,15 @@ defmodule Lotus.Runner do
           |> maybe_put_total_count(raw)
           |> maybe_put_cost(raw)
 
-        {:ok,
-         Result.new(final_cols, final_rows,
-           num_rows: num_rows,
-           duration_ms: duration_ms,
-           command: command,
-           meta: result_meta
-         )}
+        result =
+          Result.new(final_cols, final_rows,
+            num_rows: num_rows,
+            duration_ms: duration_ms,
+            command: command,
+            meta: result_meta
+          )
+
+        {:ok, %{result: result, column_sources: kept_sources(sources, policies)}}
     end
   end
 
@@ -845,16 +904,30 @@ defmodule Lotus.Runner do
     other
   end
 
+  # One source per column: a column past the end of what the column check
+  # told (at or after a `*`), or of a statement it told nothing about, is
+  # `:unresolved`.
+  defp pad_sources(cols, sources) do
+    cols
+    |> Enum.zip(Stream.concat(sources || [], Stream.repeatedly(fn -> :unresolved end)))
+    |> Enum.map(&elem(&1, 1))
+  end
+
   # A column the column check traced to its relation gets that relation's
   # policy; any other, the strictest of all the relations' for its name.
   defp column_policies(matcher, cols, rels, sources) do
-    unresolved = Stream.repeatedly(fn -> :unresolved end)
-
     cols
-    |> Enum.zip(Stream.concat(sources || [], unresolved))
+    |> Enum.zip(sources)
     |> Enum.map(fn {col, source} ->
       Visibility.column_policy_for(matcher, source_relations(source, rels), col)
     end)
+  end
+
+  # The sources of the columns the policies keep, in the result's order.
+  defp kept_sources(sources, policies) do
+    for {source, policy} <- Enum.zip(sources, policies),
+        not Policy.omits_column?(policy),
+        do: source
   end
 
   defp source_relations({:relation, relation}, _rels), do: [relation]

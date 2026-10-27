@@ -36,6 +36,9 @@ defmodule Lotus.Query.Tokenizer.Profile do
       `/*M! ... */` are code, not comments (MySQL, MariaDB)
     * `:line_comment_ends_at_cr?` — a carriage return ends a line comment as
       well as a line feed (PostgreSQL)
+    * `:json_blocks?` — a `[[` right after the end of a JSON value (`}`,
+      `]`, `"`, a digit or a letter, whitespace between) opens a block even
+      inside an array, as in `[{...} [[, {...}]]]` (JSON languages)
 
   The built-in profiles assume each engine's default settings: PostgreSQL
   with `standard_conforming_strings` on, MySQL without `ANSI_QUOTES` or
@@ -54,7 +57,8 @@ defmodule Lotus.Query.Tokenizer.Profile do
           bracket_identifiers?: boolean(),
           dash_comment_needs_space?: boolean(),
           executable_comments?: boolean(),
-          line_comment_ends_at_cr?: boolean()
+          line_comment_ends_at_cr?: boolean(),
+          json_blocks?: boolean()
         }
 
   defstruct string_quotes: ["'"],
@@ -68,7 +72,8 @@ defmodule Lotus.Query.Tokenizer.Profile do
             bracket_identifiers?: false,
             dash_comment_needs_space?: false,
             executable_comments?: false,
-            line_comment_ends_at_cr?: false
+            line_comment_ends_at_cr?: false,
+            json_blocks?: false
 
   @doc """
   Returns the built-in profile for a query language identifier such as
@@ -111,7 +116,8 @@ defmodule Lotus.Query.Tokenizer.Profile do
           identifier_quotes: [],
           line_comments: [],
           block_comments?: false,
-          backslash_escapes?: true
+          backslash_escapes?: true,
+          json_blocks?: true
         }
 
       _ ->

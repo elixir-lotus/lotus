@@ -199,6 +199,45 @@ defmodule Lotus.PreflightMysqlTest do
     end
   end
 
+  describe "MySQL preflight reads every table" do
+    test "denies a denied table in a comma-separated FROM list" do
+      for sql <- [
+            "SELECT * FROM lotus_queries q, mysql.db d",
+            "SELECT * FROM mysql.user, lotus_queries",
+            "SELECT * FROM test_users u, mysql.db d",
+            "SELECT * FROM test_users t, lotus_queries q",
+            "SELECT * FROM test_users, lotus_queries WHERE 'mysql.' <> ''"
+          ] do
+        assert {:error, msg} = Preflight.authorize(@mysql_adapter, Statement.new(sql, [])), sql
+        assert msg =~ "blocked table", sql
+      end
+    end
+
+    test "denies a denied table in a subquery in WHERE" do
+      sql = "SELECT * FROM test_users u WHERE u.id IN (SELECT 1 FROM test_posts p, mysql.db d)"
+
+      assert {:error, msg} = Preflight.authorize(@mysql_adapter, Statement.new(sql, []))
+      assert msg =~ "blocked table"
+    end
+
+    test "denies a denied table in a CTE" do
+      sql = "WITH x AS (SELECT * FROM test_posts p, mysql.db d) SELECT * FROM test_users u, x"
+
+      assert {:error, msg} = Preflight.authorize(@mysql_adapter, Statement.new(sql, []))
+      assert msg =~ "blocked table"
+    end
+
+    test "allows a comma join, a derived table and a CTE of allowed tables" do
+      for sql <- [
+            "SELECT * FROM test_users u, test_posts p WHERE p.user_id = u.id",
+            "SELECT * FROM (SELECT id FROM test_users LIMIT 3) d",
+            "WITH x AS (SELECT id FROM test_users LIMIT 3) SELECT * FROM x, test_posts tp"
+          ] do
+        assert :ok = Preflight.authorize(@mysql_adapter, Statement.new(sql, [])), sql
+      end
+    end
+  end
+
   describe "MySQL preflight with bare string deny rules" do
     setup do
       config = [allow: [], deny: ["test_users", "test_posts"]]
