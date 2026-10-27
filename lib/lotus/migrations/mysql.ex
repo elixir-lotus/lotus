@@ -159,6 +159,8 @@ defmodule Lotus.Migrations.MySQL do
       add(:name, :string, size: 255, null: false)
       add(:query_id, references(:lotus_queries, type: :serial, on_delete: :delete_all))
       add(:dashboard_id, references(:lotus_dashboards, type: :serial, on_delete: :delete_all))
+      add(:target_type, :string, size: 64)
+      add(:target_id, :string, size: 255)
       add(:cron, :string, size: 255, null: false)
       add(:time_zone, :string, size: 64, null: false, default: "Etc/UTC")
       add(:enabled, :boolean, null: false, default: true)
@@ -177,6 +179,7 @@ defmodule Lotus.Migrations.MySQL do
     create(index(:lotus_schedules, [:enabled, :next_run_at]))
     create(index(:lotus_schedules, [:query_id]))
     create(index(:lotus_schedules, [:dashboard_id]))
+    create(index(:lotus_schedules, [:target_type, :target_id]))
     create(index(:lotus_schedules, [:tenant_id, :owner_id]))
 
     create_if_not_exists table(:lotus_schedule_runs, primary_key: false) do

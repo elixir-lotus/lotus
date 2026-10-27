@@ -49,6 +49,30 @@ its own [`tz`](https://hex.pm/packages/tz), passed to each calculation: it never
 sets the global one. `config :lotus, scheduler: [time_zone_database: ...]`
 picks one for Lotus alone.
 
+### Other things to run
+
+An extension can add kinds of things a schedule runs, beside saved queries
+and dashboards: Lotus Pro's workflows, say. It registers a module
+implementing `Lotus.Schedules.Target` by name, and a schedule names it with
+`target_type` and the thing with `target_id`:
+
+```elixir
+config :lotus,
+  scheduler: [targets: %{"workflow" => Lotus.Pro.Workflows.ScheduleTarget}]
+
+Lotus.Schedules.create_schedule(%{
+  name: "Monthly churn",
+  target_type: "workflow",
+  target_id: "42",
+  cron: "0 8 1 * *",
+  deliveries: [%{channel: "email", format: "csv", config: %{"to" => ["ops@example.com"]}}]
+})
+```
+
+The scheduler runs it with the target's `c:Lotus.Schedules.Target.run/2`,
+and its results are delivered, or read by an alert rule (its first
+result), as a query's are. A schedule runs one query, dashboard or target.
+
 ## Running schedules
 
 Nothing runs until you choose how. There are two ways.

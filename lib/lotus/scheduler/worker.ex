@@ -5,8 +5,9 @@ defmodule Lotus.Scheduler.Worker do
   The run moves from `"pending"` to `"running"` in one conditional update, so
   an executor that hands the same run over twice (a job runner retrying it)
   performs it once. It then runs the schedule's query with `Lotus.run_query/2`
-  (its `params` as `:vars`) or its dashboard with `Lotus.run_dashboard/2`
-  (its `params` as `:filter_values`), with `cache: :refresh` when a cache is
+  (its `params` as `:vars`), its dashboard with `Lotus.run_dashboard/2`
+  (its `params` as `:filter_values`), or its target with the registered
+  `c:Lotus.Schedules.Target.run/2`, with `cache: :refresh` when a cache is
   configured, and records the outcome: `"succeeded"` with the rows returned,
   or `"failed"` with the error. A dashboard run fails when any of its query
   cards fails; `details` names each failed card.
@@ -39,7 +40,7 @@ defmodule Lotus.Scheduler.Worker do
 
   alias Lotus.{Config, Dashboards, Delivery, Result, Telemetry}
   alias Lotus.Delivery.Content
-  alias Lotus.Schedules.Alert
+  alias Lotus.Schedules.{Alert, Targets}
   alias Lotus.Storage.{Query, Schedule, ScheduleRun}
 
   @doc """
@@ -155,6 +156,21 @@ defmodule Lotus.Scheduler.Worker do
       else:
         {:error, "#{map_size(failed)} of #{map_size(results)} cards failed",
          %{"failed_cards" => failed}}
+  end
+
+  defp execute(%Schedule{target_type: type} = schedule, opts) when is_binary(type) do
+    case Targets.fetch(type) do
+      nil ->
+        {:error, "no target is registered as #{inspect(type)}"}
+
+      module ->
+        with {:ok, results} <- module.run(schedule, opts) do
+          rows =
+            Enum.reduce(results, 0, fn %{result: result}, acc -> acc + (result.num_rows || 0) end)
+
+          {:ok, rows, %{}, results}
+        end
+    end
   end
 
   defp execute(%Schedule{}, _opts),

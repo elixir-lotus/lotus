@@ -123,6 +123,8 @@
 
 ### Added
 
+- **Schedules run what an extension registers** — beside saved queries and dashboards, a schedule may run a target an extension registers by name (`config :lotus, scheduler: [targets: %{...}]`, `Lotus.Schedules.Target`), such as Lotus Pro's workflows: `target_type` and `target_id` on `lotus_schedules` (v7), validated with the schedule, run by the scheduler with the run's actor, and its results delivered or read by an alert as a query's are. `Lotus.Schedules.list_schedules/1` filters by them.
+
 - **`Lotus.diff/3`: how the rows of two queries differ** (#117). It runs
   both queries (each with its own variables and search path) through
   `Lotus.run_query/2`, read only, and matches their rows on a key of one

@@ -320,6 +320,15 @@ defmodule Lotus.Config do
           it a run has no actor.
           """
         ],
+        targets: [
+          type: {:map, :string, :atom},
+          default: %{},
+          doc: """
+          What schedules run besides saved queries and dashboards, by name:
+          modules implementing `Lotus.Schedules.Target`, such as Lotus Pro's
+          workflows (`%{"workflow" => Lotus.Pro.Workflows.ScheduleTarget}`).
+          """
+        ],
         executor: [
           type: :atom,
           default: Lotus.Scheduler.Executors.Inline,
