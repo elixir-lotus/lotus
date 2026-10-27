@@ -108,6 +108,15 @@ if Code.ensure_loaded?(ReqLLM) do
       that an interface can show an answer as it is written. A round that
       ends in tool calls may have sent some text first. Like
       `:on_tool_call`, what it raises is logged.
+    - `:on_round` - Function of one argument, called after each round's
+      response, before its tool calls run, with
+      `%{iteration: n, usage: usage, tool_calls: names}`: the usage so far
+      (as `normalize_usage/1` gives it) and every tool called so far. When
+      it returns `:halt`, the loop stops there and returns that round's
+      response, its tool calls not run, as when it reaches
+      `:max_iterations`, so a caller can hold a request to a budget of
+      tokens or of rounds. Anything else goes on. What it raises is logged
+      and the loop goes on.
 
     ## Returns
 
@@ -124,7 +133,8 @@ if Code.ensure_loaded?(ReqLLM) do
         temperature: Keyword.get(opts, :temperature, 0.2),
         max: Keyword.get(opts, :max_iterations, @default_max_iterations),
         on_max: Keyword.get(opts, :on_max_iterations),
-        on_text: Keyword.get(opts, :on_text)
+        on_text: Keyword.get(opts, :on_text),
+        on_round: Keyword.get(opts, :on_round)
       }
 
       metadata = opts |> Keyword.get(:request, %{}) |> Map.put(:model, model)
@@ -161,14 +171,18 @@ if Code.ensure_loaded?(ReqLLM) do
               usage: add_usage(acc.usage, ReqLLM.Response.usage(response))
           }
 
-          case ReqLLM.Response.classify(response) do
-            %{type: :tool_calls, tool_calls: tool_calls} when acc.iterations < loop.max ->
+          case {ReqLLM.Response.classify(response), round(loop, acc)} do
+            {%{type: :tool_calls}, :halt} ->
+              {:ok, response, acc}
+
+            {%{type: :tool_calls, tool_calls: tool_calls}, _go_on}
+            when acc.iterations < loop.max ->
               updated_context =
                 ReqLLM.Context.execute_and_append_tools(response.context, tool_calls, loop.tools)
 
               do_run(loop, updated_context, add_tool_calls(acc, tool_calls))
 
-            %{type: :tool_calls} ->
+            {%{type: :tool_calls}, _go_on} ->
               if loop.on_max do
                 loop.on_max.(response)
               else
@@ -177,7 +191,7 @@ if Code.ensure_loaded?(ReqLLM) do
 
               {:ok, response, acc}
 
-            _ ->
+            _answered ->
               {:ok, response, acc}
           end
 
@@ -185,6 +199,21 @@ if Code.ensure_loaded?(ReqLLM) do
           Logger.error("AI service error: #{inspect(raw_error)}")
           {:error, Error.wrap(raw_error), acc}
       end
+    end
+
+    # What `:on_round` says of the round just answered: `:halt`, or go on.
+    defp round(%{on_round: nil}, _acc), do: :cont
+
+    defp round(%{on_round: on_round}, acc) do
+      on_round.(%{
+        iteration: acc.iterations,
+        usage: normalize_usage(acc.usage),
+        tool_calls: acc.tool_calls
+      })
+    rescue
+      error ->
+        Logger.warning("on_round raised: " <> Exception.message(error))
+        :cont
     end
 
     defp request(loop, messages) do
