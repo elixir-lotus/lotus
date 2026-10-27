@@ -3,6 +3,7 @@ defmodule Lotus.Source.Adapters.EctoTest do
 
   alias Lotus.Query.Filter
   alias Lotus.Query.Statement
+  alias Lotus.Query.Tokenizer.Profile
   alias Lotus.Source.Adapter
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
   alias Lotus.Source.Adapters.MySQL
@@ -817,6 +818,218 @@ defmodule Lotus.Source.Adapters.EctoTest do
                )
 
       assert body == "-- {{ids}}\nWHERE id IN ($1::integer, $2::integer)"
+    end
+  end
+
+  describe "needs_preflight?/2 on tokens" do
+    test "skips a statement that starts with SHOW, EXPLAIN or PRAGMA past comments" do
+      pg = Postgres.wrap("pg", Repo)
+      my = MySQL.wrap("my", MysqlRepo)
+      lite = SQLite3.wrap("lite", SqliteRepo)
+
+      refute Adapter.needs_preflight?(pg, Statement.new("SHOW search_path"))
+      refute Adapter.needs_preflight?(pg, Statement.new("/* plan */ explain SELECT 1"))
+      refute Adapter.needs_preflight?(pg, Statement.new("-- note\n  EXPLAIN SELECT 1"))
+      refute Adapter.needs_preflight?(my, Statement.new("# tables\nSHOW TABLES"))
+      refute Adapter.needs_preflight?(lite, Statement.new("PRAGMA table_info(t)"))
+    end
+
+    test "runs the preflight when SHOW is the end of a nested comment" do
+      pg = Postgres.wrap("pg", Repo)
+
+      # PostgreSQL nests block comments, so SHOW is still inside the comment
+      # and the statement is a SELECT.
+      assert Adapter.needs_preflight?(
+               pg,
+               Statement.new("/* a /* b */ SHOW */ SELECT * FROM secrets")
+             )
+    end
+
+    test "runs the preflight when the command is not a whole word" do
+      pg = Postgres.wrap("pg", Repo)
+      my = MySQL.wrap("my", MysqlRepo)
+
+      assert Adapter.needs_preflight?(pg, Statement.new("SELECT * FROM shows"))
+      assert Adapter.needs_preflight?(pg, Statement.new("SHOWS"))
+      assert Adapter.needs_preflight?(pg, Statement.new("(SHOW x)"))
+      assert Adapter.needs_preflight?(my, Statement.new("/*!50000 SHOW */ SELECT 1"))
+      assert Adapter.needs_preflight?(pg, Statement.new("-- SHOW\nSELECT * FROM secrets"))
+    end
+  end
+
+  describe "parse_alias_map/2 on tokens" do
+    test "maps aliases to tables" do
+      assert EctoAdapter.parse_alias_map(
+               ~s|SELECT * FROM users u JOIN "Orders" AS o ON o.user_id = u.id|
+             ) == %{"u" => "users", "o" => "Orders"}
+    end
+
+    test "ignores FROM and JOIN inside a string literal or a quoted identifier" do
+      assert EctoAdapter.parse_alias_map(
+               ~s|SELECT 'from secrets s' AS a, "join x y" FROM users u|
+             ) == %{"u" => "users"}
+    end
+
+    test "reads past a comment marker inside a string literal" do
+      assert EctoAdapter.parse_alias_map("SELECT '--' AS dash FROM users u") == %{
+               "u" => "users"
+             }
+    end
+
+    test "ignores FROM inside a comment and reads across one" do
+      assert EctoAdapter.parse_alias_map("SELECT 1 /* FROM secrets s */ FROM users /* x */ u") ==
+               %{"u" => "users"}
+    end
+
+    test "reads the dialect's quoted identifiers" do
+      mysql = Profile.for_language("sql:mysql")
+
+      assert EctoAdapter.parse_alias_map("SELECT * FROM `user table` AS `u`", mysql) == %{
+               "u" => "user table"
+             }
+
+      # In MySQL a double-quoted run is a string, not a name.
+      assert EctoAdapter.parse_alias_map(~s|SELECT "from a b" FROM users u|, mysql) == %{
+               "u" => "users"
+             }
+    end
+  end
+
+  describe "strip_sql_comments/2 on tokens" do
+    test "keeps comment markers inside string literals" do
+      assert EctoAdapter.strip_sql_comments("SELECT '--x', '/*y*/' AS a -- note\nFROM t") ==
+               "SELECT '--x', '/*y*/' AS a \nFROM t"
+    end
+
+    test "turns a block comment into a space" do
+      assert EctoAdapter.strip_sql_comments("SELECT a/* c */FROM t") == "SELECT a FROM t"
+    end
+
+    test "nests block comments in PostgreSQL" do
+      assert EctoAdapter.strip_sql_comments(
+               "SELECT 1 /* a /* b */ c */ FROM t",
+               Profile.for_language("sql:postgres")
+             ) == "SELECT 1   FROM t"
+    end
+  end
+
+  describe "MySQL table extraction on tokens" do
+    alias Lotus.Source.Adapters.Ecto.Dialects.MySQL, as: MySQLDialect
+
+    test "reads the table after a comment" do
+      assert MySQLDialect.extract_tables_from_sql("SELECT * FROM /* c */ mysql.user") == [
+               {"mysql", "user"}
+             ]
+
+      assert MySQLDialect.extract_tables_from_sql("SELECT * FROM -- c\n `mysql`.`db` d") == [
+               {"mysql", "db"}
+             ]
+    end
+
+    test "ignores FROM and JOIN inside strings, identifiers and comments" do
+      assert MySQLDialect.extract_tables_from_sql(
+               ~s|SELECT 'from a' AS x, "join b" AS y, `from c` FROM t # JOIN d\n|
+             ) == [{nil, "t"}]
+    end
+
+    test "reads a backquoted name with any character" do
+      assert MySQLDialect.extract_tables_from_sql("SELECT * FROM `my-db`.`my table`") == [
+               {"my-db", "my table"}
+             ]
+    end
+
+    test "reads every item of a FROM list and every join" do
+      sql = """
+      SELECT * FROM a x, b AS y, db.c, (SELECT 1 FROM d) e
+      JOIN f ON 1 STRAIGHT_JOIN g NATURAL JOIN h CROSS JOIN i LEFT JOIN j USING (id)
+      """
+
+      assert Enum.sort(MySQLDialect.extract_tables_from_sql(sql)) ==
+               Enum.sort([
+                 {nil, "a"},
+                 {nil, "b"},
+                 {"db", "c"},
+                 {nil, "d"},
+                 {nil, "f"},
+                 {nil, "g"},
+                 {nil, "h"},
+                 {nil, "i"},
+                 {nil, "j"}
+               ])
+
+      assert MySQLDialect.extract_tables_from_sql("SELECT * FROM (a, b JOIN c ON 1) WHERE 1") ==
+               [{nil, "a"}, {nil, "b"}, {nil, "c"}]
+
+      assert MySQLDialect.extract_tables_from_sql(
+               "SELECT * FROM a, LATERAL (SELECT 1 FROM b) AS l"
+             ) == [{nil, "a"}, {nil, "b"}]
+    end
+
+    test "reads subqueries anywhere" do
+      sql = """
+      SELECT (SELECT max(id) FROM a) FROM b
+      WHERE id IN (SELECT id FROM c) AND EXISTS (SELECT 1 FROM d, e WHERE 1)
+      """
+
+      assert Enum.sort(MySQLDialect.extract_tables_from_sql(sql)) ==
+               [{nil, "a"}, {nil, "b"}, {nil, "c"}, {nil, "d"}, {nil, "e"}]
+    end
+
+    test "reads CTE bodies but not CTE names" do
+      sql = """
+      WITH RECURSIVE x AS (SELECT * FROM a), y (n) AS (SELECT 1 FROM b)
+      SELECT * FROM x JOIN y ON 1, c
+      """
+
+      assert Enum.sort(MySQLDialect.extract_tables_from_sql(sql)) ==
+               [{nil, "a"}, {nil, "b"}, {nil, "c"}]
+
+      assert MySQLDialect.extract_tables_from_sql("SELECT a FROM t GROUP BY a WITH ROLLUP") ==
+               [{nil, "t"}]
+    end
+
+    test "reads no table from a function's FROM, DUAL or a table function" do
+      assert MySQLDialect.extract_tables_from_sql(
+               "SELECT EXTRACT(YEAR FROM d), TRIM(LEADING 'x' FROM s) FROM DUAL"
+             ) == []
+
+      assert MySQLDialect.extract_tables_from_sql(
+               "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (a INT PATH '$')) AS jt"
+             ) == []
+    end
+
+    @tag :mysql
+    test "extract_accessed_resources names no alias, derived table or CTE as a table" do
+      adapter = MySQL.wrap("my", MysqlRepo)
+
+      for {sql, expected} <- [
+            {"SELECT * FROM test_users u, test_posts p WHERE p.user_id = u.id",
+             [{nil, "test_posts"}, {nil, "test_users"}]},
+            {"SELECT * FROM (SELECT id FROM test_users LIMIT 3) d", [{nil, "test_users"}]},
+            {"WITH x AS (SELECT id FROM test_users LIMIT 3) SELECT * FROM x, x AS y",
+             [{nil, "test_users"}]},
+            {"SELECT id FROM test_users UNION SELECT id FROM test_posts",
+             [{nil, "test_posts"}, {nil, "test_users"}]},
+            {"SELECT EXTRACT(YEAR FROM NOW()) FROM DUAL", []},
+            {"SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (a INT PATH '$')) AS jt", []},
+            {"SELECT * FROM mysql.db d", [{"mysql", "db"}]}
+          ] do
+        assert {:ok, relations} = Adapter.extract_accessed_resources(adapter, Statement.new(sql))
+        assert Enum.sort(relations) == expected, sql
+      end
+    end
+
+    @tag :mysql
+    test "extract_accessed_resources sees a system table behind a comment" do
+      adapter = MySQL.wrap("my", MysqlRepo)
+
+      assert {:ok, relations} =
+               Adapter.extract_accessed_resources(
+                 adapter,
+                 Statement.new("SELECT * FROM /* c */ mysql.user")
+               )
+
+      assert MapSet.member?(relations, {"mysql", "user"})
     end
   end
 end

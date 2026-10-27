@@ -18,6 +18,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   alias __MODULE__.EditorConfig
   alias Lotus.Query.Filter
   alias Lotus.Query.Statement
+  alias Lotus.Query.Tokenizer.Profile
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
   alias Lotus.SQL.FilterInjector
   alias Lotus.SQL.SortInjector
@@ -341,7 +342,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   @impl true
   def extract_accessed_resources(repo, %Statement{body: sql, params: params, meta: meta}) do
     opts = Map.to_list(meta)
-    alias_map = EctoHelpers.parse_alias_map(sql)
+    alias_map = EctoHelpers.parse_alias_map(sql, Profile.for_language(query_language()))
     explain = "EXPLAIN QUERY PLAN " <> sql
 
     # Route through execute_in_transaction so EXPLAIN runs under
@@ -408,7 +409,6 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
 
   @impl true
   def transform_statement(%Statement{body: sql} = statement) do
-    alias Lotus.Query.Tokenizer.Profile
     alias Lotus.SQL.Transformer
 
     profile = Profile.for_language(query_language())
