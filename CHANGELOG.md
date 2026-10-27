@@ -125,6 +125,13 @@
 
 - **Schedules run what an extension registers** — beside saved queries and dashboards, a schedule may run a target an extension registers by name (`config :lotus, scheduler: [targets: %{...}]`, `Lotus.Schedules.Target`), such as Lotus Pro's workflows: `target_type` and `target_id` on `lotus_schedules` (v7), validated with the schedule, run by the scheduler with the run's actor, and its results delivered or read by an alert as a query's are; an alert's message names it ("the workflow returned 4 rows"). `Lotus.Schedules.list_schedules/1` filters by them.
 
+- **A saved query as the options of a select variable.**
+  `Lotus.Storage.QueryVariable` has an `options_query_id`: the id of a
+  saved query whose rows are the options, the first column the value and
+  the second the label. `get_option_source/1` returns `:saved_query` for
+  it. The error of a select with no options now names the three fields:
+  `"select must define static_options, options_query or options_query_id"`.
+
 - **`Lotus.diff/3`: how the rows of two queries differ** (#117). It runs
   both queries (each with its own variables and search path) through
   `Lotus.run_query/2`, read only, and matches their rows on a key of one

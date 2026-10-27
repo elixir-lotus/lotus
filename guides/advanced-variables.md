@@ -51,10 +51,11 @@ Each entry in a query's `:variables` list is a `Lotus.Storage.QueryVariable`:
 | `:list` | boolean | Defaults to `false`. `true` accepts multiple values |
 | `:static_options` | list | Allowed values for a `:select` widget |
 | `:options_query` | string | Query returning `value` and `label` columns, for a dynamic `:select` |
+| `:options_query_id` | integer | Id of a saved query whose rows are the options of a `:select`: the first column is the value, the second the label |
 
 Those three types and two widgets are the complete set. A `:select` widget
-must define either `:static_options` or `:options_query`, or the changeset
-fails with `"select must define either static_options or options_query"`.
+must define `:static_options`, `:options_query` or `:options_query_id`, or the changeset
+fails with `"select must define static_options, options_query or options_query_id"`.
 
 `:static_options` accepts a list of strings or a list of `{value, label}`
 tuples (or maps), but the formats cannot be mixed within one variable.
