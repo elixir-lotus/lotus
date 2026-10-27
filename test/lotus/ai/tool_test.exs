@@ -119,4 +119,71 @@ defmodule Lotus.AI.ToolTest do
       assert_received {:text, "users."}
     end
   end
+
+  describe "run/4 with :on_round" do
+    # A round that asks for a tool, as many times as the loop goes on.
+    defp asks_for_a_tool do
+      call = ReqLLM.ToolCall.new("call-1", "list_schemas", ~s({"data_source": "postgres"}))
+      message = ReqLLM.Context.assistant("", tool_calls: [call])
+
+      %ReqLLM.Response{
+        id: "mock",
+        message: message,
+        context: ReqLLM.Context.new([message]),
+        finish_reason: :tool_calls,
+        usage: %{input_tokens: 40, output_tokens: 10, total_tokens: 50},
+        model: "gpt-4o"
+      }
+    end
+
+    test "is told each round's usage so far, and halts the loop" do
+      stub(ReqLLM, :generate_text, fn _model, _messages, _opts -> {:ok, asks_for_a_tool()} end)
+      stub(Lotus.Schema, :list_schemas, fn _source, _opts -> {:ok, ["public"]} end)
+
+      test_pid = self()
+      tool = Tool.from_action(Lotus.AI.Actions.ListSchemas)
+      context = ReqLLM.Context.new([ReqLLM.Context.user("Why?")])
+
+      on_round = fn round ->
+        send(test_pid, {:round, round.iteration, round.usage.total_tokens, round.tool_calls})
+        if round.usage.total_tokens >= 100, do: :halt, else: :cont
+      end
+
+      assert {:ok, %ReqLLM.Response{}} =
+               Tool.run("openai:gpt-4o", context, [tool], api_key: "sk-test", on_round: on_round)
+
+      assert_received {:round, 1, 50, []}
+      assert_received {:round, 2, 100, ["list_schemas"]}
+      refute_received {:round, 3, _tokens, _calls}
+    end
+
+    test "a callback that raises does not stop the loop" do
+      answer = ReqLLM.Context.assistant("Done.")
+
+      stub(ReqLLM, :generate_text, fn _model, _messages, _opts ->
+        {:ok,
+         %ReqLLM.Response{
+           id: "mock",
+           message: answer,
+           context: ReqLLM.Context.new([answer]),
+           finish_reason: :stop,
+           usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2},
+           model: "gpt-4o"
+         }}
+      end)
+
+      context = ReqLLM.Context.new([ReqLLM.Context.user("Why?")])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %ReqLLM.Response{}} =
+                   Tool.run("openai:gpt-4o", context, [],
+                     api_key: "sk-test",
+                     on_round: fn _round -> raise "boom" end
+                   )
+        end)
+
+      assert log =~ "on_round raised: boom"
+    end
+  end
 end

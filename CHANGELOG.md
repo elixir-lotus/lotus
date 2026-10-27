@@ -123,6 +123,7 @@
 
 ### Added
 
+- **A tool loop told of each round** — `Lotus.AI.Tool.run/4` takes `:on_round`, called after each round's response with the usage so far and the tools called; returning `:halt` stops the loop there, so a caller (Lotus Pro's AI data agent) holds a request to a budget of tokens or rounds. `Lotus.AI.credentials/0` gives such a caller the model and API key the AI features use
 - **Schedules run what an extension registers** — beside saved queries and dashboards, a schedule may run a target an extension registers by name (`config :lotus, scheduler: [targets: %{...}]`, `Lotus.Schedules.Target`), such as Lotus Pro's workflows: `target_type` and `target_id` on `lotus_schedules` (v7), validated with the schedule, run by the scheduler with the run's actor, and its results delivered or read by an alert as a query's are; an alert's message names it ("the workflow returned 4 rows"). `Lotus.Schedules.list_schedules/1` filters by them.
 
 - **A saved query as the options of a select variable.**

@@ -46,6 +46,15 @@ defmodule Lotus.AITest do
     end
   end
 
+  describe "credentials/0" do
+    test "the model and API key, for a caller's own tool loop" do
+      assert {:error, :not_configured} = AI.credentials()
+
+      set_ai_config(enabled: true, api_key: "sk-test", model: "anthropic:claude-opus-4")
+      assert {:ok, %{model: "anthropic:claude-opus-4", api_key: "sk-test"}} = AI.credentials()
+    end
+  end
+
   describe "generate_query/1" do
     setup do
       # Mock schema introspection
