@@ -123,7 +123,7 @@
 
 ### Added
 
-- **Schedules run what an extension registers** — beside saved queries and dashboards, a schedule may run a target an extension registers by name (`config :lotus, scheduler: [targets: %{...}]`, `Lotus.Schedules.Target`), such as Lotus Pro's workflows: `target_type` and `target_id` on `lotus_schedules` (v7), validated with the schedule, run by the scheduler with the run's actor, and its results delivered or read by an alert as a query's are. `Lotus.Schedules.list_schedules/1` filters by them.
+- **Schedules run what an extension registers** — beside saved queries and dashboards, a schedule may run a target an extension registers by name (`config :lotus, scheduler: [targets: %{...}]`, `Lotus.Schedules.Target`), such as Lotus Pro's workflows: `target_type` and `target_id` on `lotus_schedules` (v7), validated with the schedule, run by the scheduler with the run's actor, and its results delivered or read by an alert as a query's are; an alert's message names it ("the workflow returned 4 rows"). `Lotus.Schedules.list_schedules/1` filters by them.
 
 - **A saved query as the options of a select variable.**
   `Lotus.Storage.QueryVariable` has an `options_query_id`: the id of a

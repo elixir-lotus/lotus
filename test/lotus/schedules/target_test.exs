@@ -122,13 +122,14 @@ defmodule Lotus.Schedules.TargetTest do
              run(schedule)
   end
 
-  test "an alert reads its first result: sent only when there are rows" do
+  test "an alert reads its first result: sent only when there are rows, naming the target" do
     {:ok, empty} = schedule(%{target_id: "empty", rule: %{condition: "any_rows"}})
     assert %ScheduleRun{status: "succeeded"} = run(empty)
     refute_received {:delivered, _}
 
     {:ok, rows} = schedule(%{rule: %{condition: "any_rows"}})
     assert %ScheduleRun{status: "succeeded"} = run(rows)
-    assert_received {:delivered, %{alert: %{status: "firing"}}}
+    assert_received {:delivered, %{alert: %{status: "firing", message: message}}}
+    assert message == "the board returned 2 rows"
   end
 end

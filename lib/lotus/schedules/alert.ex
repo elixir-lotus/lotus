@@ -73,42 +73,48 @@ defmodule Lotus.Schedules.Alert do
   @doc """
   Reads the rule's value from `result` and checks the condition. Returns
   `{:ok, holds?, value}`, the value as JSON has it, or `{:error, message}`.
+  `subject` is what returned the result, in the messages: `"the query"`,
+  or for a schedule target, such as `"the workflow"`.
   """
-  @spec evaluate(ScheduleRule.t(), Result.t(), map()) ::
+  @spec evaluate(ScheduleRule.t(), Result.t(), map(), String.t()) ::
           {:ok, boolean(), term()} | {:error, String.t()}
-  def evaluate(rule, result, state \\ %{})
+  def evaluate(rule, result, state \\ %{}, subject \\ "the query")
 
-  def evaluate(%ScheduleRule{condition: condition} = rule, result, state) do
+  def evaluate(%ScheduleRule{condition: condition} = rule, result, state, subject) do
     case registered(condition) do
-      nil when condition in @builtin -> evaluate_builtin(rule, result)
+      nil when condition in @builtin -> evaluate_builtin(rule, result, subject)
       nil -> {:error, "the condition #{inspect(condition)} is not registered"}
       module -> module.evaluate(rule, result, state || %{})
     end
   end
 
-  defp evaluate_builtin(%ScheduleRule{condition: "any_rows"}, result) do
+  defp evaluate_builtin(%ScheduleRule{condition: "any_rows"}, result, _subject) do
     count = row_count(result)
     {:ok, count > 0, count}
   end
 
-  defp evaluate_builtin(%ScheduleRule{condition: "no_rows"}, result) do
+  defp evaluate_builtin(%ScheduleRule{condition: "no_rows"}, result, _subject) do
     count = row_count(result)
     {:ok, count == 0, count}
   end
 
-  defp evaluate_builtin(%ScheduleRule{condition: condition, threshold: threshold} = rule, result) do
-    with {:ok, value} <- value(rule, result),
+  defp evaluate_builtin(
+         %ScheduleRule{condition: condition, threshold: threshold} = rule,
+         result,
+         subject
+       ) do
+    with {:ok, value} <- value(rule, result, subject),
          {:ok, number} <- to_decimal(value, rule) do
       {:ok, compare(condition, number, threshold), Lotus.Value.for_json(value)}
     end
   end
 
-  defp value(%ScheduleRule{column: nil}, result), do: {:ok, row_count(result)}
+  defp value(%ScheduleRule{column: nil}, result, _subject), do: {:ok, row_count(result)}
 
-  defp value(%ScheduleRule{column: column}, %Result{columns: columns, rows: rows}) do
+  defp value(%ScheduleRule{column: column}, %Result{columns: columns, rows: rows}, subject) do
     case {Enum.find_index(columns, &(&1 == column)), rows} do
       {nil, _rows} -> {:error, "the result has no column #{inspect(column)}"}
-      {_index, []} -> {:error, "the query returned no rows to read #{inspect(column)} from"}
+      {_index, []} -> {:error, "#{subject} returned no rows to read #{inspect(column)} from"}
       {index, [row | _]} -> {:ok, Enum.at(row, index)}
     end
   end
@@ -168,29 +174,31 @@ defmodule Lotus.Schedules.Alert do
 
   @doc """
   A sentence for a change to `status`: `"open is 512, above 500"`, `"open
-  is 480, no longer above 500"`, `"the query returned 3 rows"`.
+  is 480, no longer above 500"`, `"the query returned 3 rows"`; with
+  `subject`, as `evaluate/4` takes it, `"the workflow returned 3 rows"`.
   """
-  @spec describe(ScheduleRule.t(), status(), term()) :: String.t()
-  def describe(%ScheduleRule{condition: condition} = rule, status, value) do
+  @spec describe(ScheduleRule.t(), status(), term(), String.t()) :: String.t()
+  def describe(%ScheduleRule{condition: condition} = rule, status, value, subject \\ "the query") do
     case registered(condition) do
-      nil -> describe_builtin(rule, status, value)
+      nil -> describe_builtin(rule, status, value, subject)
       module -> module.describe(rule, status, value)
     end
   end
 
-  defp describe_builtin(%ScheduleRule{condition: condition}, _status, count)
+  defp describe_builtin(%ScheduleRule{condition: condition}, _status, count, subject)
        when condition in ["any_rows", "no_rows"] do
     case count do
-      0 -> "the query returned no rows"
-      1 -> "the query returned 1 row"
-      n -> "the query returned #{n} rows"
+      0 -> "#{subject} returned no rows"
+      1 -> "#{subject} returned 1 row"
+      n -> "#{subject} returned #{n} rows"
     end
   end
 
   defp describe_builtin(
          %ScheduleRule{condition: condition, threshold: threshold} = rule,
          status,
-         value
+         value,
+         _subject
        ) do
     still = if status == "firing", do: "", else: "no longer "
 
