@@ -73,7 +73,7 @@ defmodule Lotus.Pins do
   as they show (`Lotus.Value.to_display_string/1`, `nil` kept), its row
   count, the total the source counted and the time it took.
   """
-  @spec snapshot(Result.t() | map()) :: map()
+  @spec snapshot(Result.t() | map()) :: %{String.t() => term()}
   def snapshot(result) do
     rows = result |> Map.get(:rows) |> List.wrap() |> Enum.take(@max_rows)
 
