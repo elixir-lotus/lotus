@@ -201,7 +201,9 @@ defmodule Lotus.Scheduler.Worker do
   defp succeeded(run, schedule, row_count, details, [%{result: result} | _] = results) do
     %Schedule{rule: rule, state: state} = schedule
 
-    case Alert.evaluate(rule, result, state) do
+    subject = subject(schedule)
+
+    case Alert.evaluate(rule, result, state, subject) do
       {:ok, holds?, value} ->
         {next, change} = Alert.transition(state, rule, holds?, value, now())
 
@@ -213,7 +215,12 @@ defmodule Lotus.Scheduler.Worker do
           })
 
         if change do
-          alert = %{status: change, value: value, message: Alert.describe(rule, change, value)}
+          alert = %{
+            status: change,
+            value: value,
+            message: Alert.describe(rule, change, value, subject)
+          }
+
           attrs = deliver(run, schedule, row_count, details, results, alert)
           {attrs, if(attrs.status == "succeeded", do: next)}
         else
@@ -225,6 +232,17 @@ defmodule Lotus.Scheduler.Worker do
          Alert.errored(state, message, now())}
     end
   end
+
+  # What returned the result an alert reads, in its messages: "the query",
+  # or a target's label, "the workflow".
+  defp subject(%Schedule{target_type: type}) when is_binary(type) do
+    case Targets.fetch(type) do
+      nil -> "the query"
+      module -> "the " <> String.downcase(module.label())
+    end
+  end
+
+  defp subject(%Schedule{}), do: "the query"
 
   defp errored(%Schedule{rule: nil}, _reason), do: nil
   defp errored(%Schedule{state: state}, reason), do: Alert.errored(state, describe(reason), now())
