@@ -452,6 +452,16 @@ defmodule Lotus.AI do
     end
   end
 
+  @doc """
+  The model and API key the AI features use, for a caller that runs its own
+  tool loop with `Lotus.AI.Tool.run/4` (Lotus Pro's AI data agent): the same
+  answer, and the same errors, as `model/0`.
+  """
+  @spec credentials() ::
+          {:ok, %{model: String.t(), api_key: String.t()}}
+          | {:error, :not_configured | :dependency_missing | :api_key_not_configured}
+  def credentials, do: get_ai_config()
+
   defp get_ai_config do
     ai_config = Lotus.Config.ai()
 
