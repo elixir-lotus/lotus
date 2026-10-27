@@ -1133,7 +1133,21 @@ defmodule Lotus.Source.Adapters.Ecto do
     end
   end
 
-  defp lexical_profile(dialect), do: Profile.for_language(dialect.query_language())
+  # The lexical rules of the dialect's statements, as
+  # `Lotus.Source.Adapter.lexical_profile/1` has them for its adapter: the
+  # profile of its query language, refined by the `:dialect_spec` of its
+  # editor config. An external dialect (ClickHouse: backticks, `#` comments,
+  # backslash escapes) declares its rules there; read as ANSI SQL, a denied
+  # call could hide behind a quote or a comment the engine reads otherwise.
+  defp lexical_profile(dialect) do
+    base = Profile.for_language(dialect.query_language())
+
+    spec =
+      if function_exported?(dialect, :editor_config, 0),
+        do: Map.get(dialect.editor_config(), :dialect_spec)
+
+    Profile.from_dialect_spec(base, spec)
+  end
 
   defp neutralize_template(sql, dialect) do
     profile = lexical_profile(dialect)

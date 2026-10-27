@@ -40,6 +40,16 @@
   `~> 1.29`, so an app can't resolve a vulnerable version. Run
   `mix deps.update req_llm` if your lock holds an older one.
 
+- **The read-only check reads an external SQL dialect with its own
+  lexical rules.** An Ecto dialect that declares a `:dialect_spec` in its
+  editor config (ClickHouse: backtick identifiers, `#` comments, backslash
+  escapes) was still sanitized, bound and validated as ANSI SQL. So a
+  denied function could get past `denied_functions/0` when quoted with
+  backticks, or after `\'` or a `#` comment, while a call inside a `#`
+  comment was refused. The Ecto adapter now uses the same profile as
+  `Lotus.Source.Adapter.lexical_profile/1`. The built-in dialects declare
+  no `:dialect_spec` and are unchanged.
+
 - **A sort or grouping by position no longer bypasses a column policy.**
   Lotus refused `ORDER BY ssn` on a protected column but let
   `SELECT ssn FROM users ORDER BY 1` (or `GROUP BY 1`) run, which sorts or

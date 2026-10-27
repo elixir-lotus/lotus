@@ -1,3 +1,24 @@
+defmodule Lotus.Source.Adapters.EctoTest.SpecDialect do
+  @moduledoc false
+  # An external dialect whose lexical rules differ from ANSI SQL, declared
+  # the way a dialect outside Lotus declares them: a dialect_spec.
+
+  def query_language, do: "sql:spec_test"
+
+  def editor_config do
+    %{
+      language: "sql:spec_test",
+      keywords: [],
+      types: [],
+      functions: [],
+      context_boundaries: [],
+      dialect_spec: %{identifier_quotes: "\"`", hash_comments: true, backslash_escapes: true}
+    }
+  end
+
+  def denied_functions, do: ["read_file"]
+end
+
 defmodule Lotus.Source.Adapters.EctoTest do
   use Lotus.Case, async: true
 
@@ -401,6 +422,31 @@ defmodule Lotus.Source.Adapters.EctoTest do
       adapter = MySQL.wrap("my", MysqlRepo)
 
       assert :ok = Adapter.sanitize_query(adapter, Statement.new("SELECT `a;b` FROM t"), [])
+    end
+
+    test "reads an external dialect's statements with the lexical rules of its dialect_spec" do
+      dialect = Lotus.Source.Adapters.EctoTest.SpecDialect
+
+      # A denied call that ANSI rules miss: after a backslash-escaped quote,
+      # on the line after a # comment, or quoted with backticks.
+      for sql <- [
+            ~S"SELECT 'it\'s', read_file('x') -- '",
+            "SELECT 1 # don't\n, read_file('x')",
+            "SELECT `read_file`('x')"
+          ] do
+        assert {:error, "Only read-only queries are allowed: read_file() is not"} =
+                 EctoAdapter.do_sanitize_query(dialect, Statement.new(sql), []),
+               sql
+      end
+
+      # And no call where the dialect has a comment, a literal or a name.
+      for sql <- [
+            "SELECT 1 # read_file('x')",
+            ~S"SELECT 'it\'s read_file(''x'')' AS s",
+            "SELECT `read_file` FROM t"
+          ] do
+        assert :ok = EctoAdapter.do_sanitize_query(dialect, Statement.new(sql), []), sql
+      end
     end
 
     test "blocks DML when read_only is true" do
