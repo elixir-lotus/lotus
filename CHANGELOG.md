@@ -86,6 +86,31 @@
   strictest policy, and `Lotus.Preflight.Columns.result_sources/4` (new)
   says which relation each result column comes from.
 
+- **A comment can no longer turn off the column check or hide a table.**
+  Lotus skipped the column visibility check before a statement that starts
+  with `EXPLAIN`, `SHOW` or `PRAGMA`, and found the leading word by removing
+  comments with regular expressions. On PostgreSQL, where block comments
+  nest, `/* a /* b */ SHOW */ SELECT * FROM users` looked like `SHOW` and
+  ran unchecked. On MySQL, the tables a statement reads (where `EXPLAIN`
+  names system tables poorly) were read with a regular expression that
+  stopped at a comment, so `SELECT * FROM /* x */ mysql.user` touched no
+  table as far as visibility rules knew. Both now read the statement with
+  `Lotus.Query.Tokenizer` under the source's lexical rules, and the check is
+  skipped only when the first word of code is one of those commands as a
+  whole word.
+
+- **MySQL: a comma join, a subquery or a CTE no longer hides a table from
+  the visibility check.** Lotus took the tables a MySQL statement reads
+  either from `EXPLAIN` (which names them by alias) or from the statement
+  text (only the first table after each `FROM` or `JOIN`), choosing one by
+  the names' length or by `mysql.` appearing in the text. So
+  `SELECT * FROM test_users u, mysql.db d` read `mysql.db` without the
+  built-in deny, and `FROM test_users t, lotus_queries q` read Lotus's own
+  table. Lotus now reads every item of every FROM list (comma-separated, joined,
+  parenthesized, in subqueries anywhere and in CTEs) and checks the union of
+  both lists. An alias, a derived table, a table function or a CTE is not
+  taken for a table.
+
 ### Added
 
 - **Read-only per data source.** `config :lotus, data_source_read_only:
@@ -397,6 +422,15 @@
   that reads it is refused (#332).
 
 ### Fixed
+
+- **Table aliases are read from code only.** The alias map that turns the
+  aliases `EXPLAIN` reports back into table names (SQLite, MySQL) was read
+  with regular expressions, so a `FROM x y` inside a string, a quoted
+  identifier or a comment added a wrong alias, and a `--` inside a string
+  (`SELECT '--' AS a FROM users u`) dropped the rest of the line. It is now
+  read with `Lotus.Query.Tokenizer` under the source's rules, and takes
+  MySQL's backquoted names. The `strip_sql_comments` helper leaves comment
+  markers inside strings alone, and reads a block comment as a space.
 
 - **The tokenizer follows each dialect's lexical rules more closely.** Each
   of these hid code from the read-only and single-statement checks, or

@@ -1199,6 +1199,15 @@ defmodule Lotus.Source.Adapters.Ecto do
   # SQL-specific preflight heuristic. Skips introspection statements
   # (EXPLAIN, SHOW, PRAGMA) that do not touch visible relations. Dialects
   # can override by implementing `needs_preflight?/1`.
+  #
+  # Skipping the preflight skips column visibility, so the check errs
+  # toward running it: the statement is skipped only when the first word
+  # the engine reads, past comments and whitespace in the dialect's
+  # lexical rules, is one of those commands as a whole word. Anything
+  # else first (a parenthesis, a placeholder, an optional block, a MySQL
+  # `/*! ... */` comment the engine runs) runs the preflight.
+  @no_preflight_commands ~w(EXPLAIN PRAGMA SHOW)
+
   @doc false
   def do_needs_preflight?(dialect, %Statement{body: sql} = statement) do
     cond do
@@ -1206,26 +1215,52 @@ defmodule Lotus.Source.Adapters.Ecto do
         dialect.needs_preflight?(statement)
 
       is_binary(sql) ->
-        s =
-          sql
-          |> String.replace(~r/--.*$/m, "")
-          |> String.replace(~r/\/\*[\s\S]*?\*\//, "")
-          |> String.trim_leading()
-          |> upcase_head(12)
-
-        not (String.starts_with?(s, "EXPLAIN") or
-               String.starts_with?(s, "PRAGMA") or
-               String.starts_with?(s, "SHOW"))
+        leading_command(sql, lexical_profile(dialect)) not in @no_preflight_commands
 
       true ->
         true
     end
   end
 
-  defp upcase_head(s, n) do
-    {head, tail} = String.split_at(s, n)
-    String.upcase(head) <> tail
+  defp leading_command(sql, profile) do
+    sql |> Tokenizer.tokenize(profile) |> first_code_word()
   end
+
+  defp first_code_word([{:comment, _raw} | rest]), do: first_code_word(rest)
+
+  defp first_code_word([{:code, raw} | rest]) do
+    case String.trim_leading(raw) do
+      "" -> first_code_word(rest)
+      code -> code |> leading_word(0) |> whole_word(rest)
+    end
+  end
+
+  defp first_code_word(_tokens), do: nil
+
+  # The ASCII letters at the head of `code`, and what follows them.
+  defp leading_word(code, n) do
+    case code do
+      <<_::binary-size(^n), c, _::binary>> when c in ?a..?z or c in ?A..?Z ->
+        leading_word(code, n + 1)
+
+      <<word::binary-size(^n), after_word::binary>> ->
+        {word, after_word}
+    end
+  end
+
+  # A word is whole when an identifier character does not go on from it,
+  # in this code token or (`SHOW"x"`, `SHOW{{x}}`) the token after it.
+  defp whole_word({"", _after_word}, _rest), do: nil
+
+  defp whole_word({_word, <<c, _::binary>>}, _rest)
+       when c in ?0..?9 or c in [?_, ?$] or c >= 128,
+       do: nil
+
+  defp whole_word({_word, ""}, [token | _rest])
+       when elem(token, 0) in [:identifier, :string, :variable, :block],
+       do: nil
+
+  defp whole_word({word, _after_word}, _rest), do: String.upcase(word)
 
   # Scalar substitution for Ecto-backed adapters: append value to
   # `statement.params`, replace the first `{{var_name}}` occurrence in
@@ -1484,31 +1519,119 @@ defmodule Lotus.Source.Adapters.Ecto do
   # SQL parsing utilities (shared by dialect extract_accessed_resources impls)
   # ---------------------------------------------------------------------------
 
+  # These read the statement through `Lotus.Query.Tokenizer`, so a `FROM`,
+  # `--` or `/*` inside a string literal, a quoted identifier or a comment
+  # is not taken for code. `profile` defaults to ANSI SQL; a dialect passes
+  # its own (`Profile.for_language/1`) for its quotes and comments.
+
   @doc false
-  def parse_alias_map(sql) do
-    s = strip_sql_comments(sql)
+  @spec parse_alias_map(String.t(), Profile.t()) :: %{String.t() => String.t()}
+  def parse_alias_map(sql, %Profile{} = profile \\ %Profile{}) do
+    sql |> sql_lexemes(profile) |> alias_pairs(%{})
+  end
 
-    rx_from = ~r/\bFROM\s+("?[A-Za-z0-9_]+"?)\s+(?:AS\s+)?("?[A-Za-z0-9_]+"?)/i
-    rx_join = ~r/\bJOIN\s+("?[A-Za-z0-9_]+"?)\s+(?:AS\s+)?("?[A-Za-z0-9_]+"?)/i
+  # `FROM <name> [AS] <name>` and `JOIN <name> [AS] <name>` map the second
+  # name to the first. A name is a word or a quoted identifier.
+  defp alias_pairs([{:word, keyword} | rest], acc) do
+    acc =
+      with true <- String.downcase(keyword) in ["from", "join"],
+           [base | after_base] <- rest,
+           {:ok, base} <- lexeme_name(base),
+           {:ok, alias_name} <- alias_after(after_base) do
+        Map.put(acc, alias_name, base)
+      else
+        _ -> acc
+      end
 
-    [rx_from, rx_join]
-    |> Enum.flat_map(&Regex.scan(&1, s))
-    |> Enum.reduce(%{}, fn
-      [_, base, alias_name], acc ->
-        base = normalize_ident(base)
-        alias_name = normalize_ident(alias_name)
-        if base == "(", do: acc, else: Map.put(acc, alias_name, base)
+    alias_pairs(rest, acc)
+  end
 
-      _, acc ->
-        acc
+  defp alias_pairs([_lexeme | rest], acc), do: alias_pairs(rest, acc)
+  defp alias_pairs([], acc), do: acc
+
+  defp alias_after([{:word, as}, name | _rest] = lexemes) do
+    with "as" <- String.downcase(as), {:ok, alias_name} <- lexeme_name(name) do
+      {:ok, alias_name}
+    else
+      _ -> lexemes |> hd() |> lexeme_name()
+    end
+  end
+
+  defp alias_after([name | _rest]), do: lexeme_name(name)
+  defp alias_after([]), do: :error
+
+  defp lexeme_name({:word, word}), do: {:ok, word}
+  defp lexeme_name({:identifier, raw}), do: {:ok, unquote_identifier(raw)}
+  defp lexeme_name(_lexeme), do: :error
+
+  @doc false
+  @spec strip_sql_comments(String.t(), Profile.t()) :: String.t()
+  def strip_sql_comments(s, %Profile{} = profile \\ %Profile{}) do
+    s
+    |> Tokenizer.tokenize(profile)
+    |> strip_comment_tokens()
+    |> IO.iodata_to_binary()
+  end
+
+  # A line comment goes, leaving its line break; a block comment becomes a
+  # space, as the engine reads it, so `a/**/b` stays two words.
+  defp strip_comment_tokens(tokens) do
+    Enum.map(tokens, fn
+      {:comment, "/*" <> _} -> " "
+      {:comment, _raw} -> ""
+      {:block, inner} -> ["[[", strip_comment_tokens(inner), "]]"]
+      token -> Tokenizer.to_iodata([token])
     end)
   end
 
+  @typedoc false
+  @type sql_lexeme ::
+          {:word, String.t()} | {:identifier, String.t()} | {:punct, String.t()} | :literal
+
   @doc false
-  def strip_sql_comments(s) do
-    s
-    |> String.replace(~r/--.*$/m, "")
-    |> String.replace(~r/\/\*[\s\S]*?\*\//, "")
+  # The code of `sql` as words, quoted identifiers (raw, quotes included)
+  # and single punctuation characters. A string literal or a placeholder is
+  # `:literal`; a comment is dropped; an optional block's contents are
+  # inlined.
+  @spec sql_lexemes(String.t(), Profile.t()) :: [sql_lexeme()]
+  def sql_lexemes(sql, %Profile{} = profile \\ %Profile{}) when is_binary(sql) do
+    sql |> Tokenizer.tokenize(profile) |> lexemes_of_tokens()
+  end
+
+  defp lexemes_of_tokens(tokens) do
+    Enum.flat_map(tokens, fn
+      {:code, raw} -> code_lexemes(raw)
+      {:identifier, raw} -> [{:identifier, raw}]
+      {:string, _raw} -> [:literal]
+      {:variable, _name, _raw} -> [:literal]
+      {:comment, _raw} -> []
+      {:block, inner} -> lexemes_of_tokens(inner)
+    end)
+  end
+
+  defp code_lexemes(raw) do
+    for [piece] <- Regex.scan(~r/[\w$]+|[^\w$\s]/u, raw) do
+      if Regex.match?(~r/\A[\w$]+\z/u, piece), do: {:word, piece}, else: {:punct, piece}
+    end
+  end
+
+  @doc false
+  # The name a quoted identifier spells: `"a""b"` is `a"b`, `` `t` `` is
+  # `t`, `[my col]` is `my col`. One left open at the end of the input
+  # runs to the end.
+  @spec unquote_identifier(String.t()) :: String.t()
+  def unquote_identifier("[" <> rest), do: strip_closing(rest, "]")
+
+  def unquote_identifier(<<quote::binary-size(1), rest::binary>>) do
+    rest |> strip_closing(quote) |> String.replace(quote <> quote, quote)
+  end
+
+  defp strip_closing(rest, closing) do
+    size = byte_size(rest)
+
+    if size > 0 and binary_part(rest, size - 1, 1) == closing,
+      do: binary_part(rest, 0, size - 1),
+      else: rest
   end
 
   @doc false
