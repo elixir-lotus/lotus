@@ -123,6 +123,21 @@
 
 ### Added
 
+- **`Lotus.diff/3`: how the rows of two queries differ** (#117). It runs
+  both queries (each with its own variables and search path) through
+  `Lotus.run_query/2`, read only, and matches their rows on a key of one
+  column or several: the rows only the second has (`added`), only the
+  first has (`removed`), and those both have whose values differ
+  (`changed`, with the columns that did). Each query may return up to
+  `:limit` rows (10,000 by default). See `Lotus.Diff`.
+
+- **Pinned results** (#117). `Lotus.pin_result/3`, `Lotus.get_pin/2` and
+  `Lotus.unpin/2` keep a result a person compares their next runs of a
+  query with, across visits: one per person (`:owner_id`, within a
+  `:tenant_id`) and query (or the new query), with its statement, its
+  variables and the rows it showed (up to 1,000, as text). The table,
+  `lotus_pins`, is part of the v7 migration. See `Lotus.Pins`.
+
 - **`:after_query` carries the source of each result column.** The payload
   has a new key, `:column_sources`: one entry per column of `:result`, in
   order, `{:relation, {schema, table}}` for a column the column check traced

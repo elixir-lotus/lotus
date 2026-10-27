@@ -172,7 +172,8 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
       {nil, "lotus_dashboard_filters"},
       {nil, "lotus_dashboard_card_filter_mappings"},
       {nil, "lotus_schedules"},
-      {nil, "lotus_schedule_runs"}
+      {nil, "lotus_schedule_runs"},
+      {nil, "lotus_pins"}
     ]
   end
 

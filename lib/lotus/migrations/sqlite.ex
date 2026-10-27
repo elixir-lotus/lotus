@@ -198,11 +198,29 @@ defmodule Lotus.Migrations.SQLite do
 
     create_if_not_exists(index(:lotus_schedule_runs, [:status]))
 
+    create_if_not_exists table(:lotus_pins, primary_key: false) do
+      add(:id, :serial, primary_key: true)
+      add(:query_id, references(:lotus_queries, type: :integer, on_delete: :delete_all))
+      add(:owner_id, :string)
+      add(:tenant_id, :string)
+      add(:data_source, :string)
+      add(:search_path, :string)
+      add(:statement, :text, null: false)
+      add(:text, :text)
+      add(:vars, :map, null: false, default: "{}")
+      add(:result, :map, null: false, default: "{}")
+      add(:pinned_at, :utc_datetime_usec, null: false)
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create_if_not_exists(index(:lotus_pins, [:owner_id, :query_id]))
+
     :ok
   end
 
   @impl Lotus.Migration
   def down(_opts \\ []) do
+    drop_if_exists(table(:lotus_pins))
     drop_if_exists(table(:lotus_schedule_runs))
     drop_if_exists(table(:lotus_schedules))
 

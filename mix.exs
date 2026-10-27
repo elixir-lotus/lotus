@@ -107,7 +107,8 @@ defmodule Lotus.MixProject do
       groups_for_modules: [
         "Core API": [Lotus, Lotus.Config, Lotus.Value],
         "Query Storage": [Lotus.Storage, Lotus.Storage.Query, Lotus.Storage.QueryVariable],
-        "Query Execution": [Lotus.Runner, Lotus.Result, Lotus.Preflight],
+        "Query Execution": [Lotus.Runner, Lotus.Result, Lotus.Preflight, Lotus.Diff],
+        "Pinned Results": [Lotus.Pins, Lotus.Storage.Pin],
         Dashboards: [
           Lotus.Dashboards,
           Lotus.Dashboards.DateToken,

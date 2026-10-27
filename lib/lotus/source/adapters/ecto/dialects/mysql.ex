@@ -248,7 +248,8 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
       {nil, "lotus_dashboard_filters"},
       {nil, "lotus_dashboard_card_filter_mappings"},
       {nil, "lotus_schedules"},
-      {nil, "lotus_schedule_runs"}
+      {nil, "lotus_schedule_runs"},
+      {nil, "lotus_pins"}
     ]
 
     if database do
@@ -262,7 +263,8 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
           {database, "lotus_dashboard_filters"},
           {database, "lotus_dashboard_card_filter_mappings"},
           {database, "lotus_schedules"},
-          {database, "lotus_schedule_runs"}
+          {database, "lotus_schedule_runs"},
+          {database, "lotus_pins"}
         ]
     else
       base_denies

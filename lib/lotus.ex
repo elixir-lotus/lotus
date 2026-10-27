@@ -632,6 +632,24 @@ defmodule Lotus do
     run_query(q, opts)
   end
 
+  @doc """
+  How the rows of two queries differ, matched on a key. See `Lotus.Diff.run/3`.
+  """
+  @spec diff(Lotus.Diff.side(), Lotus.Diff.side(), keyword()) ::
+          {:ok, Lotus.Diff.t()} | {:error, term()}
+  defdelegate diff(before, after_, opts), to: Lotus.Diff, as: :run
+
+  @doc """
+  Pins a result for a query, replacing the person's pin of it. See `Lotus.Pins`.
+  """
+  defdelegate pin_result(result, attrs, opts \\ []), to: Lotus.Pins, as: :pin
+
+  @doc "The person's pin of a query (`nil`: the new query). See `Lotus.Pins`."
+  defdelegate get_pin(query_id, opts \\ []), to: Lotus.Pins
+
+  @doc "Removes the person's pin of a query. See `Lotus.Pins`."
+  defdelegate unpin(query_id, opts \\ []), to: Lotus.Pins
+
   defp prepare_variables(q, opts) do
     supplied_vars = Keyword.get(opts, :vars, %{}) || %{}
 

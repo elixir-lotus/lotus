@@ -20,6 +20,10 @@ defmodule Lotus.Migrations.Postgres.V7 do
   cluster claims the slot, so a slot runs once however many nodes tick.
   `deliveries`, `rule` and `state` are read by delivery and alerts, which
   build on schedules; a schedule without them only runs.
+
+  And `lotus_pins`: a result a person keeps beside their next runs of a query
+  (see `Lotus.Pins`), one per person (`owner_id`) and query (`query_id`, or
+  none for a query not saved yet), with the rows it showed.
   """
 
   use Ecto.Migration
@@ -111,11 +115,29 @@ defmodule Lotus.Migrations.Postgres.V7 do
     )
 
     create_if_not_exists(index(:lotus_schedule_runs, [:status], table_opts))
+
+    create_if_not_exists table(:lotus_pins, [primary_key: false] ++ table_opts) do
+      add(:id, :serial, primary_key: true)
+      add(:query_id, references(:lotus_queries, type: :integer, on_delete: :delete_all))
+      add(:owner_id, :string)
+      add(:tenant_id, :string)
+      add(:data_source, :string)
+      add(:search_path, :string)
+      add(:statement, :text, null: false)
+      add(:text, :text)
+      add(:vars, :map, null: false, default: "{}")
+      add(:result, :map, null: false, default: "{}")
+      add(:pinned_at, :utc_datetime_usec, null: false)
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create_if_not_exists(index(:lotus_pins, [:owner_id, :query_id], table_opts))
   end
 
   def down(opts \\ %{}) do
     table_opts = Map.take(opts, [:prefix]) |> Map.to_list()
 
+    drop_if_exists(table(:lotus_pins, table_opts))
     drop_if_exists(table(:lotus_schedule_runs, table_opts))
     drop_if_exists(table(:lotus_schedules, table_opts))
 

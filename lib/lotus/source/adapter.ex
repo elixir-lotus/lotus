@@ -614,7 +614,9 @@ defmodule Lotus.Source.Adapter do
     {"public", "lotus_schedules"},
     {nil, "lotus_schedules"},
     {"public", "lotus_schedule_runs"},
-    {nil, "lotus_schedule_runs"}
+    {nil, "lotus_schedule_runs"},
+    {"public", "lotus_pins"},
+    {nil, "lotus_pins"}
   ]
 
   @fallback_schema_denies [
