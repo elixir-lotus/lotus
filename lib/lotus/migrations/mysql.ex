@@ -205,30 +205,11 @@ defmodule Lotus.Migrations.MySQL do
 
     create(index(:lotus_schedule_runs, [:status]))
 
-    create_if_not_exists table(:lotus_pins, primary_key: false) do
-      add(:id, :serial, primary_key: true)
-      add(:query_id, references(:lotus_queries, type: :serial, on_delete: :delete_all))
-      add(:owner_id, :string, size: 255)
-      add(:tenant_id, :string, size: 255)
-      add(:data_source, :string, size: 255)
-      add(:search_path, :string, size: 255)
-      add(:statement, :text, null: false)
-      add(:text, :text)
-      add(:vars, :json, null: false, default: fragment("('{}')"))
-      add(:result, :json, null: false, default: fragment("('{}')"))
-      add(:pinned_at, :utc_datetime_usec, null: false)
-      add(:inserted_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
-      add(:updated_at, :utc_datetime_usec, null: false, default: fragment("(UTC_TIMESTAMP(6))"))
-    end
-
-    create(index(:lotus_pins, [:owner_id, :query_id]))
-
     :ok
   end
 
   @impl Lotus.Migration
   def down(_opts \\ []) do
-    drop(table(:lotus_pins))
     drop(table(:lotus_schedule_runs))
     drop(table(:lotus_schedules))
     drop(table(:lotus_dashboard_card_filter_mappings))
