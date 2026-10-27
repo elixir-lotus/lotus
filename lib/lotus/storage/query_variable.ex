@@ -11,9 +11,12 @@ defmodule Lotus.Storage.QueryVariable do
     * `:static_options` — hardcoded list of allowed values (for selects)
       Can be either a list of strings or a list of {value, label} tuples
     * `:options_query`  — SQL to dynamically populate allowed values
+    * `:options_query_id` — the id of a saved query whose rows are the
+      allowed values. The first column is the value and the second the label
 
   Validation ensures that when a variable is configured as a `:select`
-  widget, it must have either `:static_options` or `:options_query`.
+  widget, it must have `:static_options`, `:options_query` or
+  `:options_query_id`.
   """
 
   use Ecto.Schema
@@ -33,10 +36,11 @@ defmodule Lotus.Storage.QueryVariable do
           default: String.t() | nil,
           list: boolean(),
           static_options: [StaticOption.t()],
-          options_query: String.t() | nil
+          options_query: String.t() | nil,
+          options_query_id: integer() | nil
         }
 
-  @permitted ~w(name type widget label default list options_query)a
+  @permitted ~w(name type widget label default list options_query options_query_id)a
   @required ~w(name type)a
 
   embedded_schema do
@@ -47,6 +51,7 @@ defmodule Lotus.Storage.QueryVariable do
     field(:default, :string)
     field(:list, :boolean, default: false)
     field(:options_query, :string)
+    field(:options_query_id, :integer)
 
     embeds_many(:static_options, StaticOption)
   end
@@ -115,9 +120,14 @@ defmodule Lotus.Storage.QueryVariable do
   defp validate_select_has_options(changeset) do
     static_opts = get_field(changeset, :static_options, [])
     query = get_field(changeset, :options_query)
+    query_id = get_field(changeset, :options_query_id)
 
-    if (static_opts == [] or is_nil(static_opts)) and is_nil(query) do
-      add_error(changeset, :widget, "select must define either static_options or options_query")
+    if (static_opts == [] or is_nil(static_opts)) and is_nil(query) and is_nil(query_id) do
+      add_error(
+        changeset,
+        :widget,
+        "select must define static_options, options_query or options_query_id"
+      )
     else
       changeset
     end
@@ -126,10 +136,14 @@ defmodule Lotus.Storage.QueryVariable do
   @doc """
   Determines the source of options for a query variable.
 
-  Returns `:query` if the variable has a non-empty `options_query`,
-  otherwise returns `:static`.
+  Returns `:saved_query` if the variable has an `options_query_id`, `:query`
+  if it has a non-empty `options_query`, and otherwise `:static`.
 
   ## Examples
+
+      iex> var = %Lotus.Storage.QueryVariable{options_query_id: 42}
+      iex> Lotus.Storage.QueryVariable.get_option_source(var)
+      :saved_query
 
       iex> var = %Lotus.Storage.QueryVariable{options_query: "SELECT id, name FROM users"}
       iex> Lotus.Storage.QueryVariable.get_option_source(var)
@@ -148,7 +162,9 @@ defmodule Lotus.Storage.QueryVariable do
       :static
 
   """
-  @spec get_option_source(t()) :: :query | :static
+  @spec get_option_source(t()) :: :saved_query | :query | :static
+  def get_option_source(%__MODULE__{options_query_id: id}) when not is_nil(id), do: :saved_query
+
   def get_option_source(%__MODULE__{options_query: q}) when is_binary(q) do
     if String.trim(q) != "" do
       :query

@@ -578,7 +578,11 @@ defmodule Lotus.Storage.QueryTest do
 
       assert %{
                variables: [
-                 %{widget: ["select must define either static_options or options_query"]}
+                 %{
+                   widget: [
+                     "select must define static_options, options_query or options_query_id"
+                   ]
+                 }
                ]
              } = errors_on(changeset)
     end
@@ -799,7 +803,7 @@ defmodule Lotus.Storage.QueryTest do
 
       assert Enum.any?(variable_errors, fn errors ->
                Map.has_key?(errors, :widget) and
-                 "select must define either static_options or options_query" in errors.widget
+                 "select must define static_options, options_query or options_query_id" in errors.widget
              end)
     end
   end

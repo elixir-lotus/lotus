@@ -123,6 +123,13 @@
 
 ### Added
 
+- **A saved query as the options of a select variable.**
+  `Lotus.Storage.QueryVariable` has an `options_query_id`: the id of a
+  saved query whose rows are the options, the first column the value and
+  the second the label. `get_option_source/1` returns `:saved_query` for
+  it. The error of a select with no options now names the three fields:
+  `"select must define static_options, options_query or options_query_id"`.
+
 - **`Lotus.diff/3`: how the rows of two queries differ** (#117). It runs
   both queries (each with its own variables and search path) through
   `Lotus.run_query/2`, read only, and matches their rows on a key of one
