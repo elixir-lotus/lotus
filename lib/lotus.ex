@@ -632,6 +632,13 @@ defmodule Lotus do
     run_query(q, opts)
   end
 
+  @doc """
+  How the rows of two queries differ, matched on a key. See `Lotus.Diff.run/3`.
+  """
+  @spec diff(Lotus.Diff.side(), Lotus.Diff.side(), keyword()) ::
+          {:ok, Lotus.Diff.t()} | {:error, term()}
+  defdelegate diff(before, after_, opts), to: Lotus.Diff, as: :run
+
   defp prepare_variables(q, opts) do
     supplied_vars = Keyword.get(opts, :vars, %{}) || %{}
 
