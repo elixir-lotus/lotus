@@ -28,6 +28,29 @@ defmodule Lotus.Storage.QueryVariableTest do
       var = build_var(options_query: "   ")
       assert :static == QueryVariable.get_option_source(var)
     end
+
+    test "returns :saved_query when it has an options_query_id" do
+      var = build_var(options_query_id: 42, options_query: "SELECT 1")
+      assert :saved_query == QueryVariable.get_option_source(var)
+    end
+  end
+
+  describe "changeset/2 with options_query_id" do
+    test "a select with only an options_query_id is valid" do
+      attrs = %{name: "status", type: :text, widget: :select, options_query_id: 42}
+      changeset = QueryVariable.changeset(%QueryVariable{}, attrs)
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :options_query_id) == 42
+    end
+
+    test "a select with no options is invalid" do
+      changeset =
+        QueryVariable.changeset(%QueryVariable{}, %{name: "s", type: :text, widget: :select})
+
+      assert %{widget: ["select must define static_options, options_query or options_query_id"]} =
+               errors_on(changeset)
+    end
   end
 
   describe "changeset/2 with tuple static_options" do
