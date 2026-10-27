@@ -67,7 +67,7 @@ defmodule Lotus.Query.Tokenizer.Reference do
       double? and MapSet.member?(disabled, i) ->
         %{st | i: i + 2}
 
-      double? and st.depth == 0 and block_opener?(b, i) ->
+      double? and opens_block?(b, p, st, i) ->
         st = flush(text, st, i)
         frame = %{acc: st.acc, depth: st.depth, opener: i}
         %{st | i: i + 2, start: i + 2, acc: [], depth: 0, stack: [frame | st.stack]}
@@ -219,6 +219,18 @@ defmodule Lotus.Query.Tokenizer.Reference do
           "array" and not ident?(at(b, word_end - 6))
 
     not ident?(at(b, i - 1)) and not after_array?
+  end
+
+  defp opens_block?(b, p, st, i),
+    do: (st.depth == 0 and block_opener?(b, i)) or (p.json_blocks? and after_value?(b, i))
+
+  # JSON: the byte before the `[[`, whitespace aside, ends a value.
+  defp after_value?(b, i) do
+    j = back_over_whitespace(b, i)
+
+    j > 0 and
+      (at(b, j - 1) in [?}, ?], ?"] or at(b, j - 1) in ?0..?9 or at(b, j - 1) in ?a..?z or
+         at(b, j - 1) in ?A..?Z)
   end
 
   defp back_over_whitespace(b, i) do
