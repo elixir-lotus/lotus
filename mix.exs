@@ -199,6 +199,7 @@ defmodule Lotus.MixProject do
       "guides/caching.md",
       "guides/deployment.md",
       "guides/telemetry.md",
+      "guides/lotus-pro.md",
       "guides/upgrading-to-v1.md",
       "guides/upgrading-to-v2.md",
       "guides/contributing.md"

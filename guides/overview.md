@@ -160,5 +160,8 @@ Continue with the [Installation Guide](installation.md) to set up Lotus in your
 application, then [Getting Started](getting-started.md) for your first queries.
 [Configuration](configuration.md) covers the full set of options.
 
+For teams, [Lotus Pro](lotus-pro.md) adds people and roles, data access,
+sharing, audit, workflows and a governed AI data agent on top.
+
 Upgrading from v0.16.x? Start with [Upgrading to v1.0](upgrading-to-v1.md) —
 v1 is a rewrite, not a drop-in replacement.
