@@ -66,6 +66,8 @@ defmodule Lotus.Migrations.Postgres.V7 do
         references(:lotus_dashboards, type: :integer, on_delete: :delete_all)
       )
 
+      add(:target_type, :string, size: 64)
+      add(:target_id, :string)
       add(:cron, :string, null: false)
       add(:time_zone, :string, null: false, default: "Etc/UTC")
       add(:enabled, :boolean, null: false, default: true)
@@ -83,6 +85,7 @@ defmodule Lotus.Migrations.Postgres.V7 do
     create_if_not_exists(index(:lotus_schedules, [:enabled, :next_run_at], table_opts))
     create_if_not_exists(index(:lotus_schedules, [:query_id], table_opts))
     create_if_not_exists(index(:lotus_schedules, [:dashboard_id], table_opts))
+    create_if_not_exists(index(:lotus_schedules, [:target_type, :target_id], table_opts))
     create_if_not_exists(index(:lotus_schedules, [:tenant_id, :owner_id], table_opts))
 
     create_if_not_exists table(:lotus_schedule_runs, [primary_key: false] ++ table_opts) do

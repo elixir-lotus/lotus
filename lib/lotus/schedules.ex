@@ -67,6 +67,8 @@ defmodule Lotus.Schedules do
   ## Options
 
     * `:query_id`, `:dashboard_id` - The schedules of this query or dashboard
+    * `:target_type`, `:target_id` - The schedules of a registered target
+      (`Lotus.Schedules.Target`)
     * `:enabled` - Only the enabled (`true`) or disabled (`false`) schedules
     * `:owner_id`, `:tenant_id` - As in `Lotus.Storage.list_queries_by/1`
   """
@@ -76,6 +78,8 @@ defmodule Lotus.Schedules do
     |> Ownership.filter(opts)
     |> filter_by(:query_id, opts)
     |> filter_by(:dashboard_id, opts)
+    |> filter_by(:target_type, opts)
+    |> filter_by(:target_id, opts)
     |> filter_by(:enabled, opts)
     |> order_by([s], asc: s.name, asc: s.id)
     |> Lotus.repo().all()

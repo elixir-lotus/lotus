@@ -1,16 +1,18 @@
 defmodule Lotus.Storage.Schedule do
   @moduledoc """
-  A schedule: a saved query or a dashboard run on a cron expression in a time
-  zone. See `Lotus.Schedules`.
+  A schedule: a saved query, a dashboard, or a target an extension registers
+  (`target_type` and `target_id`, `Lotus.Schedules.Target`) run on a cron
+  expression in a time zone. See `Lotus.Schedules`.
 
-  A query schedule with a `rule` is an alert, and keeps its status in
-  `state`; see `Lotus.Schedules.Alert`. `state` is written by the runs only.
+  A query or target schedule with a `rule` is an alert, and keeps its
+  status in `state`; see `Lotus.Schedules.Alert`. `state` is written by the
+  runs only.
   """
 
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias Lotus.Schedules.Cron
+  alias Lotus.Schedules.{Cron, Targets}
   alias Lotus.Storage.{Dashboard, Query, ScheduleDelivery, ScheduleRule, ScheduleRun}
 
   @type t :: %__MODULE__{
@@ -18,6 +20,8 @@ defmodule Lotus.Storage.Schedule do
           name: String.t(),
           query_id: term() | nil,
           dashboard_id: term() | nil,
+          target_type: String.t() | nil,
+          target_id: String.t() | nil,
           cron: String.t(),
           time_zone: String.t(),
           enabled: boolean(),
@@ -44,6 +48,8 @@ defmodule Lotus.Storage.Schedule do
              :name,
              :query_id,
              :dashboard_id,
+             :target_type,
+             :target_id,
              :cron,
              :time_zone,
              :enabled,
@@ -61,6 +67,8 @@ defmodule Lotus.Storage.Schedule do
 
   schema "lotus_schedules" do
     field(:name, :string)
+    field(:target_type, :string)
+    field(:target_id, :string)
     field(:cron, :string)
     field(:time_zone, :string, default: "Etc/UTC")
     field(:enabled, :boolean, default: true)
@@ -82,7 +90,7 @@ defmodule Lotus.Storage.Schedule do
   end
 
   @required ~w(name cron)a
-  @permitted ~w(name query_id dashboard_id cron time_zone enabled params)a
+  @permitted ~w(name query_id dashboard_id target_type target_id cron time_zone enabled params)a
 
   @doc false
   def changeset(schedule, attrs) do
@@ -100,20 +108,43 @@ defmodule Lotus.Storage.Schedule do
     |> foreign_key_constraint(:dashboard_id)
   end
 
-  # A schedule runs exactly one thing: a query or a dashboard.
+  # A schedule runs exactly one thing: a query, a dashboard, or a target of
+  # a registered type.
   defp validate_target(changeset) do
-    case {get_field(changeset, :query_id), get_field(changeset, :dashboard_id)} do
-      {nil, nil} ->
+    target = get_field(changeset, :target_type)
+
+    case Enum.reject(
+           [
+             get_field(changeset, :query_id),
+             get_field(changeset, :dashboard_id),
+             target
+           ],
+           &is_nil/1
+         ) do
+      [] ->
         add_error(changeset, :query_id, "a query or a dashboard is required")
 
-      {_query, nil} ->
+      [_one] when is_nil(target) ->
         changeset
 
-      {nil, _dashboard} ->
-        changeset
+      [_one] ->
+        validate_target_type(changeset, target)
 
-      {_query, _dashboard} ->
-        add_error(changeset, :dashboard_id, "a schedule runs a query or a dashboard, not both")
+      _many ->
+        add_error(changeset, :dashboard_id, "a schedule runs one query, dashboard or target")
+    end
+  end
+
+  defp validate_target_type(changeset, type) do
+    cond do
+      not Map.has_key?(Targets.all(), type) ->
+        add_error(changeset, :target_type, "is not a known target: #{inspect(type)}")
+
+      get_field(changeset, :target_id) in [nil, ""] ->
+        add_error(changeset, :target_id, "can't be blank")
+
+      true ->
+        changeset
     end
   end
 
@@ -121,7 +152,7 @@ defmodule Lotus.Storage.Schedule do
   # rule starts from "ok".
   defp validate_rule(changeset) do
     changeset =
-      if get_field(changeset, :rule) && is_nil(get_field(changeset, :query_id)),
+      if get_field(changeset, :rule) && get_field(changeset, :dashboard_id),
         do: add_error(changeset, :rule, "an alert watches a query, not a dashboard"),
         else: changeset
 
