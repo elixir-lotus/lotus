@@ -293,6 +293,69 @@ defmodule Lotus.Query.TokenizerTest do
                {:variable, "v", "{{v}}"}
              ]
     end
+
+    test "opens a block inside an array right after a value" do
+      text = ~S|{"filter": [{"match_all": {}} [[, {"term": {"a": "{{a}}"}}]]]}|
+
+      assert Tokenizer.tokenize(text, json()) == [
+               {:code, "{"},
+               {:string, ~S|"filter"|},
+               {:code, ": [{"},
+               {:string, ~S|"match_all"|},
+               {:code, ": {}} "},
+               {:block,
+                [
+                  code: ", {",
+                  string: ~S|"term"|,
+                  code: ": {",
+                  string: ~S|"a"|,
+                  code: ": ",
+                  string: ~S|"{{a}}"|,
+                  code: "}}"
+                ]},
+               {:code, "]}"}
+             ]
+    end
+
+    test "opens a block after any value: a string, a number, a literal, a variable, a block" do
+      for value <- [~S|"x"|, "1", "-2.5e3", "true", "null", "{{v}}", "[1]", "{}"] do
+        tokens = Tokenizer.tokenize("[" <> value <> " [[, 2]]]", json())
+        assert {:block, [code: ", 2"]} in tokens, "no block after #{value}"
+      end
+    end
+
+    test "keeps a nested array an array" do
+      for text <- [~S|{"c": [[1, 2], [3, 4]]}|, ~S|{"a": [0, [[1, 2]]]}|, ~S|{"a": [{}, [[1]]]}|] do
+        refute Enum.any?(Tokenizer.tokenize(text, json()), &match?({:block, _}, &1)), text
+      end
+    end
+
+    test "still reads [[ after `[`, `,` or `:` by the bracket rule" do
+      # Outside an array, a block; inside one, brackets.
+      assert {:block, [{:variable, "x", "{{x}}"}]} in Tokenizer.tokenize(
+               ~S|{"a": [[{{x}}]]}|,
+               json()
+             )
+
+      refute Enum.any?(
+               Tokenizer.tokenize(~S|[ [[ {"x": 1}, ]] 2]|, json()),
+               &match?({:block, _}, &1)
+             )
+    end
+
+    test "leaves SQL as it was" do
+      assert Tokenizer.tokenize("SELECT 'a' [[, 1]]", Profile.for_language("sql")) ==
+               [{:code, "SELECT "}, {:string, "'a'"}, {:code, " "}, {:block, [code: ", 1"]}]
+
+      assert [{:code, "SELECT x FROM t WHERE a = arr[1] "}, {:block, _}] =
+               Tokenizer.tokenize(
+                 "SELECT x FROM t WHERE a = arr[1] [[AND b]]",
+                 Profile.for_language("sql")
+               )
+
+      assert Tokenizer.tokenize("SELECT ARRAY[1 [[2]]]", Profile.for_language("sql")) ==
+               [{:code, "SELECT ARRAY[1 [[2]]]"}]
+    end
   end
 
   describe "to_string/1" do

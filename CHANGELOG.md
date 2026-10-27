@@ -398,6 +398,19 @@
 
 ### Fixed
 
+- **An optional block inside a JSON array is a block again.** Since the
+  tokenizer's rewrite (#385), `[[` opened a block only where no single `[`
+  was open, so in an Elasticsearch request
+  `"filter": [{"term": …} [[, {"range": …}]]]` the block was plain
+  brackets: without its variable the request failed with "Missing required
+  variable", and with it the brackets stayed and broke the JSON. It worked
+  on 1.3. JSON profiles have `json_blocks?` (new in
+  `Lotus.Query.Tokenizer.Profile`): `[[` right after a JSON value (`}`,
+  `]`, `"`, a digit or a letter) opens a block even inside an array, since
+  in valid JSON no `[` follows a value. After `[`, `,`, `:` or `{` the
+  bracket rule still decides, so `"coordinates": [[1, 2], [3, 4]]` stays an
+  array.
+
 - **The tokenizer follows each dialect's lexical rules more closely.** Each
   of these hid code from the read-only and single-statement checks, or
   took template syntax out of SQL:
