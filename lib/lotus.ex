@@ -736,8 +736,17 @@ defmodule Lotus do
   # phase the runner tagged them with, so the run span can report it.
   defp exec_cached_statement(adapter, statement, runner_opts, cache, pagination_meta) do
     case cache |> lookup_execution() |> current_entry(adapter, runner_opts) do
-      {:current, %{result: res, relations: relations}} ->
-        {:ok, %{statement: statement, result: res, relations: relations, origin: :cached}}
+      {:current, %{result: res, relations: relations} = entry} ->
+        # An entry stored before entries carried column sources has none:
+        # `:after_query` then gets every column as `:unresolved`.
+        {:ok,
+         %{
+           statement: statement,
+           result: res,
+           relations: relations,
+           column_sources: Map.get(entry, :column_sources),
+           origin: :cached
+         }}
 
       lookup ->
         Runner.query_span(adapter, statement, runner_opts, fn ->
@@ -767,7 +776,7 @@ defmodule Lotus do
   defp authorize_and_store(adapter, statement, runner_opts, cache, lookup, pagination_meta) do
     with {:ok, %{rules: rules} = authorization} <-
            Runner.authorize_phases(adapter, statement, runner_opts),
-         {:ok, %{result: %Result{} = res}} <-
+         {:ok, %{result: %Result{} = res} = execution} <-
            store_execution(cache, lookup, rules, fn ->
              execute_authorized(adapter, statement, authorization, runner_opts, pagination_meta)
            end) do
@@ -776,17 +785,29 @@ defmodule Lotus do
       # preflight relations with origin `:executed`, and the gate must not run
       # twice.
       authorization = Map.drop(authorization, [:rules, :columns])
-      {:ok, Map.merge(authorization, %{statement: statement, result: res, origin: :executed})}
+
+      {:ok,
+       Map.merge(authorization, %{
+         statement: statement,
+         result: res,
+         column_sources: Map.get(execution, :column_sources),
+         origin: :executed
+       })}
     end
   end
 
   defp execute_authorized(adapter, statement, authorization, runner_opts, pagination_meta) do
     %{relations: relations, rules: rules} = authorization
 
-    with {:ok, %Result{} = res} <-
+    with {:ok, %{result: %Result{} = res, column_sources: column_sources}} <-
            Runner.execute_authorized(adapter, statement, authorization, runner_opts) do
       {:ok,
-       %{result: merge_pagination_meta(res, pagination_meta), relations: relations, rules: rules}}
+       %{
+         result: merge_pagination_meta(res, pagination_meta),
+         relations: relations,
+         rules: rules,
+         column_sources: column_sources
+       }}
     end
   end
 

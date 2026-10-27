@@ -27,7 +27,7 @@ Each middleware receives a payload map whose contents depend on the pipeline eve
 |-------|-----------|--------------|
 | `:before_query` | Before sanitization, preflight and execution | `:statement`, `:source`, `:context`, `:vars` |
 | `:before_execute` | After sanitization and preflight pass, before execution — or, on a cache hit, before the stored result is returned | `:statement`, `:relations`, `:origin`, `:assigns`, `:source`, `:context`, `:vars` |
-| `:after_query` | After execution, before result returned to caller | `:result`, `:statement`, `:relations`, `:origin`, `:assigns`, `:source`, `:context`, `:vars` |
+| `:after_query` | After execution, before result returned to caller | `:result`, `:statement`, `:relations`, `:column_sources`, `:origin`, `:assigns`, `:source`, `:context`, `:vars` |
 | `:after_list_schemas` | After schema discovery and visibility filtering | `:schemas`, `:source`, `:scope`, `:context` |
 | `:after_list_tables` | After table discovery and visibility filtering | `:tables`, `:source`, `:scope`, `:context` |
 | `:after_describe_table` | After table schema introspection and column visibility | `:columns`, `:table_name`, `:schema`, `:source`, `:scope`, `:context` |
@@ -152,6 +152,26 @@ log which case it hit, and both mean "unknown".
 by table — drop or mask columns of one relation, annotate another — does so
 without a second analysis. Both events also carry `:origin`, `:executed` or
 `:cached`.
+
+Over a join, a result names a column only, and two tables may both have a
+`ssn`. `:after_query` also carries `:column_sources`, one entry per column of
+`result.columns`, in order: `{:relation, {schema, table}}` when Lotus traced
+the column to that relation for sure (a qualified column as is, `u.ssn` or
+`u.ssn AS ssn`), `:unresolved` otherwise. Apply a traced column's own
+relation's rule, and to an `:unresolved` column the strictest rule any of the
+relations has for its name, which is how Lotus applies its own column
+policies:
+
+```elixir
+defp rule_for(name, {:relation, relation}, _relations, rules), do: rules.(relation, name)
+
+defp rule_for(name, :unresolved, relations, rules),
+  do: relations |> Enum.map(&rules.(&1, name)) |> MyApp.Rules.strictest()
+```
+
+A plug that changes `result.columns` keeps `:column_sources` in step, so the
+plugs after it read the right entry for each column. See
+`Lotus.Middleware` for which columns are `:unresolved`.
 
 A stream (`Lotus.stream_query/3`) fires `:before_query` and `:before_execute`
 once, and `:after_query` once per chunk of rows with `origin: :streamed`, so a

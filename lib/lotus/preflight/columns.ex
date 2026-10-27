@@ -102,7 +102,8 @@ defmodule Lotus.Preflight.Columns do
   The sources of a statement's result columns, by position. A column past
   the end of the list (one at or after a `*` or `t.*`) is `:unresolved`.
   `nil` when nothing is known: a set operation, a statement whose result
-  isn't a plain select list, or no column policy to check.
+  isn't a plain select list, or one that renames columns with a column
+  alias list.
   """
   @type sources :: [source()] | nil
 
@@ -112,32 +113,161 @@ defmodule Lotus.Preflight.Columns do
   """
   @spec check(String.t(), Profile.t(), Matcher.t(), Relations.outcome()) ::
           :ok | {:error, String.t()}
-  def check(sql, profile, matcher, relations) do
-    with {:ok, _sources} <- result_sources(sql, profile, matcher, relations), do: :ok
+  def check(sql, %Profile{} = profile, %Matcher{} = matcher, relations) when is_binary(sql) do
+    rels = Relations.to_list(relations)
+
+    if Matcher.restricts_columns?(matcher, rels) do
+      with {:ok, _sources} <- sql |> lex(profile) |> annotate() |> verify(matcher, rels),
+           do: :ok
+    else
+      :ok
+    end
   end
+
+  def check(_sql, _profile, _matcher, _relations), do: :ok
 
   @doc """
   `check/4`, returning on success where each result column comes from (see
   `t:sources/0`), so that a column policy can apply by the column's own
   relation rather than by its name across every relation.
+
+  A statement that only selects `*` from one derived table or CTE, and only
+  filters, sorts or cuts its rows (the wrappers of a window, a filter and a
+  sort), has the columns of the statement inside, in order, so it has that
+  statement's sources. Anything else is judged as it stands.
+
+  The sources are worked out whether or not `matcher` protects a column, so
+  that a consumer with column rules of its own (an `:after_query` plug) can
+  apply them by the same decision: a column traced to its relation gets that
+  relation's rule, any other the strictest any touched relation has.
   """
   @spec result_sources(String.t(), Profile.t(), Matcher.t(), Relations.outcome()) ::
           {:ok, sources()} | {:error, String.t()}
   def result_sources(sql, %Profile{} = profile, %Matcher{} = matcher, relations)
       when is_binary(sql) do
     rels = Relations.to_list(relations)
+    lexemes = lex(sql, profile)
 
     if Matcher.restricts_columns?(matcher, rels) do
-      sql
-      |> lex(profile)
-      |> annotate()
-      |> verify(matcher, rels)
+      with {:ok, sources} <- lexemes |> annotate() |> verify(matcher, rels),
+           do: {:ok, through_wrappers(lexemes, rels, sources)}
     else
-      {:ok, nil}
+      {:ok, unchecked_sources(lexemes, rels)}
     end
   end
 
   def result_sources(_sql, _profile, _matcher, _relations), do: {:ok, nil}
+
+  # The sources of a statement no column policy restricts: nothing to refuse,
+  # so a statement the check would refuse (a column alias list) and anything
+  # it can't read have no sources, which a consumer takes for unknown.
+  defp unchecked_sources(lexemes, rels) do
+    case unwrap(lexemes) do
+      {:inner, inner} -> unchecked_sources(inner, rels)
+      :none -> own_sources(lexemes, rels)
+    end
+  rescue
+    _ -> nil
+  end
+
+  # The check passed the whole statement. When it only selects `*` from one
+  # derived table or CTE, its columns are that statement's, in order.
+  defp through_wrappers(lexemes, rels, sources) do
+    case unwrap(lexemes) do
+      {:inner, inner} -> unchecked_sources(inner, rels)
+      :none -> sources
+    end
+  end
+
+  defp own_sources(lexemes, rels) do
+    case annotate(lexemes) do
+      %{alias_list?: true} ->
+        nil
+
+      notes ->
+        column_sources(
+          %{out: notes.out, ctes: notes.ctes, rels: rels, set_op?: notes.set_op?},
+          %{}
+        )
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Wrappers: a statement whose columns are another's
+  # ---------------------------------------------------------------------------
+
+  # A window, a filter and a sort wrap the caller's statement, and its
+  # columns pass through unchanged:
+  #
+  #     SELECT * FROM (inner) AS lotus_sub LIMIT $2 OFFSET $3
+  #     WITH _base AS (inner) SELECT * FROM _base WHERE "region" = $2
+  #     WITH _sorted AS (inner) SELECT * FROM _sorted ORDER BY "id" DESC
+  #
+  # Any statement of these shapes selects `*` from exactly one derived table
+  # or CTE, so its columns are the inner statement's, in the same order, and
+  # each has the inner statement's source. What follows the derived table or
+  # CTE may only filter, sort or cut rows (WHERE, ORDER BY, LIMIT, OFFSET,
+  # FETCH), with no set operation or join at its level. A column alias list
+  # (`AS t(a, b)`), a second CTE, `RECURSIVE`, `MATERIALIZED` or anything else
+  # is no wrapper: the statement's sources are its own, `:unresolved` through
+  # its `*`.
+  defp unwrap(lexemes) do
+    case strip_semicolons(lexemes) do
+      [{:kw, "select"}, "*", {:kw, "from"}, "(" | rest] ->
+        with {:ok, inner, after_inner} <- closing(rest, 0, []),
+             {:ok, tail} <- derived_alias(after_inner),
+             true <- inner != [] and row_tail?(tail) do
+          {:inner, inner}
+        else
+          _ -> :none
+        end
+
+      [{:kw, "with"}, {:name, _raw, name}, {:kw, "as"}, "(" | rest] ->
+        with {:ok, inner, after_inner} <- closing(rest, 0, []),
+             [{:kw, "select"}, "*", {:kw, "from"}, {:name, _, ^name} | tail] <- after_inner,
+             true <- inner != [] and row_tail?(tail) do
+          {:inner, inner}
+        else
+          _ -> :none
+        end
+
+      _ ->
+        :none
+    end
+  end
+
+  defp strip_semicolons(lexemes) do
+    lexemes |> :lists.reverse() |> Enum.drop_while(&(&1 == ";")) |> :lists.reverse()
+  end
+
+  # The lexemes up to the `)` that closes the one before them, and those
+  # after it.
+  defp closing([")" | rest], 0, acc), do: {:ok, :lists.reverse(acc), rest}
+  defp closing([")" | rest], depth, acc), do: closing(rest, depth - 1, [")" | acc])
+  defp closing(["(" | rest], depth, acc), do: closing(rest, depth + 1, ["(" | acc])
+  defp closing([lexeme | rest], depth, acc), do: closing(rest, depth, [lexeme | acc])
+  defp closing([], _depth, _acc), do: :error
+
+  defp derived_alias([{:kw, "as"}, {:name, _, _} | tail]), do: {:ok, tail}
+  defp derived_alias([{:name, _, _} | tail]), do: {:ok, tail}
+  defp derived_alias(_after_inner), do: :error
+
+  @row_clauses ~w(where order limit offset fetch)
+  @not_in_row_tail @set_ops ++ ~w(join select from with)
+
+  # Nothing, or clauses that keep the columns, with no set operation, join
+  # or other query at their level.
+  defp row_tail?([]), do: true
+  defp row_tail?([{:kw, kw} | _] = tail) when kw in @row_clauses, do: flat_tail?(tail, 0)
+  defp row_tail?(_tail), do: false
+
+  defp flat_tail?([], _depth), do: true
+  defp flat_tail?(["(" | rest], depth), do: flat_tail?(rest, depth + 1)
+  defp flat_tail?([")" | _rest], 0), do: false
+  defp flat_tail?([")" | rest], depth), do: flat_tail?(rest, depth - 1)
+  defp flat_tail?([";" | _rest], _depth), do: false
+  defp flat_tail?([{:kw, kw} | _rest], 0) when kw in @not_in_row_tail, do: false
+  defp flat_tail?([_lexeme | rest], depth), do: flat_tail?(rest, depth)
 
   @doc false
   # The tables a statement names in FROM and JOIN, as name paths
