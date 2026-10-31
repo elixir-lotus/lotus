@@ -22,7 +22,8 @@ defmodule Lotus.Settings do
   (`:persistent_term`, ETS), never from a database on each call. What it
   answers goes over the config: a value replaces it, a keyword list or a
   map is merged into it (`ai: [model: …]` keeps the config's `:api_key`).
-  `:default` leaves the config as it is, and so does a raise, which is
+  `:default` leaves the config as it is, and so do a raise and an answer
+  the config would not take (`{:ok, nil}` for `:read_only`), which are
   logged.
 
   The keys are `overridable/0`. Check a value before storing it with
@@ -79,7 +80,26 @@ defmodule Lotus.Settings do
   def apply(key, configured) when key in @overridable do
     case module() do
       nil -> configured
-      module -> merge(configured, answer(module, key))
+      module -> module |> answer(key) |> checked(key, configured, module)
+    end
+  end
+
+  defp checked(:default, _key, configured, _module), do: configured
+
+  defp checked({:ok, _value} = answer, key, configured, module) do
+    merged = merge(configured, answer)
+
+    case validate(key, merged) do
+      {:ok, _validated} ->
+        merged
+
+      {:error, message} ->
+        Logger.warning(
+          "#{inspect(module)}.get(#{inspect(key)}) answered a value the config would not " <>
+            "take, so the config's is used: #{message}"
+        )
+
+        configured
     end
   end
 
@@ -99,7 +119,6 @@ defmodule Lotus.Settings do
       :default
   end
 
-  defp merge(configured, :default), do: configured
   defp merge(configured, {:ok, value}), do: deep_merge(configured, value)
 
   defp deep_merge(left, right) when is_map(left) and is_map(right),

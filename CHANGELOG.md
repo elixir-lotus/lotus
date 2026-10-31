@@ -162,6 +162,11 @@
   A statement with session settings now may not change settings, on a
   read-write run too. A statement without them is unchanged.
 
+- **A settings answer the config would not take is ignored.** A
+  `Lotus.Settings` module that answered `{:ok, nil}` for `:read_only`
+  turned read-only off on PostgreSQL. An answer that doesn't validate now
+  keeps the config's value, with a warning.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
