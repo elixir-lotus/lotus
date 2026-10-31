@@ -148,6 +148,13 @@
   CTE of its name, outside the subquery that defines one, or in the body
   of a non-recursive CTE of its own name, now counts as the table.
 
+- **MySQL: a system schema is matched in any case.** MySQL reads
+  `INFORMATION_SCHEMA` as `information_schema`, but Lotus matched the
+  name as written against its built-in denies. A relation in a system
+  schema (`information_schema`, `mysql`, `performance_schema`, `sys`) is
+  now also checked in lower case, and every table name too when the
+  server folds them (`lower_case_table_names` other than 0).
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
