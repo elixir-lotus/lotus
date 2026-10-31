@@ -1122,12 +1122,15 @@ defmodule Lotus.Source.Adapters.Ecto do
   def do_sanitize_query(dialect, %Statement{body: sql}, opts) do
     read_only = Keyword.get(opts, :read_only, true)
 
+    profile = lexical_profile(dialect)
+
     tokens =
       sql
       |> Sanitizer.strip_trailing_semicolon()
-      |> Tokenizer.tokenize(lexical_profile(dialect))
+      |> Tokenizer.tokenize(profile)
 
     with :ok <- assert_single_statement(tokens),
+         :ok <- assert_contained(tokens, profile),
          :ok <- assert_not_denied(tokens, read_only) do
       assert_no_side_effects(dialect, tokens, read_only)
     end
@@ -1183,9 +1186,11 @@ defmodule Lotus.Source.Adapters.Ecto do
     {limit_ph, offset_ph} =
       dialect.limit_offset_placeholders(param_count + 1, param_count + 2)
 
+    # The body stands on lines of its own, so that a line comment at its end
+    # can't reach the LIMIT: the sanitizer refuses what then isn't contained.
     paged_sql =
-      "SELECT * FROM (" <>
-        base_sql <> ") AS lotus_sub LIMIT " <> limit_ph <> " OFFSET " <> offset_ph
+      "SELECT * FROM (\n" <>
+        base_sql <> "\n) AS lotus_sub LIMIT " <> limit_ph <> " OFFSET " <> offset_ph
 
     paged_params = params ++ [limit, offset]
 
@@ -1193,7 +1198,7 @@ defmodule Lotus.Source.Adapters.Ecto do
       case count_mode do
         :exact ->
           %{
-            query: "SELECT COUNT(*) FROM (" <> base_sql <> ") AS lotus_sub",
+            query: "SELECT COUNT(*) FROM (\n" <> base_sql <> "\n) AS lotus_sub",
             params: params
           }
 
@@ -1429,6 +1434,39 @@ defmodule Lotus.Source.Adapters.Ecto do
       :ok
     end
   end
+
+  # Lotus wraps a statement in its own (a window, a count), which holds only
+  # while the statement closes every parenthesis it opens, none it didn't,
+  # and every comment.
+  defp assert_contained(tokens, profile) do
+    depths =
+      tokens
+      |> Tokenizer.code()
+      |> Enum.flat_map(&String.graphemes/1)
+      |> Enum.scan(0, fn
+        "(", depth -> depth + 1
+        ")", depth -> depth - 1
+        _char, depth -> depth
+      end)
+
+    if Enum.any?(depths, &(&1 < 0)) or List.last(depths, 0) != 0 or
+         open_comment?(List.last(tokens), profile),
+       do: {:error, "Query has unbalanced parentheses or an unclosed comment"},
+       else: :ok
+  end
+
+  # A block comment the tokenizer didn't close runs to the end of the input.
+  # Where comments nest, a closed one has as many `*/` as `/*`.
+  defp open_comment?({:comment, "/*" <> _ = raw}, %Profile{nested_block_comments?: true}),
+    do: comment_depth(raw, 0) != 0
+
+  defp open_comment?({:comment, "/*" <> rest}, _profile), do: not String.ends_with?(rest, "*/")
+  defp open_comment?(_token, _profile), do: false
+
+  defp comment_depth(<<"/*", rest::binary>>, depth), do: comment_depth(rest, depth + 1)
+  defp comment_depth(<<"*/", rest::binary>>, depth), do: comment_depth(rest, depth - 1)
+  defp comment_depth(<<_, rest::binary>>, depth), do: comment_depth(rest, depth)
+  defp comment_depth(<<>>, depth), do: depth
 
   defp assert_not_denied(_tokens, false = _read_only), do: :ok
 
