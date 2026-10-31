@@ -18,7 +18,7 @@ defmodule Lotus.Preflight do
   """
 
   alias Lotus.Config
-  alias Lotus.Preflight.Relations
+  alias Lotus.Preflight.{Columns, Relations}
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapter
   alias Lotus.Visibility
@@ -78,17 +78,27 @@ defmodule Lotus.Preflight do
         do: %{statement | meta: Map.put(statement.meta, :search_path, search_path)},
         else: statement
 
-    case Adapter.extract_accessed_resources(adapter, statement) do
+    case extract_accessed_resources(adapter, statement) do
       {:ok, relations} ->
         rels = MapSet.to_list(relations)
         check_relations_visibility(rels, matcher_fun)
 
       {:error, e} ->
-        {:error, normalize_preflight_error(e, adapter)}
+        with :ok <- named_relations_visible(adapter, statement, search_path, matcher_fun),
+             do: {:error, normalize_preflight_error(e, adapter)}
 
       {:unrestricted, reason} ->
         handle_unrestricted(adapter, reason)
     end
+  end
+
+  # A source that raises while it plans the statement (a bound value it
+  # can't encode for the column's type) fails it as one that returns an
+  # error does: after the tables the statement names are checked.
+  defp extract_accessed_resources(adapter, statement) do
+    Adapter.extract_accessed_resources(adapter, statement)
+  rescue
+    e -> {:error, e}
   end
 
   defp handle_unrestricted(%Adapter{name: name}, reason) do
@@ -114,6 +124,73 @@ defmodule Lotus.Preflight do
     else
       {:error, "Query touches blocked table(s): #{format_relations(blocked)}"}
     end
+  end
+
+  # The source's error for a statement it couldn't plan can tell whether a
+  # hidden table has a column (`no such column`), which a refusal does not.
+  # So the tables the statement names count first: one the rules hide under
+  # every schema it could resolve to gets the refusal a planned statement
+  # would. An unquoted name may fold to lower case, so either spelling hides.
+  defp named_relations_visible(adapter, %Statement{body: sql}, search_path, matcher_fun)
+       when is_binary(sql) do
+    if String.starts_with?(Adapter.query_language(adapter), "sql") do
+      schemas = candidate_schemas(adapter, search_path)
+      matcher = matcher_fun.()
+
+      blocked =
+        sql
+        |> Columns.table_names(Adapter.lexical_profile(adapter))
+        |> Enum.flat_map(&hidden_relation(&1, schemas, matcher))
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      if blocked == [],
+        do: :ok,
+        else: {:error, "Query touches blocked table(s): #{format_relations(blocked)}"}
+    else
+      :ok
+    end
+  end
+
+  defp named_relations_visible(_adapter, _statement, _search_path, _matcher_fun), do: :ok
+
+  defp candidate_schemas(adapter, search_path) when is_binary(search_path) do
+    case search_path
+         |> String.split(",")
+         |> Enum.map(&String.trim/1)
+         |> Enum.reject(&(&1 == "")) do
+      [] -> candidate_schemas(adapter, nil)
+      schemas -> schemas
+    end
+  end
+
+  defp candidate_schemas(adapter, _search_path) do
+    case Adapter.default_schemas(adapter) do
+      [] -> [nil]
+      schemas -> schemas
+    end
+  end
+
+  defp hidden_relation(path, schemas, matcher) do
+    relations =
+      case path do
+        [table] -> Enum.map(schemas, &{&1, table})
+        [schema, table] -> [{schema, table}]
+        [_catalog, schema, table] -> [{schema, table}]
+        _ -> []
+      end
+
+    hidden =
+      Enum.map(relations, fn {schema, table} ->
+        Enum.find(
+          [{schema && String.downcase(schema), String.downcase(table)}, {schema, table}],
+          fn rel ->
+            not Visibility.allowed_relation?(matcher, rel)
+          end
+        )
+      end)
+
+    if hidden != [] and Enum.all?(hidden), do: Enum.take(hidden, 1), else: []
   end
 
   defp format_relations(relations) do

@@ -91,6 +91,13 @@
   `:scope` (new option, which `Lotus.run_query/2`, `Lotus.stream_query/3`
   and `Lotus.can_run?/2` pass); otherwise the variable is text.
 
+- **A hidden table gets the same refusal whether the source can plan the
+  statement or not.** When the source failed to plan a statement (an
+  unknown column, a value of the wrong type), preflight returned its error
+  before the visibility check, so the error could tell what a hidden table
+  holds. Preflight now first checks the tables the statement names, and
+  refuses one that the rules hide as it refuses a planned statement.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
