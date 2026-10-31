@@ -382,6 +382,32 @@ defmodule Lotus.Source.Adapters.EctoTest do
                Adapter.sanitize_query(adapter, Statement.new("SELECT 1; DROP TABLE users"), [])
     end
 
+    test "rejects a statement that doesn't close what it opens, or closes what it didn't" do
+      for {adapter, sql} <- [
+            {EctoAdapter.wrap("main", Repo), "SELECT 1) AS x --"},
+            {EctoAdapter.wrap("main", Repo), "SELECT (1"},
+            {EctoAdapter.wrap("main", Repo), "SELECT 1 /* note"},
+            {Postgres.wrap("pg", Repo), "SELECT 1 /* a /* b */"},
+            {SQLite3.wrap("lite", SqliteRepo), "SELECT 1 /*"}
+          ] do
+        assert {:error, "Query has unbalanced parentheses or an unclosed comment"} =
+                 Adapter.sanitize_query(adapter, Statement.new(sql), read_only: false),
+               sql
+      end
+    end
+
+    test "passes parentheses and comments inside literals, identifiers and comments" do
+      for {adapter, sql} <- [
+            {EctoAdapter.wrap("main", Repo), "SELECT ')' AS x, \"(\" FROM t -- )"},
+            {EctoAdapter.wrap("main", Repo), "SELECT (1) /* ( */"},
+            {Postgres.wrap("pg", Repo), "SELECT 1 /* a /* b */ c */"},
+            {Postgres.wrap("pg", Repo), "SELECT $$)$$"},
+            {SQLite3.wrap("lite", SqliteRepo), "SELECT 1 /* a /* b */"}
+          ] do
+        assert :ok = Adapter.sanitize_query(adapter, Statement.new(sql), []), sql
+      end
+    end
+
     test "postgres nests block comments when looking for a second statement" do
       adapter = Postgres.wrap("pg", Repo)
 

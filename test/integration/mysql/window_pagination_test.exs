@@ -105,4 +105,18 @@ defmodule Lotus.Integration.Mysql.WindowPaginationTest do
       assert result.meta[:total_mode] == :exact
     end
   end
+
+  describe "a statement that doesn't stay inside the window (mysql)" do
+    test "is refused, so the window holds" do
+      for sql <- [
+            "SELECT name FROM test_users WHERE ? IS NOT NULL AND ? IS NOT NULL) AS x -- ",
+            "SELECT name FROM test_users WHERE ? IS NOT NULL AND ? IS NOT NULL) AS x #",
+            "SELECT name FROM test_users WHERE ? IS NOT NULL AND ? IS NOT NULL) AS x /*"
+          ] do
+        assert {:error, "Query has unbalanced parentheses or an unclosed comment"} =
+                 Lotus.run_statement(sql, [], repo: "mysql", window: [limit: 1]),
+               sql
+      end
+    end
+  end
 end

@@ -62,6 +62,13 @@
   pooled connection. The check now reads those names, and refuses a PRAGMA
   whose name or form it can't read.
 
+- **A window's limit holds whatever the statement ends with.** Lotus pages
+  a statement by wrapping it in its own (`SELECT * FROM (...) AS lotus_sub
+  LIMIT ... OFFSET ...`, and a count). The statement now stands on lines
+  of its own inside the wrapper, and the sanitizer refuses a statement that
+  doesn't close every parenthesis it opens, closes one it didn't open, or
+  ends inside a comment. Such a statement isn't valid SQL on its own.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

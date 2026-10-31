@@ -105,4 +105,17 @@ defmodule Lotus.Integration.Postgres.WindowPaginationTest do
       assert result.meta[:total_mode] == :exact
     end
   end
+
+  describe "a statement that doesn't stay inside the window (postgres)" do
+    test "is refused, so the window holds" do
+      for sql <- [
+            "SELECT name FROM test_users WHERE $1::int IS NOT NULL AND $2::int IS NOT NULL) AS x --",
+            "SELECT name FROM test_users WHERE $1::int IS NOT NULL AND $2::int IS NOT NULL) AS x /*"
+          ] do
+        assert {:error, "Query has unbalanced parentheses or an unclosed comment"} =
+                 Lotus.run_statement(sql, [], repo: "postgres", window: [limit: 1]),
+               sql
+      end
+    end
+  end
 end
