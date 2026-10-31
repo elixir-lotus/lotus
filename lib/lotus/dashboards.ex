@@ -802,7 +802,33 @@ defmodule Lotus.Dashboards do
 
     attrs
     |> DashboardCardFilterMapping.new()
+    |> validate_same_dashboard()
     |> Mutation.run(:create, :filter_mapping, opts)
+  end
+
+  # A mapping links a card and a filter of the same dashboard.
+  defp validate_same_dashboard(%Ecto.Changeset{valid?: false} = changeset), do: changeset
+
+  defp validate_same_dashboard(changeset) do
+    card_id = Ecto.Changeset.get_field(changeset, :card_id)
+    filter_id = Ecto.Changeset.get_field(changeset, :filter_id)
+
+    card_dashboard =
+      Lotus.repo().one(from(c in DashboardCard, where: c.id == ^card_id, select: c.dashboard_id))
+
+    filter_dashboard =
+      Lotus.repo().one(
+        from(f in DashboardFilter, where: f.id == ^filter_id, select: f.dashboard_id)
+      )
+
+    if card_dashboard && filter_dashboard && card_dashboard != filter_dashboard,
+      do:
+        Ecto.Changeset.add_error(
+          changeset,
+          :filter_id,
+          "must be a filter of the card's dashboard"
+        ),
+      else: changeset
   end
 
   @doc """
