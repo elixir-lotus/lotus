@@ -242,6 +242,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
     # validator rejects (e.g. "2024_events" starts with a digit).
     # Quoted identifiers remain injection-safe via the escape-doubling in
     # quote_identifier/1.
+    assert_stored_name!(repo, table_name)
     query = "PRAGMA table_info(#{quote_identifier(table_name)})"
 
     result = repo.query!(query)
@@ -310,11 +311,16 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
     end
   end
 
+  @impl true
+  def resolve_table_namespace(repo, table, _schemas) do
+    assert_stored_name!(repo, table)
+    nil
+  end
+
   # SQLite reads a table name in any case, while visibility rules match the
   # name as given. A name that is a stored table's in another case is
   # refused, so a rule for the table holds whatever case a caller asks in.
-  @impl true
-  def resolve_table_namespace(repo, table, _schemas) do
+  defp assert_stored_name!(repo, table) do
     %{rows: rows} =
       repo.query!(
         "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name = ? COLLATE NOCASE",
@@ -328,7 +334,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
          (builtin? and not String.starts_with?(table, "sqlite_")),
        do: raise(ArgumentError, "Table '#{table}' not found")
 
-    nil
+    :ok
   end
 
   @impl true

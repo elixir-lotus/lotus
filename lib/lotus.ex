@@ -613,7 +613,11 @@ defmodule Lotus do
     if language_compatible?(q.query_language, adapter_language) do
       vars = prepare_variables(q, opts)
 
-      compile_opts = [adapter: adapter, search_path: Keyword.get(opts, :search_path)]
+      compile_opts = [
+        adapter: adapter,
+        search_path: Keyword.get(opts, :search_path),
+        scope: Keyword.get(opts, :scope)
+      ]
 
       case Query.compile(q, vars, compile_opts) do
         {:ok, %Statement{body: body, params: params}} ->
@@ -939,7 +943,7 @@ defmodule Lotus do
 
   def can_run?(%Query{} = q, opts) do
     vars = prepare_variables(q, opts)
-    match?({:ok, %Statement{}}, Query.compile(q, vars))
+    match?({:ok, %Statement{}}, Query.compile(q, vars, scope: Keyword.get(opts, :scope)))
   end
 
   @doc """
@@ -1039,7 +1043,12 @@ defmodule Lotus do
 
     if language_compatible?(q.query_language, adapter_language) do
       vars = prepare_variables(q, opts)
-      compile_opts = [adapter: adapter, search_path: Keyword.get(opts, :search_path)]
+
+      compile_opts = [
+        adapter: adapter,
+        search_path: Keyword.get(opts, :search_path),
+        scope: Keyword.get(opts, :scope)
+      ]
 
       case Query.compile(q, vars, compile_opts) do
         {:ok, %Statement{body: body, params: params}} ->

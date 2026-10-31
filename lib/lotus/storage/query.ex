@@ -19,6 +19,7 @@ defmodule Lotus.Storage.Query do
   alias Lotus.Source
   alias Lotus.Source.Adapter
   alias Lotus.Storage.{QueryVariable, SchemaCache, TypeCaster, VariableResolver}
+  alias Lotus.Visibility
 
   @type t :: %__MODULE__{
           id: term(),
@@ -132,6 +133,10 @@ defmodule Lotus.Storage.Query do
     * `:search_path` — the search path the statement runs under, for typing
       variables bound to unqualified tables. Defaults to the query's own
       `search_path`. `Lotus.run_query/2` passes its runtime override.
+    * `:scope` — the visibility scope the statement runs under. A variable
+      is typed from its column only when the source and the column's table
+      are visible in it; otherwise it is `:text`. `Lotus.run_query/2` passes
+      its own.
 
   Use `compile!/2` if you prefer a raising variant.
   """
@@ -161,7 +166,8 @@ defmodule Lotus.Storage.Query do
       enrich_bindings_with_types(
         variable_bindings,
         adapter,
-        Keyword.get(opts, :search_path) || q.search_path
+        Keyword.get(opts, :search_path) || q.search_path,
+        Keyword.get(opts, :scope)
       )
 
     # Build the statement by folding each variable through the adapter's
@@ -314,7 +320,12 @@ defmodule Lotus.Storage.Query do
     OptionalClause.extract_optional_variable_names(statement)
   end
 
-  defp enrich_bindings_with_types(bindings, %Adapter{} = adapter, search_path) do
+  # A variable's type comes from its column's, read before the statement's
+  # visibility check: only from a source and a table `scope` may see, so
+  # that a cast error tells nothing of a hidden table.
+  defp enrich_bindings_with_types(bindings, %Adapter{} = adapter, search_path, scope) do
+    visible? = Visibility.source_visible?(adapter.name, scope)
+
     Enum.map(bindings, fn
       %{table: nil} = binding ->
         Map.put(binding, :lotus_type, :text)
@@ -322,8 +333,11 @@ defmodule Lotus.Storage.Query do
       %{column: nil} = binding ->
         Map.put(binding, :lotus_type, :text)
 
+      binding when not visible? ->
+        Map.put(binding, :lotus_type, :text)
+
       binding ->
-        enrich_binding_with_type(binding, adapter, search_path)
+        enrich_binding_with_type(binding, adapter, search_path, scope)
     end)
   rescue
     # Narrowly rescue only transient connection failures so type enrichment
@@ -339,8 +353,9 @@ defmodule Lotus.Storage.Query do
       Enum.map(bindings, &Map.put(&1, :lotus_type, :text))
   end
 
-  defp enrich_binding_with_type(binding, adapter, search_path) do
+  defp enrich_binding_with_type(binding, adapter, search_path, scope) do
     with {:ok, schema} <- binding_schema(binding, adapter, search_path),
+         true <- Visibility.allowed_relation?(adapter.name, {schema, binding.table}, scope),
          {:ok, db_type} <-
            SchemaCache.get_column_type(adapter, schema, binding.table, binding.column) do
       Map.put(binding, :lotus_type, Adapter.db_type_to_lotus_type(adapter, db_type))
