@@ -294,6 +294,25 @@ defmodule Lotus.DeliveryTest do
                })
     end
 
+    test "refuses an authorization or header value a header can't hold, without quoting it" do
+      for config <- [
+            %{"url" => "https://x.io", "authorization" => "Bearer DUMMY-token\n"},
+            %{"url" => "https://x.io", "headers" => %{"x-api-key" => "DUMMY-token\r"}},
+            %{"url" => "https://x.io", "headers" => %{"x-api-key" => "DUMMY-tökén"}}
+          ] do
+        assert {:error, :config, message} = Delivery.validate("webhook", "csv", config)
+        assert message =~ "a header can't hold"
+        refute message =~ "DUMMY"
+      end
+
+      assert :ok =
+               Delivery.validate("webhook", "csv", %{
+                 "url" => "https://x.io",
+                 "authorization" => "Bearer a.b-c_d~e+f/g=\th",
+                 "headers" => %{"x-api-key" => "k 1"}
+               })
+    end
+
     test "a response that is not 2xx is an error" do
       Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 503, "busy") end)
 
@@ -661,6 +680,74 @@ defmodule Lotus.DeliveryTest do
       assert {:ok, _} = Worker.perform(run.id)
 
       assert_received {[:lotus, :delivery, :stop], %{delivery: %{channel: "send", format: "csv"}}}
+    end
+
+    test "no schedule or delivery event carries a delivery's secret settings", %{query: query} do
+      Req.Test.stub(__MODULE__, &Req.Test.json(&1, %{}))
+      ref = make_ref()
+      pid = self()
+
+      events =
+        for prefix <- [
+              [:lotus, :content, :change],
+              [:lotus, :schedule, :run],
+              [:lotus, :delivery]
+            ],
+            suffix <- [:start, :stop, :exception],
+            do: prefix ++ [suffix]
+
+      :telemetry.attach_many(
+        "#{inspect(ref)}",
+        events,
+        fn event, _measurements, metadata, _ -> send(pid, {:event, event, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("#{inspect(ref)}") end)
+
+      {schedule, run} =
+        schedule_with(query, [
+          %{
+            channel: "webhook",
+            format: "csv",
+            config: %{
+              "url" => "https://x.io/hook",
+              "authorization" => "Bearer DUMMY-TOKEN",
+              "headers" => %{"x-api-key" => "DUMMY-KEY"}
+            }
+          },
+          %{
+            channel: "slack",
+            format: "csv",
+            config: %{"webhook_url" => "https://hooks.slack.com/services/T0/B0/DUMMY-PATH"}
+          }
+        ])
+
+      {:ok, _} = Schedules.update_schedule(schedule, %{name: "Weekly, renamed"})
+      assert {:ok, _} = Worker.perform(run.id)
+
+      received = collect_events([])
+      seen = received |> Enum.map(&elem(&1, 0)) |> MapSet.new()
+
+      assert [:lotus, :content, :change, :stop] in seen
+      assert [:lotus, :schedule, :run, :stop] in seen
+      assert [:lotus, :delivery, :stop] in seen
+
+      for {event, metadata} <- received do
+        refute inspect(metadata, limit: :infinity) =~ "DUMMY", inspect(event)
+      end
+
+      assert Enum.any?(received, fn {_event, metadata} ->
+               inspect(metadata, limit: :infinity) =~ "https://x.io/hook"
+             end)
+    end
+
+    defp collect_events(acc) do
+      receive do
+        {:event, event, metadata} -> collect_events([{event, metadata} | acc])
+      after
+        0 -> acc
+      end
     end
   end
 end

@@ -86,8 +86,20 @@ defmodule Lotus.Delivery.Channels.Webhook do
   end
 
   defp validate_authorization(nil), do: :ok
-  defp validate_authorization(value) when is_binary(value), do: :ok
+
+  defp validate_authorization(value) when is_binary(value),
+    do: header_value(value, "the authorization")
+
   defp validate_authorization(_value), do: {:error, "the authorization must be a string"}
+
+  # An HTTP header value holds visible ASCII, spaces and tabs. A value with
+  # another byte (a pasted line break) can't be sent, and the message never
+  # quotes it: it is often a credential.
+  defp header_value(value, what) do
+    if value =~ ~r/\A[\x20-\x7E\t]*\z/,
+      do: :ok,
+      else: {:error, "#{what} has a character a header can't hold, such as a line break"}
+  end
 
   defp fetch_url(config) do
     case Map.get(config, "url") do
@@ -111,11 +123,18 @@ defmodule Lotus.Delivery.Channels.Webhook do
 
   defp validate_headers(headers) when is_map(headers) do
     if Enum.all?(headers, fn {k, v} -> is_binary(k) and is_binary(v) end),
-      do: :ok,
+      do: Enum.find_value(headers, :ok, &invalid_header/1),
       else: {:error, "headers must map names to strings"}
   end
 
   defp validate_headers(_headers), do: {:error, "headers must map names to strings"}
+
+  defp invalid_header({name, value}) do
+    case header_value(value, "the header #{inspect(name)}") do
+      :ok -> nil
+      error -> error
+    end
+  end
 
   defp allow_http?, do: Keyword.get(host_settings(), :allow_http, false)
 

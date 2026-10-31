@@ -37,9 +37,16 @@ defmodule Lotus.Delivery.HTTP do
 
     case req().post(url, options) do
       {:ok, %{status: status, body: body}} -> {:ok, status, body_text(body)}
-      {:error, exception} -> {:error, Exception.message(exception)}
+      {:error, exception} -> {:error, error_message(exception)}
     end
   end
+
+  # The HTTP client's message for a header it refused quotes the header's
+  # value, which may be a credential: name the header only.
+  defp error_message(%{reason: {:invalid_header_value, name, _value}}),
+    do: "invalid value for header #{inspect(name)}"
+
+  defp error_message(exception), do: Exception.message(exception)
 
   defp body_text(body) when is_binary(body), do: String.slice(body, 0, 200)
   defp body_text(body), do: body |> inspect() |> String.slice(0, 200)

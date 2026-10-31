@@ -320,6 +320,11 @@ defmodule Lotus.Telemetry do
   `Lotus.Scheduler.Worker`. The query or dashboard it runs emits its own run
   and query events, with the actor of the run.
 
+  In these events, the delivery events and the content change events of a
+  schedule, a delivery's settings keep only those its channel declares
+  (`c:Lotus.Delivery.Channel.settings/0`) other than `:secret` ones; any
+  other value, a custom header's among them, reads `"[REDACTED]"`.
+
   ### `[:lotus, :schedule, :run, :start]`
 
   **Measurements:** `:system_time`.
@@ -421,6 +426,8 @@ defmodule Lotus.Telemetry do
         end
       end
   """
+
+  alias Lotus.Delivery.Redact
 
   @run_start [:lotus, :run, :start]
   @run_stop [:lotus, :run, :stop]
@@ -561,14 +568,20 @@ defmodule Lotus.Telemetry do
   @doc false
   def content_change_start(metadata) do
     start_time = System.monotonic_time()
-    :telemetry.execute(@content_change_start, %{system_time: System.system_time()}, metadata)
+
+    :telemetry.execute(
+      @content_change_start,
+      %{system_time: System.system_time()},
+      Redact.metadata(metadata)
+    )
+
     start_time
   end
 
   @doc false
   def content_change_stop(start_time, metadata) do
     duration = System.monotonic_time() - start_time
-    :telemetry.execute(@content_change_stop, %{duration: duration}, metadata)
+    :telemetry.execute(@content_change_stop, %{duration: duration}, Redact.metadata(metadata))
   end
 
   @doc false
@@ -578,14 +591,20 @@ defmodule Lotus.Telemetry do
     :telemetry.execute(
       @content_change_exception,
       %{duration: duration},
-      Map.put_new(metadata, :kind, :error)
+      metadata |> Map.put_new(:kind, :error) |> Redact.metadata()
     )
   end
 
   @doc false
   def delivery_start(metadata) do
     start_time = System.monotonic_time()
-    :telemetry.execute(@delivery_start, %{system_time: System.system_time()}, metadata)
+
+    :telemetry.execute(
+      @delivery_start,
+      %{system_time: System.system_time()},
+      Redact.metadata(metadata)
+    )
+
     start_time
   end
 
@@ -594,7 +613,7 @@ defmodule Lotus.Telemetry do
     :telemetry.execute(
       @delivery_stop,
       %{duration: System.monotonic_time() - start_time},
-      metadata
+      Redact.metadata(metadata)
     )
   end
 
@@ -603,14 +622,20 @@ defmodule Lotus.Telemetry do
     :telemetry.execute(
       @delivery_exception,
       %{duration: System.monotonic_time() - start_time},
-      metadata
+      Redact.metadata(metadata)
     )
   end
 
   @doc false
   def schedule_run_start(metadata) do
     start_time = System.monotonic_time()
-    :telemetry.execute(@schedule_run_start, %{system_time: System.system_time()}, metadata)
+
+    :telemetry.execute(
+      @schedule_run_start,
+      %{system_time: System.system_time()},
+      Redact.metadata(metadata)
+    )
+
     start_time
   end
 
@@ -619,7 +644,7 @@ defmodule Lotus.Telemetry do
     :telemetry.execute(
       @schedule_run_stop,
       %{duration: System.monotonic_time() - start_time, row_count: run.row_count || 0},
-      metadata
+      Redact.metadata(metadata)
     )
   end
 
@@ -628,7 +653,7 @@ defmodule Lotus.Telemetry do
     :telemetry.execute(
       @schedule_run_exception,
       %{duration: System.monotonic_time() - start_time},
-      metadata
+      Redact.metadata(metadata)
     )
   end
 
