@@ -155,6 +155,13 @@
   now also checked in lower case, and every table name too when the
   server folds them (`lower_case_table_names` other than 0).
 
+- **A statement can't change the session settings it runs under.** The
+  read-only check refuses `set_config()` and `SET`, but a read-write run
+  skips it, so a statement could change a setting a `:before_query` plug
+  put in its `:session` (the tenant a row-level security policy reads).
+  A statement with session settings now may not change settings, on a
+  read-write run too. A statement without them is unchanged.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

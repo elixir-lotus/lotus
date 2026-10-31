@@ -1119,7 +1119,7 @@ defmodule Lotus.Source.Adapters.Ecto do
   end
 
   @doc false
-  def do_sanitize_query(dialect, %Statement{body: sql}, opts) do
+  def do_sanitize_query(dialect, %Statement{body: sql} = statement, opts) do
     read_only = Keyword.get(opts, :read_only, true)
 
     profile = lexical_profile(dialect)
@@ -1131,8 +1131,9 @@ defmodule Lotus.Source.Adapters.Ecto do
 
     with :ok <- assert_single_statement(tokens),
          :ok <- assert_contained(tokens, profile),
-         :ok <- assert_not_denied(tokens, read_only) do
-      assert_no_side_effects(dialect, tokens, read_only)
+         :ok <- assert_not_denied(tokens, read_only),
+         :ok <- assert_no_side_effects(dialect, tokens, read_only) do
+      assert_session_kept(tokens, statement.session, read_only)
     end
   end
 
@@ -1546,6 +1547,30 @@ defmodule Lotus.Source.Adapters.Ecto do
     else
       _ -> :ok
     end
+  end
+
+  # A statement's session settings (a `:before_query` plug's tenant, which a
+  # row-level security policy reads) hold for the whole statement: on a
+  # read-write run too, it may not change a setting. A read-only run refuses
+  # these already.
+  @session_commands ~w(set reset discard)
+
+  defp assert_session_kept(_tokens, session, read_only)
+       when session == %{} or session == nil or read_only != false,
+       do: :ok
+
+  defp assert_session_kept(tokens, _session, false) do
+    code = tokens |> unescape_names() |> code_view()
+
+    command =
+      case Regex.run(@command, code) do
+        [_, command, _rest] -> String.downcase(command)
+        _ -> nil
+      end
+
+    if command in @session_commands or Regex.match?(denied_functions_regex(["set_config"]), code),
+      do: {:error, "A statement with session settings may not change settings"},
+      else: :ok
   end
 
   defp denied_functions_regex(names) do

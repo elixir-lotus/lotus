@@ -605,7 +605,9 @@ Every statement the actor runs is filtered, however it is written: subqueries,
 CTEs and joins included, and the count of a page too. The settings are part of
 the result cache key, so tenants never share an entry. Names must be custom
 settings (`prefix.name`); built-in ones such as `role` or
-`transaction_read_only` are refused. A source whose adapter does not declare
+`transaction_read_only` are refused. A statement with settings may not change
+any (`SET`, `RESET`, `DISCARD`, `set_config()`), on a read-write run too. A
+source whose adapter does not declare
 `Lotus.Source.Adapter.Session` refuses a statement with settings rather than
 run it unfiltered. The role Lotus connects as must not own the tables or be a
 superuser, which bypass policies (or use `FORCE ROW LEVEL SECURITY` for the
