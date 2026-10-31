@@ -176,7 +176,7 @@ defmodule Lotus.MiddlewareContractTest do
     test "a statement the adapter does not preflight yields {:skipped, reason}" do
       Middleware.compile(%{before_execute: [{CapturePlug, [event: :before_execute]}]})
 
-      assert {:ok, _} = run("EXPLAIN SELECT 1", [])
+      assert {:ok, _} = run("SHOW search_path", [])
 
       assert_received {:before_execute, %{relations: {:skipped, reason}}}
       assert is_binary(reason)

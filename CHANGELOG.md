@@ -127,6 +127,16 @@
   has its line breaks made spaces; a configured subject is still refused
   with one, as before.
 
+- **PostgreSQL and MySQL: `EXPLAIN` and table descriptions are checked
+  against visibility rules.** As on SQLite, Lotus skipped the visibility
+  check for a statement that starts with `EXPLAIN` or `SHOW`. An `EXPLAIN`
+  is now checked by the statement it explains. On MySQL, `DESCRIBE t`,
+  `EXPLAIN t`, `SHOW COLUMNS FROM t` and `SHOW INDEX FROM t` are checked by
+  `t`, `EXPLAIN FOR CONNECTION` is refused, and `DESCRIBE`, which failed on
+  every table, now runs. Other `SHOW` statements are unchanged.
+  `ANALYSE`, PostgreSQL's other spelling of `ANALYZE`, is refused in
+  read-only mode as `ANALYZE` is.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

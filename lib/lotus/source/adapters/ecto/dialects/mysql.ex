@@ -18,6 +18,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   alias Lotus.Query.Filter
   alias Lotus.Query.Statement
   alias Lotus.Query.Tokenizer.Profile
+  alias Lotus.Source.Adapters.Ecto, as: EctoHelpers
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
   alias Lotus.SQL.FilterInjector
   alias Lotus.SQL.SortInjector
@@ -479,8 +480,83 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     %{statement | body: SortInjector.apply(sql, sorts, &quote_identifier/1)}
   end
 
+  # `EXPLAIN`, `DESCRIBE` and `DESC` describe a table (`DESCRIBE t`) or how
+  # a statement reads its tables, and `SHOW COLUMNS` and `SHOW INDEX` a
+  # table: each is checked by what it describes. Any other `SHOW` names no
+  # table of its own and is not checked, as before.
+  @name ~S/(`(?:[^`]|``)+`|[\w$]+)/
+  @explained ~r/\A\s*(?:EXPLAIN|DESCRIBE|DESC)\b((?:\s+(?:EXTENDED|PARTITIONS|ANALYZE)\b|\s*FORMAT\s*=\s*\w+)*)\s*(.*)\z/is
+  @statement_starts ~w(select with table values insert update delete replace)
+
+  defp show_table_regex do
+    Regex.compile!(
+      "\\A\\s*SHOW\\s+(?:EXTENDED\\s+)?(?:FULL\\s+)?(?:COLUMNS|FIELDS|INDEX|INDEXES|KEYS)\\s+" <>
+        "(?:FROM|IN)\\s+(?:#{@name}\\s*\\.\\s*)?#{@name}(?:\\s+(?:FROM|IN)\\s+#{@name})?",
+      "is"
+    )
+  end
+
   @impl true
-  def extract_accessed_resources(repo, %Statement{body: sql, params: params, meta: meta}) do
+  def needs_preflight?(%Statement{body: sql}) when is_binary(sql) do
+    text = statement_text(sql)
+    not Regex.match?(~r/\A\s*SHOW\b/i, text) or Regex.match?(show_table_regex(), text)
+  end
+
+  def needs_preflight?(_statement), do: true
+
+  @impl true
+  def extract_accessed_resources(repo, %Statement{body: sql} = statement) when is_binary(sql) do
+    text = statement_text(sql)
+
+    cond do
+      match = Regex.run(@explained, text) ->
+        explained(repo, statement, List.last(match))
+
+      match = Regex.run(show_table_regex(), text) ->
+        {:ok, MapSet.new([shown_table(tl(match))])}
+
+      true ->
+        statement_relations(repo, statement)
+    end
+  end
+
+  defp explained(repo, statement, inner) do
+    first = inner |> String.trim_leading() |> String.downcase()
+
+    cond do
+      String.starts_with?(first, "(") or
+          Enum.any?(@statement_starts, &Regex.match?(~r/\A#{&1}\b/, first)) ->
+        extract_accessed_resources(repo, %{statement | body: inner})
+
+      Regex.match?(~r/\Afor\b/, first) ->
+        {:error, "Lotus can't tell which tables EXPLAIN FOR CONNECTION reads"}
+
+      match = Regex.run(~r/\A\s*(?:#{@name}\s*\.\s*)?#{@name}/s, inner) ->
+        {:ok, MapSet.new([table_path(tl(match))])}
+
+      true ->
+        {:error, "Lotus can't tell which table the statement describes"}
+    end
+  end
+
+  # `SHOW COLUMNS FROM t FROM db` names the table's database after it.
+  defp shown_table([schema, table, database]) when schema in [nil, ""],
+    do: {unquote_name(database), unquote_name(table)}
+
+  defp shown_table([schema, table | _]), do: table_path([schema, table])
+
+  defp table_path(["", table]), do: {nil, unquote_name(table)}
+  defp table_path([schema, table]), do: {unquote_name(schema), unquote_name(table)}
+
+  defp unquote_name("`" <> _ = raw),
+    do: raw |> String.slice(1..-2//1) |> String.replace("``", "`")
+
+  defp unquote_name(raw), do: raw
+
+  defp statement_text(sql),
+    do: EctoHelpers.statement_text(sql, Profile.for_language(query_language()))
+
+  defp statement_relations(repo, %Statement{body: sql, params: params, meta: meta}) do
     opts = Map.to_list(meta)
     read = Relations.read(sql)
     explain = "EXPLAIN FORMAT=JSON " <> sql

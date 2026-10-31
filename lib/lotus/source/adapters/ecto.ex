@@ -789,7 +789,7 @@ defmodule Lotus.Source.Adapters.Ecto do
 
   # Deny list for dangerous operations (defense-in-depth).
   # Skipped when `read_only: false` is passed in opts.
-  @deny ~r/\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|VACUUM|ANALYZE|CALL|LOCK|OUTFILE|DUMPFILE)\b/i
+  @deny ~r/\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|VACUUM|ANALYZE|ANALYSE|CALL|LOCK|OUTFILE|DUMPFILE)\b/i
 
   @impl true
   def sanitize_query(_repo, statement, opts),
@@ -1217,8 +1217,9 @@ defmodule Lotus.Source.Adapters.Ecto do
 
   # SQL-specific preflight heuristic. Skips introspection statements
   # (EXPLAIN, SHOW, PRAGMA) that do not touch visible relations. Dialects
-  # can override by implementing `needs_preflight?/1`, as SQLite does to
-  # check the tables its EXPLAIN and PRAGMA statements name.
+  # can override by implementing `needs_preflight?/1`, as the built-in ones
+  # do to check the tables an EXPLAIN describes (and SQLite a PRAGMA, MySQL
+  # a DESCRIBE or a SHOW COLUMNS or SHOW INDEX).
   #
   # Skipping the preflight skips column visibility, so the check errs
   # toward running it: the statement is skipped only when the first word
@@ -1584,6 +1585,20 @@ defmodule Lotus.Source.Adapters.Ecto do
   # `--` or `/*` inside a string literal, a quoted identifier or a comment
   # is not taken for code. `profile` defaults to ANSI SQL; a dialect passes
   # its own (`Profile.for_language/1`) for its quotes and comments.
+
+  @doc false
+  # The statement as the engine reads it past comments, each a space, for a
+  # dialect that reads its leading words (`EXPLAIN`, `SHOW`, `PRAGMA`).
+  @spec statement_text(String.t(), Profile.t()) :: String.t()
+  def statement_text(sql, %Profile{} = profile) do
+    sql
+    |> Tokenizer.tokenize(profile)
+    |> Enum.map(fn
+      {:comment, _raw} -> {:code, " "}
+      token -> token
+    end)
+    |> Tokenizer.to_string()
+  end
 
   @doc false
   @spec parse_alias_map(String.t(), Profile.t()) :: %{String.t() => String.t()}
