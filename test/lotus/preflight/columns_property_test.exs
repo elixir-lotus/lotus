@@ -316,10 +316,9 @@ defmodule Lotus.Preflight.ColumnsPropertyTest do
 
   defp agree?(_sql, old, new), do: old == new
 
-  # `name [(columns)] AS [NOT] [MATERIALIZED] (`.
-  defp cte_definition(name) do
-    ~r/\b#{Regex.escape(name)}\s*(?:\([^()]*\))?\s*AS\s+(?:NOT\s+)?(?:MATERIALIZED\s*)?\(/i
-  end
+  # The old reader took any name after a `WITH` for a CTE, defined or not
+  # (`WITH users` in a statement that isn't valid SQL).
+  defp cte_name(name), do: ~r/\bWITH\b[\s\S]*(?<![\w$])#{Regex.escape(name)}(?![\w$])/i
 
   defp assert_agree(sql) do
     for profile <- [@postgres, @mysql] do
@@ -336,7 +335,7 @@ defmodule Lotus.Preflight.ColumnsPropertyTest do
       assert old_tables -- new_tables == [], sql
 
       for [name] <- new_tables -- old_tables,
-          do: assert(sql =~ cte_definition(name), sql)
+          do: assert(sql =~ cte_name(name), sql)
     end
   end
 
