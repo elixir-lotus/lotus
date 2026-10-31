@@ -12,6 +12,8 @@ defmodule Lotus.AI.Prompts.Explanation do
   """
   @spec system_prompt(atom()) :: String.t()
   def system_prompt(database_type) do
+    database_type = prompt_name(database_type)
+
     """
     You are a SQL expert that explains queries in clear, plain language.
 
@@ -106,4 +108,13 @@ defmodule Lotus.AI.Prompts.Explanation do
     |> Enum.reject(&is_nil/1)
     |> Enum.join()
   end
+
+  # An adapter names its source type; only a plain name reaches the prompt,
+  # as `ai_context`'s `:language` does.
+  defp prompt_name(type) when is_atom(type) and not is_nil(type) do
+    name = Atom.to_string(type)
+    if name =~ ~r/\A[a-z0-9_]{1,32}\z/, do: name, else: "unknown"
+  end
+
+  defp prompt_name(_type), do: "unknown"
 end

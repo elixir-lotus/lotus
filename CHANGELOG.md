@@ -182,6 +182,12 @@
   query block's tables (select-list and optimized-away subqueries) and in a
   table's attached subqueries.
 
+- **AI: adapter text in prompts is checked, and a discovery error is an
+  error.** The query explainer put the adapter's source type in its system
+  prompt as it was; now only a plain name does, as for `ai_context`'s
+  `:language`. The generator raised a `MatchError` when listing schemas or
+  tables failed; it now returns the error.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

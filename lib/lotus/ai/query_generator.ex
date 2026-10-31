@@ -80,21 +80,19 @@ if Code.ensure_loaded?(ReqLLM) do
 
       case Adapter.ai_context(adapter) do
         {:ok, ai_context} ->
-          {:ok, all_schemas} = Lotus.Schema.list_schemas(data_source, actor_opts)
-
-          {:ok, tables} =
-            Lotus.Schema.list_tables(data_source, [schemas: all_schemas] ++ actor_opts)
-
-          table_names = extract_table_names(tables)
-
-          system_prompt =
-            QueryGeneration.system_prompt(ai_context, table_names, read_only: read_only)
-
           request =
             [model: model_string, data_source: data_source, prompt: prompt] ++
               Keyword.take(opts, [:context, :scope])
 
-          with {:ok, system_prompt} <- Request.prepare(:generation, system_prompt, request) do
+          # A discovery error is the generation's error, not a crash.
+          with {:ok, all_schemas} <- Lotus.Schema.list_schemas(data_source, actor_opts),
+               {:ok, tables} <-
+                 Lotus.Schema.list_tables(data_source, [schemas: all_schemas] ++ actor_opts),
+               system_prompt =
+                 QueryGeneration.system_prompt(ai_context, extract_table_names(tables),
+                   read_only: read_only
+                 ),
+               {:ok, system_prompt} <- Request.prepare(:generation, system_prompt, request) do
             tools = build_tools(data_source, actor)
             fence = AdapterNotes.fence_label(ai_context)
             messages = build_messages(conversation, prompt, system_prompt, query_context, fence)
