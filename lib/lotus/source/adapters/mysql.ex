@@ -13,6 +13,7 @@ defmodule Lotus.Source.Adapters.MySQL do
   `Lotus.Source.Adapter.Cancel`.
   """
 
+  alias Lotus.Runner.Cancel
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
 
   use Lotus.Source.Adapters.Ecto,
@@ -57,7 +58,7 @@ defmodule Lotus.Source.Adapters.MySQL do
   def cancel(state, id) when is_integer(id) and id > 0 do
     EctoAdapter.with_repo(state, fn repo ->
       # KILL takes no placeholder; the id is an integer.
-      case repo.query("KILL QUERY #{id}") do
+      case repo.query("KILL QUERY #{id}", [], timeout: Cancel.cancel_timeout()) do
         {:ok, _result} -> :ok
         {:error, error} -> {:error, Exception.message(error)}
       end

@@ -35,8 +35,10 @@ defmodule Lotus.Runner.Cancel do
   @retries 20
 
   # How long a statement that returned waits for a cancel on its way, before
-  # it gives its connection back. Longer than all the retries.
+  # it gives its connection back. Longer than all the retries, and than the
+  # built-in adapters give one cancel (`cancel_timeout/0`).
   @cancel_wait 10_000
+  @cancel_timeout 5_000
 
   # The token's atomics: its state, and whether the statement returned.
   @state 1
@@ -62,6 +64,12 @@ defmodule Lotus.Runner.Cancel do
   @doc "The error a cancelled statement returns."
   @spec message() :: String.t()
   def message, do: @message
+
+  @doc false
+  # How long one call of a built-in adapter's `cancel/2` may take, so that
+  # it ends while the statement still waits for it.
+  @spec cancel_timeout() :: 5_000
+  def cancel_timeout, do: @cancel_timeout
 
   @doc false
   # Before the statement's transaction: a token without its handle when the
@@ -124,25 +132,33 @@ defmodule Lotus.Runner.Cancel do
     result -> finish(token, result)
   end
 
-  defp finish(%__MODULE__{atomics: atomics, ref: ref}, result) do
+  defp finish(%__MODULE__{atomics: atomics} = token, result) do
     case :atomics.compare_exchange(atomics, @state, @running, @finished) do
       :ok ->
         result
 
       _cancelling_or_cancelled ->
         :atomics.put(atomics, @returned, 1)
-
-        receive do
-          {^ref, :cancel_done} -> :ok
-        after
-          @cancel_wait -> :ok
-        end
+        await_cancel(token, System.monotonic_time(:millisecond) + @cancel_wait)
 
         # A cancel the database refused puts the token back to running.
         case :atomics.compare_exchange(atomics, @state, @running, @finished) do
           :ok -> result
           _cancelled -> {:error, @message}
         end
+    end
+  end
+
+  # A cancel that is done says so, and so does one the database refused,
+  # which may have been before the statement returned. The wait ends only
+  # once no cancel is on its way: a cancel can still reach the connection
+  # until then, so the connection is not given back.
+  defp await_cancel(%__MODULE__{atomics: atomics, ref: ref} = token, deadline) do
+    receive do
+      {^ref, :cancel_done} ->
+        if :atomics.get(atomics, @state) == @cancelling, do: await_cancel(token, deadline)
+    after
+      max(deadline - System.monotonic_time(:millisecond), 0) -> :ok
     end
   end
 
