@@ -1458,35 +1458,38 @@ defmodule Lotus.Source.Adapters.Ecto do
   defp assert_no_side_effects(dialect, tokens, _read_only) do
     code = code_view(tokens)
 
-    with :ok <- assert_read_command(code) do
+    with :ok <- assert_read_command(code, tokens) do
       assert_no_denied_function(code, dialect)
     end
   end
 
-  defp assert_read_command(code) do
-    case Regex.run(~r/\A[\s(]*([A-Za-z_]+)(.*)\z/s, code) do
-      [_, command, rest] -> check_command(String.downcase(command), rest)
+  @command ~r/\A[\s(]*([A-Za-z_]+)(.*)\z/s
+
+  defp assert_read_command(code, tokens) do
+    case Regex.run(@command, code) do
+      [_, command, rest] -> check_command(String.downcase(command), rest, tokens)
       _ -> :ok
     end
   end
 
-  defp check_command(command, _rest) when command in @denied_commands,
+  defp check_command(command, _rest, _tokens) when command in @denied_commands,
     do: {:error, "Only read-only queries are allowed: #{String.upcase(command)} is not"}
 
-  defp check_command("pragma", rest) do
-    name = ~r/\A\s*(?:\w+\s*\.\s*)?(\w+)\s*(.?)/ |> Regex.run(rest) |> pragma_form()
+  # SQLite also reads a string literal as a PRAGMA's name (`PRAGMA 'name'`),
+  # so the name is read with literals as their text. A PRAGMA reads only
+  # without a value, or in the function form of a pragma that reads; any
+  # other, or one whose name can't be read, is refused.
+  defp check_command("pragma", _rest, tokens) do
+    [_, _command, rest] = Regex.run(@command, code_view(tokens, :literal_names))
 
-    case name do
-      {_name, "="} -> pragma_error()
-      {name, "("} -> if String.downcase(name) in @read_pragmas, do: :ok, else: pragma_error()
-      _ -> :ok
+    case Regex.run(~r/\A\s*(?:\w+\s*\.\s*)?(\w+)\s*(.?)/s, rest) do
+      [_, _name, ""] -> :ok
+      [_, name, "("] -> if String.downcase(name) in @read_pragmas, do: :ok, else: pragma_error()
+      _ -> pragma_error()
     end
   end
 
-  defp check_command(_command, _rest), do: :ok
-
-  defp pragma_form([_, name, next]), do: {name, next}
-  defp pragma_form(_), do: nil
+  defp check_command(_command, _rest, _tokens), do: :ok
 
   defp pragma_error, do: {:error, "Only read-only queries are allowed: this PRAGMA sets a value"}
 
@@ -1514,20 +1517,25 @@ defmodule Lotus.Source.Adapters.Ecto do
   end
 
   # The statement as the engine reads it, for the checks above: code as is,
-  # a quoted identifier as its bare name (`"set_config"(` calls set_config),
-  # literals and placeholders as stand-ins, comments as a space.
-  defp code_view(tokens) do
+  # a quoted identifier as its bare name (`"set_config"(` calls set_config)
+  # set apart from the words around it, literals and placeholders as
+  # stand-ins, comments as a space. With `:literal_names`, a string literal
+  # is its text, as where SQLite takes it for a name.
+  defp code_view(tokens, literals \\ :stand_in) do
     tokens
     |> Enum.map(fn
       {:code, raw} -> raw
-      {:identifier, raw} -> String.slice(raw, 1..-2//1)
-      {:string, _raw} -> " '' "
+      {:identifier, raw} -> [" ", String.slice(raw, 1..-2//1), " "]
+      {:string, raw} -> literal_view(raw, literals)
       {:variable, _name, _raw} -> " NULL "
       {:comment, _raw} -> " "
-      {:block, inner} -> code_view(inner)
+      {:block, inner} -> code_view(inner, literals)
     end)
     |> IO.iodata_to_binary()
   end
+
+  defp literal_view(_raw, :stand_in), do: " '' "
+  defp literal_view(raw, :literal_names), do: [" ", String.slice(raw, 1..-2//1), " "]
 
   # ---------------------------------------------------------------------------
   # SQL parsing utilities (shared by dialect extract_accessed_resources impls)

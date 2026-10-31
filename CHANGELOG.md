@@ -56,6 +56,12 @@
   `Lotus.Schema.describe_table/3` and `get_table_stats/3` refuse a name
   that is a stored table's in another case.
 
+- **SQLite: the read-only check reads every form of a PRAGMA name.** A
+  PRAGMA whose name was a string literal, or a quoted name written next to
+  the keyword, could set a value on a read-only source and so change the
+  pooled connection. The check now reads those names, and refuses a PRAGMA
+  whose name or form it can't read.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
