@@ -75,6 +75,15 @@
   both scopes, and `add_dashboard_card` refuses a chart to a token without
   `lotus:query`. A card without a chart still needs only `lotus:write`.
 
+- **Delivery credentials stay out of telemetry and logs.** The schedule,
+  delivery and content change events carried each delivery's settings,
+  a webhook's authorization and a Slack webhook URL among them. A
+  delivery's settings in those events now keep only what its channel
+  declares as not `:secret`; any other value reads `"[REDACTED]"`. The
+  webhook channel refuses an authorization or header value with a
+  character a header can't hold (a pasted line break), and the message of
+  a refused header names the header, not its value.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
