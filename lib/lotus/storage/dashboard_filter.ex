@@ -126,11 +126,13 @@ defmodule Lotus.Storage.DashboardFilter do
                 source_query_id depends_on_filter_id)a
 
   def new(attrs), do: changeset(%__MODULE__{}, attrs)
-  def update(filter, attrs), do: changeset(filter, attrs)
 
-  def changeset(filter, attrs) do
+  # A filter stays on its dashboard.
+  def update(filter, attrs), do: changeset(filter, attrs, @permitted -- [:dashboard_id])
+
+  def changeset(filter, attrs, permitted \\ @permitted) do
     filter
-    |> cast(attrs, @permitted)
+    |> cast(attrs, permitted)
     |> normalize_config()
     |> validate_required(@required)
     |> validate_length(:name, min: 1, max: 255)

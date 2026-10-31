@@ -251,6 +251,13 @@
   characters of the receiver's answer, which could be another service's.
   A host's `req_options` can still turn redirects on.
 
+- **A card or filter stays on its dashboard, a chart on its query.** An
+  update could change a dashboard card's or filter's `dashboard_id`, or a
+  visualization's `query_id`, and so move it to another owner's record
+  past a plug that checked only the record as stored. Updates now ignore
+  those fields. A filter mapping must link a card and a filter of the same
+  dashboard.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
