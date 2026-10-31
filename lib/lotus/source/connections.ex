@@ -25,6 +25,12 @@ defmodule Lotus.Source.Connections do
   returns the sources `build/3` makes from its `Lotus.Source.Resolver` and
   calls `Lotus.Source.reconcile/0` when they change, which starts and stops
   their processes on every node.
+
+  Settings reach what the server reaches: a server kind connects to any
+  host the server can, and the SQLite kind opens any database file a path
+  names on the server. Let only people who may reach those connect a
+  source, or check their settings (an allowed directory for SQLite files)
+  before `build/3`.
   """
 
   alias Lotus.Config

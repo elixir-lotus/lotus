@@ -698,6 +698,8 @@ defmodule Lotus do
     # count are both built from the statement the plug returned. Everything that
     # keys the entry — the body, the bound values, the window — therefore
     # describes what will actually execute.
+    runner_opts = put_shaped_columns(runner_opts, filters, sorts)
+
     Runner.run(adapter, statement, runner_opts, fn %Statement{} = statement ->
       {statement, pagination_meta, cache_bound} =
         maybe_paginate(statement, adapter, runner_opts, Keyword.get(opts, :window))
@@ -710,7 +712,8 @@ defmodule Lotus do
             bound_identity(cache_bound || cache_identity, statement.params, statement.session),
             adapter.name,
             search_path,
-            Keyword.get(opts, :scope)
+            Keyword.get(opts, :scope),
+            Keyword.get(runner_opts, :read_only, true)
           ),
         tags: build_cache_tags(query_id, adapter.name, opts),
         profile: determine_cache_profile(opts)
@@ -957,7 +960,10 @@ defmodule Lotus do
     * `:read_only` — when `true`, blocks write operations (INSERT, UPDATE,
       DELETE, DDL) at both the application and database level. Set to `false` to allow
       write queries. Defaults to the source's setting (`read_only?/1`), which
-      is `true` unless configured otherwise.
+      is `true` unless configured otherwise. On PostgreSQL a read-only run
+      rolls its transaction back, which undoes what the statement changed in
+      the session; inside a transaction the caller already opened it can't,
+      and those changes last until that transaction ends.
     * `:on_cancel_token` — a function of one argument, called with a token
       when the statement starts, in the process that runs it, on a source
       that can cancel (`cancellable?/1`). Pass the token to `cancel/1` to
@@ -1107,7 +1113,7 @@ defmodule Lotus do
     :ok = validate_sort_columns!(adapter, sorts)
     statement = Adapter.apply_sorts(adapter, statement, sorts)
 
-    Runner.stream(adapter, statement, runner_opts, fun)
+    Runner.stream(adapter, statement, put_shaped_columns(runner_opts, filters, sorts), fun)
   end
 
   @doc """
@@ -1347,11 +1353,18 @@ defmodule Lotus do
   defp build_cache_options(cache_opts, tags),
     do: Lotus.Cache.build_options(cache_opts, tags)
 
-  defp result_key(body, bound_vars_map, repo_name, search_path, scope) do
+  # A statement a read-write run served (a `DELETE ... RETURNING`) is not
+  # one a read-only run may get back, so the mode is part of the key.
+  defp result_key(body, bound_vars_map, repo_name, search_path, scope, read_only) do
     Key.result(
       body,
       bound_vars_map,
-      [data_source: repo_name, search_path: search_path, lotus_version: Lotus.version()],
+      [
+        data_source: repo_name,
+        search_path: search_path,
+        lotus_version: Lotus.version(),
+        read_only: read_only != false
+      ],
       scope
     )
   end
@@ -1376,6 +1389,21 @@ defmodule Lotus do
   # adapter can't handle) before we ever hand them to `apply_filters/3` /
   # `apply_sorts/3` — so the failure mode is a clear error at the boundary,
   # not a cryptic SQL/DSL error from deep inside the adapter.
+  # The columns the caller filters or sorts by, for the runner's column check.
+  defp put_shaped_columns(runner_opts, [], []), do: runner_opts
+
+  defp put_shaped_columns(runner_opts, filters, sorts) do
+    columns =
+      Enum.map(filters, & &1.column) ++
+        Enum.flat_map(sorts, fn
+          %Sort{column: column} -> [column]
+          column when is_binary(column) -> [column]
+          _other -> []
+        end)
+
+    Keyword.put(runner_opts, :shaped_columns, Enum.uniq(columns))
+  end
+
   defp validate_filter_columns!(_adapter, []), do: :ok
 
   defp validate_filter_columns!(adapter, filters) do

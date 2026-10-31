@@ -18,7 +18,7 @@ defmodule Lotus.Export do
 
   @spec to_csv(Result.t()) :: [binary() | iodata()]
   def to_csv(%Result{columns: columns, rows: rows}) do
-    header = CSVParser.dump_to_iodata([columns])
+    header = CSVParser.dump_to_iodata([csv_header(columns)])
 
     body =
       rows
@@ -133,7 +133,7 @@ defmodule Lotus.Export do
 
   defp encode_chunks(chunks, :csv) do
     Stream.transform(chunks, false, fn %Result{columns: cols, rows: rows}, header? ->
-      header = if header?, do: [], else: [CSVParser.dump_to_iodata([cols])]
+      header = if header?, do: [], else: [CSVParser.dump_to_iodata([csv_header(cols)])]
       body = Enum.map(rows, &CSVParser.dump_to_iodata([normalize_row_for_csv(&1)]))
       {header ++ body, true}
     end)
@@ -150,7 +150,7 @@ defmodule Lotus.Export do
   end
 
   defp handle_csv_query_result({:ok, %Result{columns: cols, rows: rows}}, _state, off, header?) do
-    header = if header?, do: [], else: [CSVParser.dump_to_iodata([cols])]
+    header = if header?, do: [], else: [CSVParser.dump_to_iodata([csv_header(cols)])]
 
     body =
       rows
@@ -174,8 +174,30 @@ defmodule Lotus.Export do
   end
 
   defp normalize_row_for_csv(row) do
-    Enum.map(row, &Value.to_csv_string/1)
+    escape? = Config.csv_escape_formulas?()
+
+    Enum.map(row, fn
+      value when is_binary(value) and escape? ->
+        value |> Value.to_csv_string() |> escape_formula()
+
+      value ->
+        Value.to_csv_string(value)
+    end)
   end
+
+  defp csv_header(columns) do
+    if Config.csv_escape_formulas?(), do: Enum.map(columns, &escape_formula/1), else: columns
+  end
+
+  # A spreadsheet runs a cell that starts with one of these as a formula; a
+  # leading `'` makes it text. Only text is escaped, so `-1` stays a number.
+  @formula_starts ["=", "+", "-", "@", "\t", "\r"]
+
+  defp escape_formula(cell) when is_binary(cell) do
+    if String.starts_with?(cell, @formula_starts), do: "'" <> cell, else: cell
+  end
+
+  defp escape_formula(cell), do: cell
 
   @doc """
   Exports a dashboard to a ZIP archive containing CSV files for each query card.

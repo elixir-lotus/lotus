@@ -884,6 +884,55 @@ defmodule Lotus.DashboardsTest do
     end
   end
 
+  describe "run_dashboard/2 with many cards" do
+    test "runs at most :max_concurrency cards at once" do
+      dashboard = dashboard_fixture()
+      query = query_fixture(%{statement: "SELECT pg_sleep(0.05) AS slept"})
+
+      cards =
+        for position <- 1..6 do
+          dashboard_card_fixture(dashboard, %{
+            card_type: :query,
+            query_id: query.id,
+            position: position,
+            content: %{}
+          })
+        end
+
+      in_flight = :counters.new(2, [:atomics])
+      handler = "dashboard-concurrency-#{System.unique_integer([:positive])}"
+      test = self()
+
+      # Only the runs of this test's cards, in the tasks it started.
+      :telemetry.attach_many(
+        handler,
+        [[:lotus, :run, :start], [:lotus, :run, :stop], [:lotus, :run, :exception]],
+        fn event, _, _, _ ->
+          if test in Process.get(:"$callers", []) do
+            case event do
+              [:lotus, :run, :start] ->
+                :counters.add(in_flight, 1, 1)
+                now = :counters.get(in_flight, 1)
+                if now > :counters.get(in_flight, 2), do: :counters.put(in_flight, 2, now)
+
+              _done ->
+                :counters.sub(in_flight, 1, 1)
+            end
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      results = Dashboards.run_dashboard(dashboard, max_concurrency: 2)
+
+      assert map_size(results) == 6
+      assert Enum.all?(cards, &match?({:ok, _}, results[&1.id]))
+      assert :counters.get(in_flight, 2) <= 2
+    end
+  end
+
   describe "list_dashboard_filter_options/2" do
     test "returns the static options of a filter with no source query" do
       filter =

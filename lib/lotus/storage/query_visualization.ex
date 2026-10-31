@@ -55,11 +55,13 @@ defmodule Lotus.Storage.QueryVisualization do
   @permitted @required ++ ~w(version)a
 
   def new(attrs), do: changeset(%__MODULE__{}, attrs)
-  def update(viz, attrs), do: changeset(viz, attrs)
 
-  def changeset(viz, attrs) do
+  # A visualization stays on its query.
+  def update(viz, attrs), do: changeset(viz, attrs, @permitted -- [:query_id])
+
+  def changeset(viz, attrs, permitted \\ @permitted) do
     viz
-    |> cast(attrs, @permitted)
+    |> cast(attrs, permitted)
     |> normalize_config()
     |> validate_required(@required)
     |> validate_length(:name, min: 1, max: 255)

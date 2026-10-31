@@ -65,6 +65,8 @@ defmodule Lotus.Cache.KeyBuilder do
     string for Ecto adapters, a DSL / AST / JSON payload for others
   - `bound` - Bound parameters (map or list)
   - `opts` - Options including `:data_source`, `:search_path`, `:lotus_version`
+    and `:read_only` (whether the run was read-only: an entry a read-write
+    run stored must not serve a read-only one)
   - `scope` - The scope term, or `nil` if no scope is set
   """
   @callback result_key(

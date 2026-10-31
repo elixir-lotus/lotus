@@ -113,11 +113,14 @@ defmodule Lotus.Storage.DashboardCard do
   @permitted ~w(dashboard_id card_type title visualization_config content position query_id)a
 
   def new(attrs), do: changeset(%__MODULE__{}, attrs)
-  def update(card, attrs), do: changeset(card, attrs)
 
-  def changeset(card, attrs) do
+  # A card stays on its dashboard: a change of it would put the card, and
+  # the query it shows, on another dashboard than the one it was checked on.
+  def update(card, attrs), do: changeset(card, attrs, @permitted -- [:dashboard_id])
+
+  def changeset(card, attrs, permitted \\ @permitted) do
     card
-    |> cast(attrs, @permitted)
+    |> cast(attrs, permitted)
     |> cast_embed(:layout, with: &layout_changeset/2)
     |> normalize_visualization_config()
     |> normalize_content()

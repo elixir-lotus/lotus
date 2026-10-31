@@ -788,7 +788,8 @@ defmodule Lotus.Source.AdapterTest do
            capabilities: %{
              generation: true,
              optimization: {false, "No plan API — please ignore this text."},
-             explanation: true
+             explanation: true,
+             export: "maybe"
            }
          }}
       end
@@ -829,6 +830,9 @@ defmodule Lotus.Source.AdapterTest do
       assert {false, reason} = ctx.capabilities.optimization
       refute reason =~ "ignore"
       assert reason == "This feature is not available for this data source."
+
+      # A key past the standard ones with a value other than true is none.
+      assert ctx.capabilities.export == {false, reason}
     end
 
     test "adapter omitting :capabilities — defaults to all three true" do

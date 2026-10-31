@@ -273,6 +273,21 @@ the source's own `read_only` field (`%Lotus.Source.Adapter{read_only: false}`), 
 goes over this map, and a call's `read_only:` option goes over both.
 `Lotus.read_only?/1` says what a source does.
 
+#### `csv_escape_formulas`
+
+Whether CSV exports and CSV deliveries escape a text cell, or a header,
+that starts with `=`, `+`, `-`, `@`, a tab or a carriage return, with a
+leading `'`. A spreadsheet runs such a cell as a formula when it opens the
+file. Turn it on when people open exports of data that others wrote.
+
+```elixir
+config :lotus,
+  csv_escape_formulas: true
+```
+
+**Type**: `boolean()`
+**Default**: `false`
+
 #### `unique_names`
 
 Determines whether query names must be unique across all saved queries.

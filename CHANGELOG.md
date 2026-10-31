@@ -188,6 +188,76 @@
   `:language`. The generator raised a `MatchError` when listing schemas or
   tables failed; it now returns the error.
 
+- **An untrusted adapter's unknown capability value is no capability.**
+  `Lotus.Source.Adapter.ai_context/1` raised a `FunctionClauseError` for an
+  untrusted adapter that gave a capability any value other than `true` or
+  `{false, reason}`. Such a value now reads as unsupported, with the
+  generic reason.
+
+- **The result cache keeps read-write runs apart.** A cache hit skips the
+  read-only check, and the key didn't hold the run's mode, so a read-only
+  run could get back the rows of a statement a read-write run stored (a
+  `DELETE ... RETURNING`). The key builders now get `:read_only`, and the
+  default one keys a read-write run apart. A read-only run's key is the
+  same as before.
+
+- **`Lotus.SQL.Validator.validate/3` checks a statement as a run would.**
+  It ran `EXPLAIN` on the statement with no visibility rules, so its answer
+  could tell whether a hidden table or column exists. It now first runs the
+  checks of a run, with the new `:scope`, `:context` and `:read_only`
+  options (the last by default the source's setting), and returns a
+  refusal as the run would.
+
+- **PostgreSQL: a rule for a partitioned table holds for its partitions.**
+  The plan of a partitioned table names its partitions, which a rule for
+  the table didn't match, so a partition read directly wasn't covered.
+  Preflight now adds each relation's partitioned ancestors, at any depth.
+  Tables that only inherit from another (not partitions) are unchanged.
+
+- **The AI's `get_column_values` needs a source that checks its names.**
+  It writes SQL with the table and column names quoted in it, and only a
+  source with `Lotus.Source.Adapter.Introspection` checks those names. On
+  any other source it now refuses.
+
+- **SQLite and MySQL: a run takes the caller's `:timeout`.** Both dialects
+  check a connection out for the whole run without a timeout, so the pool's
+  15 seconds bounded it: a shorter `:timeout` didn't stop a statement, and
+  a longer one ended it early. The checkout now takes the caller's
+  timeout.
+
+- **A dashboard runs a few cards at a time.** `run_dashboard/2` started a
+  task for every card at once, so a dashboard with many cards could take
+  every connection of the pool. Cards now run at most `:max_concurrency`
+  at a time (new option, twice the schedulers online by default), each
+  still bounded by `:timeout`.
+
+- **A filter or sort by a protected column is refused on a non-SQL
+  source.** The column check reads SQL, so on an adapter with another query
+  language a caller's filter or sort by a masked column ran on its values
+  before the policy applied to the result. Lotus now refuses a filter or
+  sort by a column a restricting policy protects on such a source.
+
+- **CSV exports can escape cells a spreadsheet would run.** A cell that
+  starts with `=`, `+`, `-`, `@`, a tab or a carriage return runs as a
+  formula when a spreadsheet opens the file. With the new
+  `config :lotus, csv_escape_formulas: true`, CSV exports and deliveries
+  write such a text cell, and such a header, with a leading `'`. Numbers
+  are left alone. It is off by default, so files are unchanged.
+
+- **Webhook and Slack deliveries go only to the URL they name.** They
+  followed redirects, so a receiver could send the results to another
+  host, plain `http` included. A redirect is now a failed delivery. A
+  failed webhook delivery records the status only, not the first 200
+  characters of the receiver's answer, which could be another service's.
+  A host's `req_options` can still turn redirects on.
+
+- **A card or filter stays on its dashboard, a chart on its query.** An
+  update could change a dashboard card's or filter's `dashboard_id`, or a
+  visualization's `query_id`, and so move it to another owner's record
+  past a plug that checked only the record as stored. Updates now ignore
+  those fields. A filter mapping must link a card and a filter of the same
+  dashboard.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

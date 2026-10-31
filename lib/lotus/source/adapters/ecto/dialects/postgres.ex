@@ -530,6 +530,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
               |> parse_explain_plan()
               |> collect_relations(MapSet.new())
               |> then(&Enum.into(named_relations(repo, sql), &1))
+              |> then(&Enum.into(partitioned_ancestors(repo, &1), &1))
             rescue
               # An EXPLAIN plan with an unexpected shape should fail preflight
               # cleanly, not crash the whole caller. Known cases: missing
@@ -577,6 +578,45 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
           JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
           """,
           [candidates]
+        )
+
+      Enum.map(rows, fn [schema, table] -> {schema, table} end)
+    end
+  end
+
+  # The plan of a partitioned table names its partitions, separate
+  # relations a rule for the table doesn't match. Each relation's
+  # partitioned ancestors count too, so a rule for the table holds for every
+  # partition, however the statement reads it.
+  defp partitioned_ancestors(repo, relations) do
+    names =
+      for {schema, table} <- relations,
+          is_binary(schema) and is_binary(table),
+          do: quote_identifier(schema) <> "." <> quote_identifier(table)
+
+    if names == [] do
+      []
+    else
+      %{rows: rows} =
+        repo.query!(
+          """
+          WITH RECURSIVE ancestors(oid) AS (
+            SELECT i.inhparent
+            FROM unnest($1::text[]) AS t(name)
+            JOIN pg_catalog.pg_inherits i ON i.inhrelid = to_regclass(t.name)
+            JOIN pg_catalog.pg_class p ON p.oid = i.inhparent AND p.relkind = 'p'
+            UNION
+            SELECT i.inhparent
+            FROM ancestors a
+            JOIN pg_catalog.pg_inherits i ON i.inhrelid = a.oid
+            JOIN pg_catalog.pg_class p ON p.oid = i.inhparent AND p.relkind = 'p'
+          )
+          SELECT n.nspname, c.relname
+          FROM ancestors a
+          JOIN pg_catalog.pg_class c ON c.oid = a.oid
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+          """,
+          [names]
         )
 
       Enum.map(rows, fn [schema, table] -> {schema, table} end)

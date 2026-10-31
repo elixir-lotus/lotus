@@ -7,7 +7,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3Test do
   alias Lotus.Source.Adapters.Ecto.Dialects.SQLite3
 
   defmodule PragmaRaisingRepo do
-    def checkout(fun), do: fun.()
+    def checkout(fun, _opts \\ []), do: fun.()
 
     def query("PRAGMA query_only"), do: raise(Process.get(:pragma_error))
 

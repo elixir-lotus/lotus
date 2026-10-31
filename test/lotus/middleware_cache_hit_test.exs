@@ -130,6 +130,28 @@ defmodule Lotus.MiddlewareCacheHitTest do
     :ok
   end
 
+  describe "the run's mode" do
+    test "a read-only run doesn't get back what a read-write run stored" do
+      write = "DELETE FROM test_users WHERE id = 1 RETURNING name"
+
+      assert {:ok, %{rows: [["Ada"]]}} =
+               Lotus.run_statement(write, [], repo: "postgres", read_only: false)
+
+      assert {:error, "Only read-only queries are allowed" <> _} =
+               Lotus.run_statement(write, [], repo: "postgres", read_only: true)
+    end
+
+    test "a read-only run's key is the key it always was" do
+      opts = [data_source: "postgres", search_path: nil, lotus_version: Lotus.version()]
+
+      assert Key.result("SELECT 1", [], opts ++ [read_only: true]) ==
+               Key.result("SELECT 1", [], opts)
+
+      refute Key.result("SELECT 1", [], opts ++ [read_only: false]) ==
+               Key.result("SELECT 1", [], opts)
+    end
+  end
+
   defp run(context) do
     Lotus.run_statement(@statement, [], repo: "postgres", context: context)
   end
