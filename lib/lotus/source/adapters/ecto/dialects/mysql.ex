@@ -40,16 +40,20 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     # member and leave SET SESSION state stranded. Setup must run before
     # repo.transaction because MySQL rejects SET SESSION TRANSACTION inside
     # an active tx ("Transaction characteristics can't be changed…").
-    repo.checkout(fn ->
-      session_state = capture_session_state(repo)
+    # The checkout bounds the whole run, so it takes the caller's timeout.
+    repo.checkout(
+      fn ->
+        session_state = capture_session_state(repo)
 
-      try do
-        setup_transaction_session(repo, config)
-        repo.transaction(fun, timeout: config.timeout)
-      after
-        restore_session_state(repo, session_state)
-      end
-    end)
+        try do
+          setup_transaction_session(repo, config)
+          repo.transaction(fun, timeout: config.timeout)
+        after
+          restore_session_state(repo, session_state)
+        end
+      end,
+      timeout: config.timeout
+    )
   rescue
     e -> {:error, Exception.message(e)}
   end

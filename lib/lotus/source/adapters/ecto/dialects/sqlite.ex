@@ -35,18 +35,22 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
     read_only? = Keyword.get(opts, :read_only, true)
     timeout = Keyword.get(opts, :timeout, 15_000)
 
-    # checkout/1 pins one pool connection for setup + tx + restore;
+    # checkout/2 pins one pool connection for setup + tx + restore;
     # without it, PRAGMA query_only (connection-scoped) could be set on one
     # pool member and never restored, leaving it stuck in read-only mode.
-    repo.checkout(fn ->
-      {pragma_supported?, prev_state} = setup_read_only_pragma(repo, read_only?)
+    # The checkout bounds the whole run, so it takes the caller's timeout.
+    repo.checkout(
+      fn ->
+        {pragma_supported?, prev_state} = setup_read_only_pragma(repo, read_only?)
 
-      try do
-        repo.transaction(fun, timeout: timeout)
-      after
-        restore_pragma_state(repo, pragma_supported?, prev_state)
-      end
-    end)
+        try do
+          repo.transaction(fun, timeout: timeout)
+        after
+          restore_pragma_state(repo, pragma_supported?, prev_state)
+        end
+      end,
+      timeout: timeout
+    )
   rescue
     e -> {:error, Exception.message(e)}
   end
