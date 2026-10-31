@@ -24,7 +24,9 @@ if Code.ensure_loaded?(Sake.Server) do
         queries and dashboards.
       * `lotus:query` — run read-only statements, saved queries and dashboards,
         and read a column's distinct values.
-      * `lotus:write` — save and change queries, charts and dashboards.
+      * `lotus:write` — save and change queries, charts and dashboards. A
+        chart's fields are checked by running its query once, so saving a
+        chart, or a dashboard card with one, also needs `lotus:query`.
 
     Every statement runs read-only, whatever `config :lotus, read_only:` says,
     and through Lotus's visibility rules and middleware with the person as the

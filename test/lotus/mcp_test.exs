@@ -502,6 +502,50 @@ defmodule Lotus.MCPTest do
 
       assert [] = Lotus.list_visualizations(query.id)
     end
+
+    test "a token without lotus:query can't save a chart, which runs the query",
+         %{query: query} do
+      client = client(["lotus:read", "lotus:write"])
+      test_pid = self()
+      ref = make_ref()
+
+      :telemetry.attach(
+        ref,
+        [:lotus, :query, :start],
+        fn _, _, _, _ ->
+          send(test_pid, :query_ran)
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(ref) end)
+
+      assert {:error, {:insufficient_scope, %{scope: ["lotus:write", "lotus:query"]}}} =
+               call_tool(client, "save_chart", %{
+                 "query_id" => query.id,
+                 "chart_type" => "kpi",
+                 "value_field" => "age"
+               })
+
+      dashboard = dashboard_fixture(%{name: "Charts"})
+
+      assert %{is_error: true, text: "A chart runs its query" <> _} =
+               call!(client, "add_dashboard_card", %{
+                 "dashboard_id" => dashboard.id,
+                 "query_id" => query.id,
+                 "chart_type" => "kpi",
+                 "value_field" => "age"
+               })
+
+      assert %{structured: %{"card" => %{"title" => _}}} =
+               call!(client, "add_dashboard_card", %{
+                 "dashboard_id" => dashboard.id,
+                 "query_id" => query.id
+               })
+
+      refute_received :query_ran
+      assert [] = Lotus.list_visualizations(query.id)
+    end
   end
 
   describe "dashboards" do

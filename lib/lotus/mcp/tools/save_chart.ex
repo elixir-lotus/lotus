@@ -10,7 +10,7 @@ if Code.ensure_loaded?(Sake.Server) do
       description:
         "Set a saved query's chart, as Lotus shows it with the query. The query runs once " <>
           "(one row) to check that the chart's fields are columns of its result.",
-      scope: "lotus:write",
+      scope: ["lotus:write", "lotus:query"],
       annotations: [read_only: false, destructive: true, idempotent: true, open_world: false]
 
     arg :query_id, :integer, required: true, description: "The saved query's id"
