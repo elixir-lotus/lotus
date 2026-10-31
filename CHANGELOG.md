@@ -137,6 +137,10 @@
   `ANALYSE`, PostgreSQL's other spelling of `ANALYZE`, is refused in
   read-only mode as `ANALYZE` is.
 
+- **PostgreSQL: the read-only check reads a Unicode-escaped name.** A
+  denied function written as `U&"..."` with escapes (and an optional
+  `UESCAPE`) is the function it spells, and is refused as it is.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

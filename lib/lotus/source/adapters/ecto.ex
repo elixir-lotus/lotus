@@ -1496,6 +1496,7 @@ defmodule Lotus.Source.Adapters.Ecto do
   defp assert_no_side_effects(_dialect, _tokens, false = _read_only), do: :ok
 
   defp assert_no_side_effects(dialect, tokens, _read_only) do
+    tokens = unescape_names(tokens)
     code = code_view(tokens)
 
     with :ok <- assert_read_command(code, tokens) do
@@ -1554,6 +1555,65 @@ defmodule Lotus.Source.Adapters.Ecto do
       end)
 
     Regex.compile!("(?<![\\w$])(#{alternatives})\\s*\\(", "i")
+  end
+
+  # PostgreSQL's `U&"..."` spells a name with Unicode escapes
+  # (`U&"set\005fconfig"`, or with the escape character `UESCAPE` gives): the
+  # checks read the name it spells.
+  defp unescape_names([{:code, raw}, {:identifier, quoted} | rest]) do
+    case Regex.run(~r/\A(.*?)(?<![\w$])[uU]&\z/s, raw) do
+      [_, before] ->
+        {escape, rest} = escape_character(rest)
+        name = quoted |> String.slice(1..-2//1) |> decode_escapes(escape)
+        [{:code, before}, {:identifier, ~s("#{name}")} | unescape_names(rest)]
+
+      nil ->
+        [{:code, raw} | unescape_names([{:identifier, quoted} | rest])]
+    end
+  end
+
+  defp unescape_names([{:block, inner} | rest]),
+    do: [{:block, unescape_names(inner)} | unescape_names(rest)]
+
+  defp unescape_names([token | rest]), do: [token | unescape_names(rest)]
+  defp unescape_names([]), do: []
+
+  defp escape_character([{:code, code}, {:string, <<?', char::utf8, ?'>>} | rest]) do
+    if Regex.match?(~r/\A\s*UESCAPE\s*\z/i, code),
+      do: {<<char::utf8>>, [{:code, " "} | rest]},
+      else: {"\\", [{:code, code}, {:string, <<?', char::utf8, ?'>>} | rest]}
+  end
+
+  defp escape_character(rest), do: {"\\", rest}
+
+  defp decode_escapes(name, escape) do
+    size = byte_size(escape)
+
+    case name do
+      "" ->
+        ""
+
+      <<^escape::binary-size(^size), ^escape::binary-size(^size), rest::binary>> ->
+        escape <> decode_escapes(rest, escape)
+
+      <<^escape::binary-size(^size), "+", hex::binary-size(6), rest::binary>> ->
+        decode_codepoint(hex, escape <> "+" <> hex) <> decode_escapes(rest, escape)
+
+      <<^escape::binary-size(^size), hex::binary-size(4), rest::binary>> ->
+        decode_codepoint(hex, escape <> hex) <> decode_escapes(rest, escape)
+
+      <<char::utf8, rest::binary>> ->
+        <<char::utf8>> <> decode_escapes(rest, escape)
+    end
+  end
+
+  defp decode_codepoint(hex, raw) do
+    case Integer.parse(hex, 16) do
+      {codepoint, ""} when codepoint in 0..0x10FFFF -> <<codepoint::utf8>>
+      _ -> raw
+    end
+  rescue
+    ArgumentError -> raw
   end
 
   # The statement as the engine reads it, for the checks above: code as is,

@@ -375,6 +375,26 @@ defmodule Lotus.Source.Adapters.EctoTest do
       end
     end
 
+    test "postgres reads a Unicode-escaped function name as the name it spells" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      for sql <- [
+            ~S|SELECT U&"set\005fconfig"('a.b', 'c', false)|,
+            ~S|SELECT u&"set_config"('a.b', 'c', false)|,
+            ~S|SELECT pg_catalog.U&"set\005fconfig"('a.b', 'c', false)|,
+            ~S|SELECT U&"set!005fconfig" UESCAPE '!'('a.b', 'c', false)|,
+            ~S|SELECT U&"pg\+00005fterminate_backend"(1)|
+          ] do
+        assert {:error, "Only read-only queries are allowed: " <> _} =
+                 Adapter.sanitize_query(adapter, Statement.new(sql), []),
+               sql
+      end
+
+      for sql <- [~S|SELECT U&"d\0061ta" FROM t|, ~S|SELECT U&"bad\zz"(1)|] do
+        assert :ok = Adapter.sanitize_query(adapter, Statement.new(sql), []), sql
+      end
+    end
+
     test "rejects multiple statements" do
       adapter = EctoAdapter.wrap("main", Repo)
 
