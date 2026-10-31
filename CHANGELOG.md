@@ -31,6 +31,12 @@
   the SQL in the v2 upgrade guide. A name that was unique across the table
   is now unique within a tenant, and among the rows without one.
 
+- **`Lotus.MCP` needs Sake 0.5.** An app that serves `Lotus.MCP` changes
+  its requirement to `{:sake, "~> 0.5"}`. A task whose tool the
+  `:after_list` middleware hides is now answered as a task that does not
+  exist. An app on `Sake.Tasks.Store.Ecto` with an existing `sake_tasks`
+  table adds the new columns with `Sake.Tasks.Migration.add_execution/1`.
+
 ### Security
 
 - **A `NATURAL` join over a table with protected columns is refused.** A
