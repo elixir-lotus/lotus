@@ -3,6 +3,32 @@ defmodule Lotus.AI.Actions.GetColumnValuesTest do
 
   alias Lotus.AI.Actions.GetColumnValues
 
+  defmodule CoreOnlySource do
+    @moduledoc false
+    @behaviour Lotus.Source.Adapter
+
+    @impl true
+    def execute_query(_state, _body, _params, _opts),
+      do: {:ok, %{columns: [], rows: [], num_rows: 0}}
+
+    @impl true
+    def transaction(state, fun, _opts), do: {:ok, fun.(state)}
+    @impl true
+    def list_tables(_state, _schemas, _opts), do: {:ok, []}
+    @impl true
+    def describe_table(_state, _schema, _table), do: {:ok, []}
+    @impl true
+    def builtin_denies(_state), do: []
+    @impl true
+    def health_check(_state), do: :ok
+    @impl true
+    def disconnect(_state), do: :ok
+    @impl true
+    def format_error(_state, error), do: inspect(error)
+    @impl true
+    def source_type(_state), do: :other
+  end
+
   describe "run/2" do
     test "returns distinct values for a column" do
       stub(Lotus, :run_statement, fn _query, _params, _opts ->
@@ -19,6 +45,25 @@ defmodule Lotus.AI.Actions.GetColumnValuesTest do
       assert result.column == "status"
       assert result.values == ["active", "inactive", "pending"]
       assert result.count == 3
+    end
+
+    test "refuses a source that doesn't check its identifiers" do
+      stub(Lotus.Source, :resolve!, fn _source, _fallback ->
+        %Lotus.Source.Adapter{
+          name: "core",
+          module: CoreOnlySource,
+          state: nil,
+          source_type: :other
+        }
+      end)
+
+      reject(&Lotus.run_statement/3)
+
+      assert {:error, "This data source can't list a column's values"} =
+               GetColumnValues.run(
+                 %{data_source: "core", table_name: ~s(t" WHERE 1=1 --), column_name: "x"},
+                 %{}
+               )
     end
 
     test "returns empty values when column has no non-null values" do

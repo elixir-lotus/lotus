@@ -35,18 +35,22 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
     read_only? = Keyword.get(opts, :read_only, true)
     timeout = Keyword.get(opts, :timeout, 15_000)
 
-    # checkout/1 pins one pool connection for setup + tx + restore;
+    # checkout/2 pins one pool connection for setup + tx + restore;
     # without it, PRAGMA query_only (connection-scoped) could be set on one
     # pool member and never restored, leaving it stuck in read-only mode.
-    repo.checkout(fn ->
-      {pragma_supported?, prev_state} = setup_read_only_pragma(repo, read_only?)
+    # The checkout bounds the whole run, so it takes the caller's timeout.
+    repo.checkout(
+      fn ->
+        {pragma_supported?, prev_state} = setup_read_only_pragma(repo, read_only?)
 
-      try do
-        repo.transaction(fun, timeout: timeout)
-      after
-        restore_pragma_state(repo, pragma_supported?, prev_state)
-      end
-    end)
+        try do
+          repo.transaction(fun, timeout: timeout)
+        after
+          restore_pragma_state(repo, pragma_supported?, prev_state)
+        end
+      end,
+      timeout: timeout
+    )
   rescue
     e -> {:error, Exception.message(e)}
   end
@@ -155,8 +159,9 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   end
 
   @impl true
-  def limit_query(%Statement{body: body} = statement, limit) do
-    %{statement | body: "SELECT * FROM (#{body}) AS limited_query LIMIT #{limit}"}
+  def limit_query(%Statement{body: body} = statement, limit)
+      when is_integer(limit) and limit > 0 do
+    %{statement | body: "SELECT * FROM (\n#{body}\n) AS limited_query LIMIT #{limit}"}
   end
 
   @impl true
@@ -419,14 +424,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   # The statement as SQLite reads it past comments: `EXPLAIN [QUERY PLAN]`
   # and the statement it explains, a `PRAGMA` and its form, or neither.
   defp introspection(sql) do
-    text =
-      sql
-      |> Tokenizer.tokenize(Profile.for_language(query_language()))
-      |> Enum.map(fn
-        {:comment, _raw} -> {:code, " "}
-        token -> token
-      end)
-      |> Tokenizer.to_string()
+    text = EctoHelpers.statement_text(sql, Profile.for_language(query_language()))
 
     cond do
       match = Regex.run(~r/\A\s*EXPLAIN\b(?:\s+QUERY\s+PLAN\b)?(.*)\z/is, text) ->

@@ -324,6 +324,30 @@ writes the changeset it had. A field the plug puts is not validated again, and
 an invalid changeset is still not written. `:after_content_change` reports what
 was written.
 
+### Records a change refers to
+
+A dashboard card's `query_id`, a dashboard filter's `source_query_id`, a
+filter mapping's card and filter, and a schedule's `query_id` or
+`dashboard_id` name another record by id. Lotus runs that record by id when
+the dashboard or the schedule runs, without `:list_content`. A plug that
+keeps tenants apart checks the ids in the changeset as well as the
+`:record`, so that a card can't show another tenant's query:
+
+```elixir
+defmodule MyApp.SameTenantReferences do
+  def init(opts), do: opts
+
+  def call(%{resource: :dashboard_card, changeset: cs, context: %{tenant_id: tenant}} = payload, _opts) do
+    case Ecto.Changeset.get_field(cs, :query_id) do
+      nil -> {:cont, payload}
+      id -> if MyApp.Queries.tenant_of(id) == tenant, do: {:cont, payload}, else: {:halt, :forbidden}
+    end
+  end
+
+  def call(payload, _opts), do: {:cont, payload}
+end
+```
+
 ### Public sharing
 
 `Lotus.enable_public_sharing/2` fires `:enable_sharing` and
@@ -605,7 +629,9 @@ Every statement the actor runs is filtered, however it is written: subqueries,
 CTEs and joins included, and the count of a page too. The settings are part of
 the result cache key, so tenants never share an entry. Names must be custom
 settings (`prefix.name`); built-in ones such as `role` or
-`transaction_read_only` are refused. A source whose adapter does not declare
+`transaction_read_only` are refused. A statement with settings may not change
+any (`SET`, `RESET`, `DISCARD`, `set_config()`), on a read-write run too. A
+source whose adapter does not declare
 `Lotus.Source.Adapter.Session` refuses a statement with settings rather than
 run it unfiltered. The role Lotus connects as must not own the tables or be a
 superuser, which bypass policies (or use `FORCE ROW LEVEL SECURITY` for the

@@ -14,7 +14,7 @@ defmodule Lotus.SQL.SortInjector do
       Lotus.SQL.SortInjector.apply("SELECT * FROM users ORDER BY id", [
         %Lotus.Query.Sort{column: "created_at", direction: :desc}
       ], quote_fn)
-      #=> ~s(WITH _sorted AS (SELECT * FROM users ORDER BY id) SELECT * FROM _sorted ORDER BY "created_at" DESC)
+      #=> ~s(WITH _sorted AS (\nSELECT * FROM users ORDER BY id\n) SELECT * FROM _sorted ORDER BY "created_at" DESC)
   """
 
   alias Lotus.Query.Sort
@@ -37,7 +37,9 @@ defmodule Lotus.SQL.SortInjector do
   def apply(sql, sorts, quote_fn) when is_list(sorts) and is_function(quote_fn, 1) do
     order_clause = Enum.map_join(sorts, ", ", &build_sort_clause(&1, quote_fn))
     bare = strip_trailing_semicolon(sql)
-    "WITH _sorted AS (#{bare}) SELECT * FROM _sorted ORDER BY #{order_clause}"
+    # On lines of its own, so that a line comment at its end can't reach
+    # the ORDER BY.
+    "WITH _sorted AS (\n#{bare}\n) SELECT * FROM _sorted ORDER BY #{order_clause}"
   end
 
   defp build_sort_clause(%Sort{column: column, direction: direction}, quote_fn) do

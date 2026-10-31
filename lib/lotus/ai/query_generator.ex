@@ -11,6 +11,7 @@ if Code.ensure_loaded?(ReqLLM) do
 
     alias Lotus.AI.Action
     alias Lotus.AI.Actions
+    alias Lotus.AI.Actions.ValidateStatement
     alias Lotus.AI.Conversation
     alias Lotus.AI.Prompts.AdapterNotes
     alias Lotus.AI.Prompts.QueryGeneration
@@ -79,21 +80,19 @@ if Code.ensure_loaded?(ReqLLM) do
 
       case Adapter.ai_context(adapter) do
         {:ok, ai_context} ->
-          {:ok, all_schemas} = Lotus.Schema.list_schemas(data_source, actor_opts)
-
-          {:ok, tables} =
-            Lotus.Schema.list_tables(data_source, [schemas: all_schemas] ++ actor_opts)
-
-          table_names = extract_table_names(tables)
-
-          system_prompt =
-            QueryGeneration.system_prompt(ai_context, table_names, read_only: read_only)
-
           request =
             [model: model_string, data_source: data_source, prompt: prompt] ++
               Keyword.take(opts, [:context, :scope])
 
-          with {:ok, system_prompt} <- Request.prepare(:generation, system_prompt, request) do
+          # A discovery error is the generation's error, not a crash.
+          with {:ok, all_schemas} <- Lotus.Schema.list_schemas(data_source, actor_opts),
+               {:ok, tables} <-
+                 Lotus.Schema.list_tables(data_source, [schemas: all_schemas] ++ actor_opts),
+               system_prompt =
+                 QueryGeneration.system_prompt(ai_context, extract_table_names(tables),
+                   read_only: read_only
+                 ),
+               {:ok, system_prompt} <- Request.prepare(:generation, system_prompt, request) do
             tools = build_tools(data_source, actor)
             fence = AdapterNotes.fence_label(ai_context)
             messages = build_messages(conversation, prompt, system_prompt, query_context, fence)
@@ -105,7 +104,7 @@ if Code.ensure_loaded?(ReqLLM) do
               request: Request.metadata(:generation, request),
               on_tool_call: Keyword.get(opts, :on_tool_call)
             )
-            |> handle_response(model_string, data_source)
+            |> handle_response(model_string, data_source, actor_opts)
           end
 
         {:error, :ai_not_supported} ->
@@ -116,7 +115,7 @@ if Code.ensure_loaded?(ReqLLM) do
       end
     end
 
-    defp handle_response({:ok, response}, model_string, data_source) do
+    defp handle_response({:ok, response}, model_string, data_source, actor_opts) do
       content = ReqLLM.Response.text(response)
 
       case QueryGeneration.extract_response(content) do
@@ -127,18 +126,20 @@ if Code.ensure_loaded?(ReqLLM) do
           adapter = Source.resolve!(data_source, nil)
           statement = Statement.new(candidate)
 
-          case Adapter.validate_statement(adapter, statement, []) do
-            :ok ->
-              variables = QueryGeneration.extract_variables(candidate)
-              {:ok, build_success_response(response, model_string, candidate, variables)}
-
-            {:error, _reason} ->
-              {:error, {:unable_to_generate, candidate}}
+          # The model's own statement, checked as the caller's would be
+          # before the database is asked about it.
+          with :ok <- ValidateStatement.check(adapter, statement, actor_opts),
+               :ok <- Adapter.validate_statement(adapter, statement, []) do
+            variables = QueryGeneration.extract_variables(candidate)
+            {:ok, build_success_response(response, model_string, candidate, variables)}
+          else
+            {:error, _reason} -> {:error, {:unable_to_generate, candidate}}
           end
       end
     end
 
-    defp handle_response({:error, error}, _model_string, _data_source), do: {:error, error}
+    defp handle_response({:error, error}, _model_string, _data_source, _actor_opts),
+      do: {:error, error}
 
     defp build_success_response(response, model_string, statement, variables) do
       %{

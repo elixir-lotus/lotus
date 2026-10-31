@@ -19,7 +19,8 @@ defmodule Lotus.Delivery.HTTP do
   end
 
   @doc """
-  POSTs `json` to `url`, waiting 15 seconds at most and without retrying:
+  POSTs `json` to `url`, waiting 15 seconds at most, without retrying and
+  without following a redirect:
   `{:ok, status, body}` for any answer, `{:error, message}` when there is
   none. `options` are Req's (headers, and the host's `req_options`).
   """
@@ -30,7 +31,10 @@ defmodule Lotus.Delivery.HTTP do
           json: json,
           receive_timeout: @timeout,
           connect_options: [timeout: @timeout],
-          retry: false
+          retry: false,
+          # The URL is the one the delivery's settings name and validate; a
+          # redirect would send the results, or read an answer, elsewhere.
+          redirect: false
         ],
         options
       )

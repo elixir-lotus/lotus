@@ -190,6 +190,17 @@ defmodule Lotus.AI.QueryGeneratorTest do
       assert response.variables == []
     end
 
+    test "a discovery error is returned, not raised" do
+      stub(Lotus.Schema, :list_tables, fn _, _opts -> {:error, "connection refused"} end)
+
+      assert {:error, "connection refused"} =
+               QueryGenerator.generate_statement("openai:gpt-4o",
+                 prompt: "Count users",
+                 data_source: "postgres",
+                 api_key: "sk-test"
+               )
+    end
+
     test "extracts plain SQL without markdown" do
       mock_plain_sql()
 

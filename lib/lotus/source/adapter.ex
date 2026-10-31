@@ -1423,9 +1423,10 @@ defmodule Lotus.Source.Adapter do
     if Lotus.Config.trusted_source_adapter?(mod) do
       caps
     else
+      # Any other value of a key past the standard ones is no capability.
       Enum.into(caps, %{}, fn
-        {key, {false, _reason}} -> {key, {false, @generic_unsupported_reason}}
         {key, true} -> {key, true}
+        {key, _other} -> {key, {false, @generic_unsupported_reason}}
       end)
     end
   end

@@ -747,7 +747,8 @@ defmodule Lotus.Runner do
          {:ok, matcher} <- tag(:preflight, matcher(adapter, opts)),
          {:ok, relations} <-
            tag(:preflight, preflight_visibility(adapter, statement, matcher, opts)),
-         {:ok, columns} <- tag(:preflight, check_columns(adapter, statement, relations, matcher)) do
+         {:ok, columns} <-
+           tag(:preflight, check_columns(adapter, statement, relations, matcher, opts)) do
       {:ok, %{relations: relations, matcher: matcher, columns: columns}}
     end
   end
@@ -1044,18 +1045,44 @@ defmodule Lotus.Runner do
   # renames or transforms a protected column is refused before it runs. On
   # success, the relation each result column comes from, when it can tell.
   # A statement preflight skipped (EXPLAIN, SHOW) returns no column values.
-  defp check_columns(_adapter, _statement, {:skipped, _reason}, _matcher), do: {:ok, nil}
+  defp check_columns(adapter, %Statement{body: body}, relations, matcher, opts) do
+    if is_binary(body) and String.starts_with?(Adapter.query_language(adapter), "sql") do
+      case relations do
+        {:skipped, _reason} ->
+          {:ok, nil}
 
-  defp check_columns(%Adapter{} = adapter, %Statement{body: body}, relations, matcher)
-       when is_binary(body) do
-    if String.starts_with?(Adapter.query_language(adapter), "sql") do
-      Columns.result_sources(body, Adapter.lexical_profile(adapter), matcher, relations)
+        relations ->
+          Columns.result_sources(body, Adapter.lexical_profile(adapter), matcher, relations)
+      end
     else
-      {:ok, nil}
+      check_shaped_columns(matcher, relations, Keyword.get(opts, :shaped_columns, []))
     end
   end
 
-  defp check_columns(_adapter, _statement, _relations, _matcher), do: {:ok, nil}
+  # The column check reads SQL. On another language, a filter or a sort by a
+  # protected column would run on its values before a policy applies to the
+  # result, so it is refused.
+  defp check_shaped_columns(matcher, relations, columns) do
+    rels = Relations.to_list(relations)
+
+    case Enum.find(columns, &restricted_column?(matcher, rels, &1)) do
+      nil ->
+        {:ok, nil}
+
+      column ->
+        {:error,
+         "Query filters or sorts by protected column #{column}, which Lotus can't check " <>
+           "against its column policy on this source."}
+    end
+  end
+
+  defp restricted_column?(matcher, rels, column) do
+    case Visibility.column_policy_for(matcher, rels, column) do
+      %{action: :allow} -> false
+      %{action: _restricting} -> true
+      _none -> false
+    end
+  end
 
   # Returns what preflight knows about the statement: a list of
   # `{schema, table}`, `{:unrestricted, reason}` for an adapter that cannot

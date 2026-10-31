@@ -17,6 +17,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   alias Lotus.Query.Filter
   alias Lotus.Query.Statement
   alias Lotus.Query.Tokenizer.Profile
+  alias Lotus.Source.Adapters.Ecto, as: EctoHelpers
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
   alias Lotus.SQL.FilterInjector
   alias Lotus.SQL.Identifier
@@ -34,7 +35,9 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   @impl true
   def execute_in_transaction(repo, fun, opts) do
     read_only? = Keyword.get(opts, :read_only, true)
-    stmt_ms = Keyword.get(opts, :statement_timeout_ms, @default_statement_timeout_ms)
+
+    stmt_ms = statement_timeout_ms(opts)
+
     timeout = Keyword.get(opts, :timeout, 15_000)
     search_path = Keyword.get(opts, :search_path)
 
@@ -65,6 +68,14 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
     end
   rescue
     e -> {:error, Exception.message(e)}
+  end
+
+  # Interpolated into `SET LOCAL`, so only a non-negative integer.
+  defp statement_timeout_ms(opts) do
+    case Keyword.get(opts, :statement_timeout_ms, @default_statement_timeout_ms) do
+      ms when is_integer(ms) and ms >= 0 -> ms
+      _ -> @default_statement_timeout_ms
+    end
   end
 
   @impl true
@@ -159,8 +170,9 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   end
 
   @impl true
-  def limit_query(%Statement{body: body} = statement, limit) do
-    %{statement | body: "SELECT * FROM (#{body}) AS limited_query LIMIT #{limit}"}
+  def limit_query(%Statement{body: body} = statement, limit)
+      when is_integer(limit) and limit > 0 do
+    %{statement | body: "SELECT * FROM (\n#{body}\n) AS limited_query LIMIT #{limit}"}
   end
 
   @impl true
@@ -476,8 +488,29 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
     %{statement | body: SortInjector.apply(sql, sorts, &quote_identifier/1)}
   end
 
+  # `SHOW` reads a setting, never a table. `EXPLAIN` describes how the
+  # statement it explains reads its tables (and with `ANALYZE` runs it), so
+  # it is checked by that statement.
   @impl true
-  def extract_accessed_resources(repo, %Statement{body: sql, params: params, meta: meta}) do
+  def needs_preflight?(%Statement{body: sql}) when is_binary(sql),
+    do: not Regex.match?(~r/\A\s*SHOW\b/i, statement_text(sql))
+
+  def needs_preflight?(_statement), do: true
+
+  @explain ~r/\A\s*EXPLAIN\b\s*(?:\([^()]*\)\s*)?(?:(?:ANALYZE|ANALYSE|VERBOSE)\b\s*)*(.*)\z/is
+
+  @impl true
+  def extract_accessed_resources(repo, %Statement{body: sql} = statement) when is_binary(sql) do
+    case Regex.run(@explain, statement_text(sql)) do
+      [_, inner] -> extract_accessed_resources(repo, %{statement | body: inner})
+      nil -> statement_relations(repo, statement)
+    end
+  end
+
+  defp statement_text(sql),
+    do: EctoHelpers.statement_text(sql, Profile.for_language(query_language()))
+
+  defp statement_relations(repo, %Statement{body: sql, params: params, meta: meta}) do
     search_path = Map.get(meta, :search_path)
     explain = "EXPLAIN (VERBOSE, FORMAT JSON) " <> sql
 
@@ -497,6 +530,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
               |> parse_explain_plan()
               |> collect_relations(MapSet.new())
               |> then(&Enum.into(named_relations(repo, sql), &1))
+              |> then(&Enum.into(partitioned_ancestors(repo, &1), &1))
             rescue
               # An EXPLAIN plan with an unexpected shape should fail preflight
               # cleanly, not crash the whole caller. Known cases: missing
@@ -544,6 +578,45 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
           JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
           """,
           [candidates]
+        )
+
+      Enum.map(rows, fn [schema, table] -> {schema, table} end)
+    end
+  end
+
+  # The plan of a partitioned table names its partitions, separate
+  # relations a rule for the table doesn't match. Each relation's
+  # partitioned ancestors count too, so a rule for the table holds for every
+  # partition, however the statement reads it.
+  defp partitioned_ancestors(repo, relations) do
+    names =
+      for {schema, table} <- relations,
+          is_binary(schema) and is_binary(table),
+          do: quote_identifier(schema) <> "." <> quote_identifier(table)
+
+    if names == [] do
+      []
+    else
+      %{rows: rows} =
+        repo.query!(
+          """
+          WITH RECURSIVE ancestors(oid) AS (
+            SELECT i.inhparent
+            FROM unnest($1::text[]) AS t(name)
+            JOIN pg_catalog.pg_inherits i ON i.inhrelid = to_regclass(t.name)
+            JOIN pg_catalog.pg_class p ON p.oid = i.inhparent AND p.relkind = 'p'
+            UNION
+            SELECT i.inhparent
+            FROM ancestors a
+            JOIN pg_catalog.pg_inherits i ON i.inhrelid = a.oid
+            JOIN pg_catalog.pg_class p ON p.oid = i.inhparent AND p.relkind = 'p'
+          )
+          SELECT n.nspname, c.relname
+          FROM ancestors a
+          JOIN pg_catalog.pg_class c ON c.oid = a.oid
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+          """,
+          [names]
         )
 
       Enum.map(rows, fn [schema, table] -> {schema, table} end)

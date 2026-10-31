@@ -18,6 +18,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   alias Lotus.Query.Filter
   alias Lotus.Query.Statement
   alias Lotus.Query.Tokenizer.Profile
+  alias Lotus.Source.Adapters.Ecto, as: EctoHelpers
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
   alias Lotus.SQL.FilterInjector
   alias Lotus.SQL.SortInjector
@@ -39,16 +40,20 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     # member and leave SET SESSION state stranded. Setup must run before
     # repo.transaction because MySQL rejects SET SESSION TRANSACTION inside
     # an active tx ("Transaction characteristics can't be changed…").
-    repo.checkout(fn ->
-      session_state = capture_session_state(repo)
+    # The checkout bounds the whole run, so it takes the caller's timeout.
+    repo.checkout(
+      fn ->
+        session_state = capture_session_state(repo)
 
-      try do
-        setup_transaction_session(repo, config)
-        repo.transaction(fun, timeout: config.timeout)
-      after
-        restore_session_state(repo, session_state)
-      end
-    end)
+        try do
+          setup_transaction_session(repo, config)
+          repo.transaction(fun, timeout: config.timeout)
+        after
+          restore_session_state(repo, session_state)
+        end
+      end,
+      timeout: config.timeout
+    )
   rescue
     e -> {:error, Exception.message(e)}
   end
@@ -226,8 +231,9 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
   end
 
   @impl true
-  def limit_query(%Statement{body: body} = statement, limit) do
-    %{statement | body: "SELECT * FROM (#{body}) AS limited_query LIMIT #{limit}"}
+  def limit_query(%Statement{body: body} = statement, limit)
+      when is_integer(limit) and limit > 0 do
+    %{statement | body: "SELECT * FROM (\n#{body}\n) AS limited_query LIMIT #{limit}"}
   end
 
   @impl true
@@ -422,17 +428,21 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     for [schema, table, rows] <- rows, is_integer(rows), into: %{}, do: {{schema, table}, rows}
   end
 
+  # In a read-only transaction, as preflight's EXPLAIN runs.
   @impl true
-  def query_plan(repo, %Statement{body: sql, params: params}, _opts) do
+  def query_plan(repo, %Statement{body: sql, params: params}, opts) do
     explain_sql = "EXPLAIN FORMAT=JSON " <> sql
 
-    case repo.query(explain_sql, params) do
-      {:ok, %{rows: [[json]]}} ->
-        {:ok, json}
-
-      {:error, err} ->
-        {:error, format_error(err)}
-    end
+    execute_in_transaction(
+      repo,
+      fn ->
+        case repo.query(explain_sql, params) do
+          {:ok, %{rows: [[json]]}} -> json
+          {:error, err} -> repo.rollback(format_error(err))
+        end
+      end,
+      Keyword.take(opts, [:read_only, :statement_timeout_ms, :timeout])
+    )
   end
 
   @impl true
@@ -479,8 +489,111 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     %{statement | body: SortInjector.apply(sql, sorts, &quote_identifier/1)}
   end
 
+  # `EXPLAIN`, `DESCRIBE` and `DESC` describe a table (`DESCRIBE t`) or how
+  # a statement reads its tables, and `SHOW COLUMNS` and `SHOW INDEX` a
+  # table: each is checked by what it describes. Any other `SHOW` names no
+  # table of its own and is not checked, as before.
+  @name ~S/(`(?:[^`]|``)+`|[\w$]+)/
+  @explained ~r/\A\s*(?:EXPLAIN|DESCRIBE|DESC)\b((?:\s+(?:EXTENDED|PARTITIONS|ANALYZE)\b|\s*FORMAT\s*=\s*\w+)*)\s*(.*)\z/is
+  @statement_starts ~w(select with table values insert update delete replace)
+
+  defp show_table_regex do
+    Regex.compile!(
+      "\\A\\s*SHOW\\s+(?:EXTENDED\\s+)?(?:FULL\\s+)?(?:COLUMNS|FIELDS|INDEX|INDEXES|KEYS)\\s+" <>
+        "(?:FROM|IN)\\s+(?:#{@name}\\s*\\.\\s*)?#{@name}(?:\\s+(?:FROM|IN)\\s+#{@name})?",
+      "is"
+    )
+  end
+
   @impl true
-  def extract_accessed_resources(repo, %Statement{body: sql, params: params, meta: meta}) do
+  def needs_preflight?(%Statement{body: sql}) when is_binary(sql) do
+    text = statement_text(sql)
+    not Regex.match?(~r/\A\s*SHOW\b/i, text) or Regex.match?(show_table_regex(), text)
+  end
+
+  def needs_preflight?(_statement), do: true
+
+  @impl true
+  def extract_accessed_resources(repo, %Statement{body: sql} = statement) when is_binary(sql) do
+    with {:ok, relations} <- accessed(repo, statement),
+         do: {:ok, fold_case(repo, relations)}
+  end
+
+  # MySQL reads its system schemas' names in any case, and a table's too
+  # when `lower_case_table_names` folds them, while visibility rules match
+  # a name as given: those names are also checked as the server stores
+  # them.
+  @system_schemas ~w(information_schema mysql performance_schema sys)
+
+  defp fold_case(repo, relations) do
+    fold_tables? =
+      case repo.query("SELECT @@lower_case_table_names") do
+        {:ok, %{rows: [[mode]]}} -> mode != 0
+        _ -> true
+      end
+
+    relations
+    |> Enum.flat_map(fn {schema, table} = relation ->
+      down = schema && String.downcase(schema)
+      schema = if down in @system_schemas, do: down, else: schema
+      folded = if fold_tables?, do: [{down, String.downcase(table)}], else: []
+      [relation, {schema, table} | folded]
+    end)
+    |> MapSet.new()
+  end
+
+  defp accessed(repo, %Statement{body: sql} = statement) do
+    text = statement_text(sql)
+
+    cond do
+      match = Regex.run(@explained, text) ->
+        explained(repo, statement, List.last(match))
+
+      match = Regex.run(show_table_regex(), text) ->
+        {:ok, MapSet.new([shown_table(tl(match))])}
+
+      true ->
+        statement_relations(repo, statement)
+    end
+  end
+
+  defp explained(repo, statement, inner) do
+    first = inner |> String.trim_leading() |> String.downcase()
+
+    cond do
+      String.starts_with?(first, "(") or
+          Enum.any?(@statement_starts, &Regex.match?(~r/\A#{&1}\b/, first)) ->
+        accessed(repo, %{statement | body: inner})
+
+      Regex.match?(~r/\Afor\b/, first) ->
+        {:error, "Lotus can't tell which tables EXPLAIN FOR CONNECTION reads"}
+
+      match = Regex.run(~r/\A\s*(?:#{@name}\s*\.\s*)?#{@name}/s, inner) ->
+        {:ok, MapSet.new([table_path(tl(match))])}
+
+      true ->
+        {:error, "Lotus can't tell which table the statement describes"}
+    end
+  end
+
+  # `SHOW COLUMNS FROM t FROM db` names the table's database after it.
+  defp shown_table([schema, table, database]) when schema in [nil, ""],
+    do: {unquote_name(database), unquote_name(table)}
+
+  defp shown_table([schema, table | _]), do: table_path([schema, table])
+
+  defp table_path(["", table]), do: {nil, unquote_name(table)}
+  defp table_path([schema, table]), do: {unquote_name(schema), unquote_name(table)}
+
+  defp unquote_name("`" <> _ = raw),
+    do: raw |> String.slice(1..-2//1) |> String.replace("``", "`")
+
+  defp unquote_name(raw), do: raw
+
+  defp statement_text(sql),
+    do: EctoHelpers.statement_text(sql, Profile.for_language(query_language()))
+
+  defp statement_relations(repo, %Statement{body: sql, params: params, meta: meta}) do
     opts = Map.to_list(meta)
     read = Relations.read(sql)
     explain = "EXPLAIN FORMAT=JSON " <> sql
@@ -522,47 +635,26 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     end
   end
 
-  defp collect_mysql_relations(%{"query_block" => query_block}, acc) do
-    collect_query_block(query_block, acc)
-  end
-
-  defp collect_mysql_relations(data, acc) when is_list(data) do
-    Enum.reduce(data, acc, &collect_mysql_relations/2)
-  end
-
+  # Every table the plan names, wherever it sits: under a query block's
+  # nested loop, beside it (`select_list_subqueries`,
+  # `optimized_away_subqueries`) or in a table's `attached_subqueries`.
   defp collect_mysql_relations(data, acc) when is_map(data) do
-    case Map.get(data, "query_block") do
-      nil -> acc
-      query_block -> collect_query_block(query_block, acc)
-    end
+    acc =
+      case data do
+        %{"table_name" => name} when is_binary(name) ->
+          MapSet.put(acc, {Map.get(data, "schema"), name})
+
+        _ ->
+          acc
+      end
+
+    Enum.reduce(data, acc, fn {_key, value}, acc -> collect_mysql_relations(value, acc) end)
   end
 
-  defp collect_mysql_relations(_, acc), do: acc
+  defp collect_mysql_relations(data, acc) when is_list(data),
+    do: Enum.reduce(data, acc, &collect_mysql_relations/2)
 
-  defp collect_query_block(%{"table" => table_info}, acc) when is_map(table_info) do
-    case Map.get(table_info, "table_name") do
-      table_name when is_binary(table_name) ->
-        schema = Map.get(table_info, "schema")
-        MapSet.put(acc, {schema, table_name})
-
-      _ ->
-        acc
-    end
-  end
-
-  defp collect_query_block(%{"nested_loop" => nested_loop}, acc) when is_list(nested_loop) do
-    Enum.reduce(nested_loop, acc, fn item, acc_inner ->
-      collect_query_block(item, acc_inner)
-    end)
-  end
-
-  defp collect_query_block(data, acc) when is_map(data) do
-    Enum.reduce(data, acc, fn {_key, value}, acc_inner ->
-      collect_mysql_relations(value, acc_inner)
-    end)
-  end
-
-  defp collect_query_block(_, acc), do: acc
+  defp collect_mysql_relations(_data, acc), do: acc
 
   # The tables the statement's text reads, as `{schema, table}`; see
   # `MySQL.Relations`.

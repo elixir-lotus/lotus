@@ -789,7 +789,7 @@ defmodule Lotus.Source.Adapters.Ecto do
 
   # Deny list for dangerous operations (defense-in-depth).
   # Skipped when `read_only: false` is passed in opts.
-  @deny ~r/\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|VACUUM|ANALYZE|CALL|LOCK|OUTFILE|DUMPFILE)\b/i
+  @deny ~r/\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|VACUUM|ANALYZE|ANALYSE|CALL|LOCK|OUTFILE|DUMPFILE)\b/i
 
   @impl true
   def sanitize_query(_repo, statement, opts),
@@ -1119,7 +1119,7 @@ defmodule Lotus.Source.Adapters.Ecto do
   end
 
   @doc false
-  def do_sanitize_query(dialect, %Statement{body: sql}, opts) do
+  def do_sanitize_query(dialect, %Statement{body: sql} = statement, opts) do
     read_only = Keyword.get(opts, :read_only, true)
 
     profile = lexical_profile(dialect)
@@ -1131,8 +1131,9 @@ defmodule Lotus.Source.Adapters.Ecto do
 
     with :ok <- assert_single_statement(tokens),
          :ok <- assert_contained(tokens, profile),
-         :ok <- assert_not_denied(tokens, read_only) do
-      assert_no_side_effects(dialect, tokens, read_only)
+         :ok <- assert_not_denied(tokens, read_only),
+         :ok <- assert_no_side_effects(dialect, tokens, read_only) do
+      assert_session_kept(tokens, statement.session, read_only)
     end
   end
 
@@ -1217,8 +1218,9 @@ defmodule Lotus.Source.Adapters.Ecto do
 
   # SQL-specific preflight heuristic. Skips introspection statements
   # (EXPLAIN, SHOW, PRAGMA) that do not touch visible relations. Dialects
-  # can override by implementing `needs_preflight?/1`, as SQLite does to
-  # check the tables its EXPLAIN and PRAGMA statements name.
+  # can override by implementing `needs_preflight?/1`, as the built-in ones
+  # do to check the tables an EXPLAIN describes (and SQLite a PRAGMA, MySQL
+  # a DESCRIBE or a SHOW COLUMNS or SHOW INDEX).
   #
   # Skipping the preflight skips column visibility, so the check errs
   # toward running it: the statement is skipped only when the first word
@@ -1495,6 +1497,7 @@ defmodule Lotus.Source.Adapters.Ecto do
   defp assert_no_side_effects(_dialect, _tokens, false = _read_only), do: :ok
 
   defp assert_no_side_effects(dialect, tokens, _read_only) do
+    tokens = unescape_names(tokens)
     code = code_view(tokens)
 
     with :ok <- assert_read_command(code, tokens) do
@@ -1546,6 +1549,30 @@ defmodule Lotus.Source.Adapters.Ecto do
     end
   end
 
+  # A statement's session settings (a `:before_query` plug's tenant, which a
+  # row-level security policy reads) hold for the whole statement: on a
+  # read-write run too, it may not change a setting. A read-only run refuses
+  # these already.
+  @session_commands ~w(set reset discard)
+
+  defp assert_session_kept(_tokens, session, read_only)
+       when session == %{} or session == nil or read_only != false,
+       do: :ok
+
+  defp assert_session_kept(tokens, _session, false) do
+    code = tokens |> unescape_names() |> code_view()
+
+    command =
+      case Regex.run(@command, code) do
+        [_, command, _rest] -> String.downcase(command)
+        _ -> nil
+      end
+
+    if command in @session_commands or Regex.match?(denied_functions_regex(["set_config"]), code),
+      do: {:error, "A statement with session settings may not change settings"},
+      else: :ok
+  end
+
   defp denied_functions_regex(names) do
     alternatives =
       Enum.map_join(names, "|", fn name ->
@@ -1553,6 +1580,65 @@ defmodule Lotus.Source.Adapters.Ecto do
       end)
 
     Regex.compile!("(?<![\\w$])(#{alternatives})\\s*\\(", "i")
+  end
+
+  # PostgreSQL's `U&"..."` spells a name with Unicode escapes
+  # (`U&"set\005fconfig"`, or with the escape character `UESCAPE` gives): the
+  # checks read the name it spells.
+  defp unescape_names([{:code, raw}, {:identifier, quoted} | rest]) do
+    case Regex.run(~r/\A(.*?)(?<![\w$])[uU]&\z/s, raw) do
+      [_, before] ->
+        {escape, rest} = escape_character(rest)
+        name = quoted |> String.slice(1..-2//1) |> decode_escapes(escape)
+        [{:code, before}, {:identifier, ~s("#{name}")} | unescape_names(rest)]
+
+      nil ->
+        [{:code, raw} | unescape_names([{:identifier, quoted} | rest])]
+    end
+  end
+
+  defp unescape_names([{:block, inner} | rest]),
+    do: [{:block, unescape_names(inner)} | unescape_names(rest)]
+
+  defp unescape_names([token | rest]), do: [token | unescape_names(rest)]
+  defp unescape_names([]), do: []
+
+  defp escape_character([{:code, code}, {:string, <<?', char::utf8, ?'>>} | rest]) do
+    if Regex.match?(~r/\A\s*UESCAPE\s*\z/i, code),
+      do: {<<char::utf8>>, [{:code, " "} | rest]},
+      else: {"\\", [{:code, code}, {:string, <<?', char::utf8, ?'>>} | rest]}
+  end
+
+  defp escape_character(rest), do: {"\\", rest}
+
+  defp decode_escapes(name, escape) do
+    size = byte_size(escape)
+
+    case name do
+      "" ->
+        ""
+
+      <<^escape::binary-size(^size), ^escape::binary-size(^size), rest::binary>> ->
+        escape <> decode_escapes(rest, escape)
+
+      <<^escape::binary-size(^size), "+", hex::binary-size(6), rest::binary>> ->
+        decode_codepoint(hex, escape <> "+" <> hex) <> decode_escapes(rest, escape)
+
+      <<^escape::binary-size(^size), hex::binary-size(4), rest::binary>> ->
+        decode_codepoint(hex, escape <> hex) <> decode_escapes(rest, escape)
+
+      <<char::utf8, rest::binary>> ->
+        <<char::utf8>> <> decode_escapes(rest, escape)
+    end
+  end
+
+  defp decode_codepoint(hex, raw) do
+    case Integer.parse(hex, 16) do
+      {codepoint, ""} when codepoint in 0..0x10FFFF -> <<codepoint::utf8>>
+      _ -> raw
+    end
+  rescue
+    ArgumentError -> raw
   end
 
   # The statement as the engine reads it, for the checks above: code as is,
@@ -1584,6 +1670,20 @@ defmodule Lotus.Source.Adapters.Ecto do
   # `--` or `/*` inside a string literal, a quoted identifier or a comment
   # is not taken for code. `profile` defaults to ANSI SQL; a dialect passes
   # its own (`Profile.for_language/1`) for its quotes and comments.
+
+  @doc false
+  # The statement as the engine reads it past comments, each a space, for a
+  # dialect that reads its leading words (`EXPLAIN`, `SHOW`, `PRAGMA`).
+  @spec statement_text(String.t(), Profile.t()) :: String.t()
+  def statement_text(sql, %Profile{} = profile) do
+    sql
+    |> Tokenizer.tokenize(profile)
+    |> Enum.map(fn
+      {:comment, _raw} -> {:code, " "}
+      token -> token
+    end)
+    |> Tokenizer.to_string()
+  end
 
   @doc false
   @spec parse_alias_map(String.t(), Profile.t()) :: %{String.t() => String.t()}

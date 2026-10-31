@@ -114,6 +114,150 @@
   The statement now waits until no cancel is on its way, and the built-in
   PostgreSQL and MySQL cancels give up after 5 seconds, within that wait.
 
+- **AI suggestions and generation check a statement as running it would.**
+  `Lotus.AI.suggest_optimizations/1` read the statement's plan, and the
+  generator checked a statement the model wrote, without the caller's
+  visibility rules. Both now run the checks of a run first, with the
+  caller's `:scope` and `:context`: a statement over a hidden source or
+  table gets no plan in the prompt, and a generated one is not taken.
+
+- **Email: the subject is one line.** Without a configured subject, the
+  email channel used the run's title (the schedule's name) as it was, and
+  some mail encoders write a line break in a header as is. The title now
+  has its line breaks made spaces; a configured subject is still refused
+  with one, as before.
+
+- **PostgreSQL and MySQL: `EXPLAIN` and table descriptions are checked
+  against visibility rules.** As on SQLite, Lotus skipped the visibility
+  check for a statement that starts with `EXPLAIN` or `SHOW`. An `EXPLAIN`
+  is now checked by the statement it explains. On MySQL, `DESCRIBE t`,
+  `EXPLAIN t`, `SHOW COLUMNS FROM t` and `SHOW INDEX FROM t` are checked by
+  `t`, `EXPLAIN FOR CONNECTION` is refused, and `DESCRIBE`, which failed on
+  every table, now runs. Other `SHOW` statements are unchanged.
+  `ANALYSE`, PostgreSQL's other spelling of `ANALYZE`, is refused in
+  read-only mode as `ANALYZE` is.
+
+- **PostgreSQL: the read-only check reads a Unicode-escaped name.** A
+  denied function written as `U&"..."` with escapes (and an optional
+  `UESCAPE`) is the function it spells, and is refused as it is.
+
+- **A CTE name hides a table only where the CTE is in scope.** The text
+  readers that back up the plan (PostgreSQL's tables the planner leaves
+  out, MySQL's statement reader) took a name for a CTE wherever a CTE of
+  that name was defined in the statement. A table read before a later
+  CTE of its name, outside the subquery that defines one, or in the body
+  of a non-recursive CTE of its own name, now counts as the table.
+
+- **MySQL: a system schema is matched in any case.** MySQL reads
+  `INFORMATION_SCHEMA` as `information_schema`, but Lotus matched the
+  name as written against its built-in denies. A relation in a system
+  schema (`information_schema`, `mysql`, `performance_schema`, `sys`) is
+  now also checked in lower case, and every table name too when the
+  server folds them (`lower_case_table_names` other than 0).
+
+- **A statement can't change the session settings it runs under.** The
+  read-only check refuses `set_config()` and `SET`, but a read-write run
+  skips it, so a statement could change a setting a `:before_query` plug
+  put in its `:session` (the tenant a row-level security policy reads).
+  A statement with session settings now may not change settings, on a
+  read-write run too. A statement without them is unchanged.
+
+- **A settings answer the config would not take is ignored.** A
+  `Lotus.Settings` module that answered `{:ok, nil}` for `:read_only`
+  turned read-only off on PostgreSQL. An answer that doesn't validate now
+  keeps the config's value, with a warning.
+
+- **Lotus's own SQL around a statement holds.** The filter and sort
+  wrappers (`WITH _base AS (...)`, `WITH _sorted AS (...)`) and
+  `Lotus.Source.limit_query/3` put the statement on lines of its own, as a
+  window does, so the sanitizer refuses one that doesn't stay inside.
+  `limit_query/3` takes only a positive integer, and on PostgreSQL a
+  `:statement_timeout_ms` that is not a non-negative integer falls back to
+  the default, as on MySQL.
+
+- **MySQL: plans are read in a read-only transaction, and in full.**
+  `query_plan/3` (the AI optimizer's plan) ran `EXPLAIN FORMAT=JSON`
+  without the read-only session preflight uses; it now runs in the same
+  transaction. Preflight reads every table the plan names, also beside a
+  query block's tables (select-list and optimized-away subqueries) and in a
+  table's attached subqueries.
+
+- **AI: adapter text in prompts is checked, and a discovery error is an
+  error.** The query explainer put the adapter's source type in its system
+  prompt as it was; now only a plain name does, as for `ai_context`'s
+  `:language`. The generator raised a `MatchError` when listing schemas or
+  tables failed; it now returns the error.
+
+- **An untrusted adapter's unknown capability value is no capability.**
+  `Lotus.Source.Adapter.ai_context/1` raised a `FunctionClauseError` for an
+  untrusted adapter that gave a capability any value other than `true` or
+  `{false, reason}`. Such a value now reads as unsupported, with the
+  generic reason.
+
+- **The result cache keeps read-write runs apart.** A cache hit skips the
+  read-only check, and the key didn't hold the run's mode, so a read-only
+  run could get back the rows of a statement a read-write run stored (a
+  `DELETE ... RETURNING`). The key builders now get `:read_only`, and the
+  default one keys a read-write run apart. A read-only run's key is the
+  same as before.
+
+- **`Lotus.SQL.Validator.validate/3` checks a statement as a run would.**
+  It ran `EXPLAIN` on the statement with no visibility rules, so its answer
+  could tell whether a hidden table or column exists. It now first runs the
+  checks of a run, with the new `:scope`, `:context` and `:read_only`
+  options (the last by default the source's setting), and returns a
+  refusal as the run would.
+
+- **PostgreSQL: a rule for a partitioned table holds for its partitions.**
+  The plan of a partitioned table names its partitions, which a rule for
+  the table didn't match, so a partition read directly wasn't covered.
+  Preflight now adds each relation's partitioned ancestors, at any depth.
+  Tables that only inherit from another (not partitions) are unchanged.
+
+- **The AI's `get_column_values` needs a source that checks its names.**
+  It writes SQL with the table and column names quoted in it, and only a
+  source with `Lotus.Source.Adapter.Introspection` checks those names. On
+  any other source it now refuses.
+
+- **SQLite and MySQL: a run takes the caller's `:timeout`.** Both dialects
+  check a connection out for the whole run without a timeout, so the pool's
+  15 seconds bounded it: a shorter `:timeout` didn't stop a statement, and
+  a longer one ended it early. The checkout now takes the caller's
+  timeout.
+
+- **A dashboard runs a few cards at a time.** `run_dashboard/2` started a
+  task for every card at once, so a dashboard with many cards could take
+  every connection of the pool. Cards now run at most `:max_concurrency`
+  at a time (new option, twice the schedulers online by default), each
+  still bounded by `:timeout`.
+
+- **A filter or sort by a protected column is refused on a non-SQL
+  source.** The column check reads SQL, so on an adapter with another query
+  language a caller's filter or sort by a masked column ran on its values
+  before the policy applied to the result. Lotus now refuses a filter or
+  sort by a column a restricting policy protects on such a source.
+
+- **CSV exports can escape cells a spreadsheet would run.** A cell that
+  starts with `=`, `+`, `-`, `@`, a tab or a carriage return runs as a
+  formula when a spreadsheet opens the file. With the new
+  `config :lotus, csv_escape_formulas: true`, CSV exports and deliveries
+  write such a text cell, and such a header, with a leading `'`. Numbers
+  are left alone. It is off by default, so files are unchanged.
+
+- **Webhook and Slack deliveries go only to the URL they name.** They
+  followed redirects, so a receiver could send the results to another
+  host, plain `http` included. A redirect is now a failed delivery. A
+  failed webhook delivery records the status only, not the first 200
+  characters of the receiver's answer, which could be another service's.
+  A host's `req_options` can still turn redirects on.
+
+- **A card or filter stays on its dashboard, a chart on its query.** An
+  update could change a dashboard card's or filter's `dashboard_id`, or a
+  visualization's `query_id`, and so move it to another owner's record
+  past a plug that checked only the record as stored. Updates now ignore
+  those fields. A filter mapping must link a card and a filter of the same
+  dashboard.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

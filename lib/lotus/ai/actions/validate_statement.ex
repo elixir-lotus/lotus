@@ -52,10 +52,13 @@ defmodule Lotus.AI.Actions.ValidateStatement do
     end
   end
 
+  @doc false
   # The checks execution runs first, for the actor, on the statement with its
   # template syntax resolved: a statement that touches a hidden table fails
   # here as it would there, before the database can say whether it exists.
-  defp check(adapter, statement, actor_opts) do
+  # Every AI path that asks the database about a statement runs it.
+  @spec check(Adapter.t(), Statement.t(), keyword()) :: :ok | {:error, String.t()}
+  def check(adapter, statement, actor_opts) do
     analyzable =
       case Adapter.prepare_for_analysis(adapter, statement) do
         {:ok, prepared} -> prepared

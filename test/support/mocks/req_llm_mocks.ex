@@ -31,6 +31,17 @@ defmodule Lotus.ReqLLMMocks do
   end
 
   @doc """
+  Mock a response whose text is `content`, and pass the request to
+  `inspect_fn` (`fn model, context, opts -> ... end`).
+  """
+  def mock_text(content, inspect_fn \\ fn _model, _context, _opts -> :ok end) do
+    expect(ReqLLM, :generate_text, fn model, context, opts ->
+      inspect_fn.(model, context, opts)
+      {:ok, build_response(%{plain_sql_response() | content: content})}
+    end)
+  end
+
+  @doc """
   Mock plain SQL response without markdown wrapper.
   """
   def mock_plain_sql do
@@ -38,6 +49,7 @@ defmodule Lotus.ReqLLMMocks do
       {:ok, build_response(plain_sql_response())}
     end)
 
+    stub(Lotus.Runner, :check_statement, fn _adapter, _statement, _opts -> {:ok, []} end)
     expect(Lotus.Source.Adapter, :validate_statement, fn _adapter, _statement, _opts -> :ok end)
   end
 

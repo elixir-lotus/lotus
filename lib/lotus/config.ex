@@ -190,6 +190,12 @@ defmodule Lotus.Config do
       default: true,
       doc: "Whether to enforce unique query names. Defaults to true."
     ],
+    csv_escape_formulas: [
+      type: :boolean,
+      default: false,
+      doc:
+        "Whether CSV exports and deliveries escape a text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return with a leading `'`, so a spreadsheet doesn't run it as a formula. Defaults to false."
+    ],
     table_visibility: [
       type: :map,
       default: %{},
@@ -673,6 +679,13 @@ defmodule Lotus.Config do
   """
   @spec unique_names?() :: boolean()
   def unique_names?, do: load!()[:unique_names]
+
+  @doc """
+  Returns whether CSV exports escape text cells a spreadsheet would run as
+  formulas.
+  """
+  @spec csv_escape_formulas?() :: boolean()
+  def csv_escape_formulas?, do: load!()[:csv_escape_formulas] == true
 
   @doc """
   Returns whether queries are restricted to read-only operations.

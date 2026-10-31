@@ -375,6 +375,26 @@ defmodule Lotus.Source.Adapters.EctoTest do
       end
     end
 
+    test "postgres reads a Unicode-escaped function name as the name it spells" do
+      adapter = Postgres.wrap("pg", Repo)
+
+      for sql <- [
+            ~S|SELECT U&"set\005fconfig"('a.b', 'c', false)|,
+            ~S|SELECT u&"set_config"('a.b', 'c', false)|,
+            ~S|SELECT pg_catalog.U&"set\005fconfig"('a.b', 'c', false)|,
+            ~S|SELECT U&"set!005fconfig" UESCAPE '!'('a.b', 'c', false)|,
+            ~S|SELECT U&"pg\+00005fterminate_backend"(1)|
+          ] do
+        assert {:error, "Only read-only queries are allowed: " <> _} =
+                 Adapter.sanitize_query(adapter, Statement.new(sql), []),
+               sql
+      end
+
+      for sql <- [~S|SELECT U&"d\0061ta" FROM t|, ~S|SELECT U&"bad\zz"(1)|] do
+        assert :ok = Adapter.sanitize_query(adapter, Statement.new(sql), []), sql
+      end
+    end
+
     test "rejects multiple statements" do
       adapter = EctoAdapter.wrap("main", Repo)
 
@@ -914,9 +934,15 @@ defmodule Lotus.Source.Adapters.EctoTest do
       lite = SQLite3.wrap("lite", SqliteRepo)
 
       refute Adapter.needs_preflight?(pg, Statement.new("SHOW search_path"))
-      refute Adapter.needs_preflight?(pg, Statement.new("/* plan */ explain SELECT 1"))
-      refute Adapter.needs_preflight?(pg, Statement.new("-- note\n  EXPLAIN SELECT 1"))
+      refute Adapter.needs_preflight?(pg, Statement.new("/* a /* b */ show */ SHOW search_path"))
       refute Adapter.needs_preflight?(my, Statement.new("# tables\nSHOW TABLES"))
+
+      # EXPLAIN, and a SHOW that describes a table, are read for the tables
+      # they describe.
+      assert Adapter.needs_preflight?(pg, Statement.new("/* plan */ explain SELECT 1"))
+      assert Adapter.needs_preflight?(pg, Statement.new("-- note\n  EXPLAIN SELECT 1"))
+      assert Adapter.needs_preflight?(my, Statement.new("# cols\nSHOW COLUMNS FROM t"))
+      assert Adapter.needs_preflight?(my, Statement.new("DESCRIBE t"))
 
       # SQLite reads the tables they name.
       assert Adapter.needs_preflight?(lite, Statement.new("PRAGMA table_info(t)"))

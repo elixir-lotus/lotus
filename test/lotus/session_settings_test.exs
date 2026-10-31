@@ -78,6 +78,33 @@ defmodule Lotus.SessionSettingsTest do
       assert message =~ "string names and string, integer or boolean values"
     end
 
+    test "a read-write statement may not change the settings it runs under" do
+      session = %{"app.tenant_id" => "acme"}
+
+      for sql <- [
+            "SELECT set_config('app.tenant_id', 'globex', true), #{String.replace(@setting, "SELECT ", "")}",
+            "WITH x AS MATERIALIZED (SELECT pg_catalog.set_config('app.tenant_id', 'globex', true)) " <>
+              "SELECT * FROM x",
+            ~S|SELECT U&"set\005fconfig"('app.tenant_id', 'globex', true)|,
+            "SET app.tenant_id = 'globex'",
+            "RESET app.tenant_id"
+          ] do
+        assert {:error, "A statement with session settings may not change settings"} =
+                 run(sql, session, read_only: false),
+               sql
+      end
+
+      assert {:ok, %{rows: [["acme"]]}} = run(@setting, session, read_only: false)
+    end
+
+    test "a read-write statement without settings may still change one" do
+      assert {:ok, %{rows: [["globex"]]}} =
+               Lotus.run_statement("SELECT set_config('app.tenant_id', 'globex', true)", [],
+                 repo: "postgres",
+                 read_only: false
+               )
+    end
+
     test "the Postgres adapter declares the capability; the others do not" do
       assert Adapter.capability?(EctoAdapter.wrap("postgres", Lotus.Test.Repo), :session)
       refute Adapter.capability?(EctoAdapter.wrap("sqlite", Lotus.Test.SqliteRepo), :session)

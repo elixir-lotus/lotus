@@ -1,5 +1,6 @@
 defmodule Lotus.SQL.ValidatorTest do
   use Lotus.Case, async: false
+  use Mimic
 
   alias Lotus.SQL.Validator
 
@@ -109,6 +110,39 @@ defmodule Lotus.SQL.ValidatorTest do
     @tag :mysql
     test "returns error for invalid SQL" do
       assert {:error, _} = Validator.validate("NOT VALID SQL AT ALL", "mysql")
+    end
+  end
+
+  describe "the checks of a run" do
+    test "a hidden table gets the run's refusal, whether its columns exist or not" do
+      stub(Lotus.Config, :visibility_for_source_name, fn _ -> %{table: [deny: ["test_users"]]} end)
+
+      for sql <- ["SELECT name FROM test_users", "SELECT nope FROM test_users"] do
+        assert {:error, "Query touches blocked table(s): public.test_users"} =
+                 Validator.validate(sql, "postgres"),
+               sql
+      end
+    end
+
+    test "the scope is the run's" do
+      stub(Lotus.Visibility, :matcher_for, fn
+        _source, :guest -> Lotus.Visibility.compile(%{table: [deny: ["test_users"]]})
+        source, scope -> call_original(Lotus.Visibility, :matcher_for, [source, scope])
+      end)
+
+      assert :ok = Validator.validate("SELECT name FROM test_users", "postgres")
+
+      assert {:error, "Query touches blocked table(s): " <> _} =
+               Validator.validate("SELECT name FROM test_users", "postgres", scope: :guest)
+    end
+
+    test "a write is refused on a read-only source, and checked on a read-write run" do
+      sql = "DELETE FROM test_users WHERE id = 0"
+
+      assert {:error, "Only read-only queries are allowed" <> _} =
+               Validator.validate(sql, "postgres")
+
+      assert :ok = Validator.validate(sql, "postgres", read_only: false)
     end
   end
 end
