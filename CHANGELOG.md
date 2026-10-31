@@ -114,6 +114,13 @@
   The statement now waits until no cancel is on its way, and the built-in
   PostgreSQL and MySQL cancels give up after 5 seconds, within that wait.
 
+- **AI suggestions and generation check a statement as running it would.**
+  `Lotus.AI.suggest_optimizations/1` read the statement's plan, and the
+  generator checked a statement the model wrote, without the caller's
+  visibility rules. Both now run the checks of a run first, with the
+  caller's `:scope` and `:context`: a statement over a hidden source or
+  table gets no plan in the prompt, and a generated one is not taken.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

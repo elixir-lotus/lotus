@@ -15,7 +15,9 @@ if Code.ensure_loaded?(ReqLLM) do
     statement structurally).
     """
 
+    alias Lotus.AI.Action
     alias Lotus.AI.Actions
+    alias Lotus.AI.Actions.ValidateStatement
     alias Lotus.AI.Prompts.AdapterNotes
     alias Lotus.AI.Prompts.Optimization
     alias Lotus.AI.Request
@@ -64,7 +66,13 @@ if Code.ensure_loaded?(ReqLLM) do
 
       case Adapter.ai_context(adapter) do
         {:ok, ai_context} ->
-          execution_plan = get_execution_plan(adapter, statement, search_path: search_path)
+          execution_plan =
+            get_execution_plan(
+              adapter,
+              statement,
+              search_path,
+              Action.actor_opts(actor_from(opts))
+            )
 
           system_prompt = Optimization.system_prompt(ai_context)
 
@@ -104,12 +112,19 @@ if Code.ensure_loaded?(ReqLLM) do
 
     # Returns the engine's execution plan for the statement (a string), or
     # `nil` when the adapter can't produce one (no plan API, or
-    # `prepare_for_analysis/2` declined). The prompt branches on plan
-    # availability — a `nil` plan still produces useful structural
-    # suggestions.
-    defp get_execution_plan(adapter, %Statement{} = statement, opts) do
-      with {:ok, prepared} <- Adapter.prepare_for_analysis(adapter, statement),
-           {:ok, plan} <- Adapter.query_plan(adapter, prepared, opts) do
+    # `prepare_for_analysis/2` declined) or the caller couldn't run the
+    # statement (a hidden source or table): the plan describes the tables it
+    # reads. The prompt branches on plan availability — a `nil` plan still
+    # produces useful structural suggestions.
+    defp get_execution_plan(adapter, %Statement{} = statement, search_path, actor_opts) do
+      with :ok <-
+             ValidateStatement.check(
+               adapter,
+               statement,
+               [search_path: search_path] ++ actor_opts
+             ),
+           {:ok, prepared} <- Adapter.prepare_for_analysis(adapter, statement),
+           {:ok, plan} <- Adapter.query_plan(adapter, prepared, search_path: search_path) do
         plan
       else
         _ -> nil

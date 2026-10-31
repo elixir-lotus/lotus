@@ -19,6 +19,9 @@ defmodule Lotus.AI.QueryOptimizerTest do
         {:ok, postgres_explain_plan()}
       end)
 
+      # The statements name tables the test database doesn't have.
+      stub(Lotus.Runner, :check_statement, fn _adapter, _statement, _opts -> {:ok, []} end)
+
       :ok
     end
 
