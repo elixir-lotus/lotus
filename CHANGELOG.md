@@ -175,6 +175,13 @@
   `:statement_timeout_ms` that is not a non-negative integer falls back to
   the default, as on MySQL.
 
+- **MySQL: plans are read in a read-only transaction, and in full.**
+  `query_plan/3` (the AI optimizer's plan) ran `EXPLAIN FORMAT=JSON`
+  without the read-only session preflight uses; it now runs in the same
+  transaction. Preflight reads every table the plan names, also beside a
+  query block's tables (select-list and optimized-away subqueries) and in a
+  table's attached subqueries.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
