@@ -1062,18 +1062,91 @@ defmodule Lotus.Source.Adapters.Ecto do
 
   @doc false
   # The state of a source connected from settings: its repo runs under
-  # `Lotus.Source.Supervisor`, registered under the source's name.
+  # `Lotus.Source.Supervisor`, registered under the source's name. A CA
+  # certificate that isn't one is an error of its field.
   @spec settings_state(module(), module(), String.t(), keyword(), :connect | :query) ::
-          {:ok, dynamic_state()}
+          {:ok, dynamic_state()} | {:error, %{atom() => String.t()}}
   def settings_state(adapter_module, repo, name, settings, test \\ :connect) do
-    state = %{
-      repo: repo,
-      dynamic: Lotus.Source.Registry.via(adapter_module, name),
-      config: Keyword.put_new(settings, :pool_size, @settings_pool_size)
-    }
+    with {:ok, settings} <- tls_settings(settings) do
+      state = %{
+        repo: repo,
+        dynamic: Lotus.Source.Registry.via(adapter_module, name),
+        config: Keyword.put_new(settings, :pool_size, @settings_pool_size)
+      }
 
-    {:ok, if(test == :query, do: Map.put(state, :test, :query), else: state)}
+      {:ok, if(test == :query, do: Map.put(state, :test, :query), else: state)}
+    end
   end
+
+  # The TLS of a server form (`server_fields/1`), as the drivers take it.
+  # With SSL, the server's certificate is checked: against the CA
+  # certificate the form gives, else the system's CAs, and its host name
+  # too unless the form turns that off. A CA certificate turns SSL on.
+  defp tls_settings(settings) do
+    {pem, settings} = Keyword.pop(settings, :ssl_ca_certificate)
+    {check_host?, settings} = Keyword.pop(settings, :ssl_verify_hostname, true)
+
+    cond do
+      pem not in [nil, ""] ->
+        with {:ok, cacerts} <- ca_certificates(pem),
+             do: {:ok, Keyword.put(settings, :ssl, tls_options(cacerts, check_host?))}
+
+      settings[:ssl] == true ->
+        {:ok, Keyword.put(settings, :ssl, tls_options(:public_key.cacerts_get(), check_host?))}
+
+      true ->
+        {:ok, settings}
+    end
+  end
+
+  defp tls_options(cacerts, true), do: [cacerts: cacerts]
+
+  defp tls_options(cacerts, false),
+    do: [
+      cacerts: cacerts,
+      customize_hostname_check: [],
+      verify_fun: {&__MODULE__.verify_ca_only/3, []}
+    ]
+
+  @doc false
+  # A `:verify_fun` that checks the certificate's chain to the CA and
+  # nothing of its host name: a certificate without one (MySQL's own) then
+  # passes, and one of another CA still fails.
+  def verify_ca_only(_cert, {:bad_cert, :hostname_check_failed}, state), do: {:valid, state}
+  def verify_ca_only(_cert, {:bad_cert, reason}, _state), do: {:fail, reason}
+  def verify_ca_only(_cert, {:extension, _}, state), do: {:unknown, state}
+  def verify_ca_only(_cert, :valid, state), do: {:valid, state}
+  def verify_ca_only(_cert, :valid_peer, state), do: {:valid, state}
+
+  # The certificates of a PEM, its line breaks kept or not (a form field
+  # may join the lines).
+  defp ca_certificates(pem) do
+    blocks =
+      Regex.scan(~r/-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----/s, pem,
+        capture: :all_but_first
+      )
+
+    ders =
+      Enum.map(blocks, fn [body] -> body |> String.replace(~r/\s/, "") |> Base.decode64() end)
+
+    if ders != [] and Enum.all?(ders, &certificate?/1),
+      do: {:ok, Enum.map(ders, fn {:ok, der} -> der end)},
+      else:
+        {:error,
+         %{
+           ssl_ca_certificate:
+             "Paste the CA certificate in PEM form, from -----BEGIN CERTIFICATE-----."
+         }}
+  end
+
+  defp certificate?({:ok, der}) do
+    _ = :public_key.pkix_decode_cert(der, :plain)
+    true
+  rescue
+    _ -> false
+  end
+
+  defp certificate?(:error), do: false
 
   @doc false
   # The repo of a source connected from settings; none for a repo the host
@@ -1095,6 +1168,11 @@ defmodule Lotus.Source.Adapters.Ecto do
   The fields of a form that connects a database server: host, port,
   database, user, password and SSL, for the `:connection` option of
   `use Lotus.Source.Adapters.Ecto`.
+
+  With SSL, the server's certificate is checked against the system's CAs,
+  or the CA certificate the form gives (which turns SSL on), and its host
+  name too, unless the form turns that off for a certificate that names
+  none (a self-signed MySQL server's).
   """
   @spec server_fields(pos_integer()) :: [Lotus.Source.Adapter.Connection.field()]
   def server_fields(default_port) do
@@ -1104,7 +1182,25 @@ defmodule Lotus.Source.Adapters.Ecto do
       %{key: :database, label: "Database", type: :string, required: true},
       %{key: :username, label: "User", type: :string, required: true},
       %{key: :password, label: "Password", type: :secret},
-      %{key: :ssl, label: "Use SSL", type: :boolean, default: false}
+      %{key: :ssl, label: "Use SSL", type: :boolean, default: false},
+      %{
+        key: :ssl_ca_certificate,
+        label: "CA certificate",
+        type: :string,
+        placeholder: "-----BEGIN CERTIFICATE-----",
+        hint:
+          "The PEM of the CA that signed the server's certificate, such as your cloud " <>
+            "provider's. Without it, the server's certificate is checked against the system's CAs."
+      },
+      %{
+        key: :ssl_verify_hostname,
+        label: "Check the host name",
+        type: :boolean,
+        default: true,
+        hint:
+          "Turn off only for a certificate that names no host, such as the one MySQL makes " <>
+            "for itself. The certificate is still checked against the CA."
+      }
     ]
   end
 

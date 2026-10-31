@@ -14,6 +14,13 @@ defmodule Lotus.Source.ConnectionsTest do
     "password" => "postgres"
   }
 
+  defp tls_of(settings) do
+    {:ok, %Adapter{state: %{config: config}}} =
+      Connections.build("warehouse", "postgres", settings)
+
+    Keyword.get(config, :ssl, false)
+  end
+
   defmodule SearchAdapter do
     @moduledoc false
     # An adapter of a library: connected with a URL and a key.
@@ -73,7 +80,9 @@ defmodule Lotus.Source.ConnectionsTest do
                :database,
                :username,
                :password,
-               :ssl
+               :ssl,
+               :ssl_ca_certificate,
+               :ssl_verify_hostname
              ]
 
       assert %{label: "MySQL"} = kinds["mysql"]
@@ -193,6 +202,69 @@ defmodule Lotus.Source.ConnectionsTest do
 
       assert {:error, error} = EctoAdapter.do_health(state)
       assert inspect(error) =~ "password authentication failed"
+    end
+
+    test "SSL checks the server's certificate: against the given CA, else the system's" do
+      alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
+
+      pem = File.read!("test/support/fixtures/tls/test_ca.pem")
+      [{:Certificate, der, _}] = :public_key.pem_decode(pem)
+      ssl = fn settings -> tls_of(Map.merge(@postgres, settings)) end
+
+      assert ssl.(%{}) == false
+      assert ssl.(%{"ssl" => true}) == [cacerts: :public_key.cacerts_get()]
+      assert ssl.(%{"ssl_ca_certificate" => pem}) == [cacerts: [der]]
+
+      # A form may join the lines of the PEM.
+      assert ssl.(%{"ssl" => true, "ssl_ca_certificate" => String.replace(pem, "\n", " ")}) ==
+               [cacerts: [der]]
+
+      assert ssl.(%{"ssl_ca_certificate" => pem, "ssl_verify_hostname" => "false"}) == [
+               cacerts: [der],
+               customize_hostname_check: [],
+               verify_fun: {&EctoAdapter.verify_ca_only/3, []}
+             ]
+
+      for bad <- [
+            "not a certificate",
+            "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----"
+          ] do
+        assert {:error, %{ssl_ca_certificate: "Paste the CA certificate in PEM form" <> _}} =
+                 Connections.build(
+                   "warehouse",
+                   "postgres",
+                   Map.put(@postgres, "ssl_ca_certificate", bad)
+                 )
+      end
+    end
+
+    test "without the host name check, the chain to the CA is still checked" do
+      alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
+
+      assert {:valid, :s} =
+               EctoAdapter.verify_ca_only(:cert, {:bad_cert, :hostname_check_failed}, :s)
+
+      assert {:fail, :unknown_ca} =
+               EctoAdapter.verify_ca_only(:cert, {:bad_cert, :unknown_ca}, :s)
+
+      assert {:fail, :cert_expired} =
+               EctoAdapter.verify_ca_only(:cert, {:bad_cert, :cert_expired}, :s)
+    end
+
+    @tag :mysql
+    test "a MySQL source with SSL connects or says why, rather than crash" do
+      mysql = %{
+        "hostname" => "localhost",
+        "port" => "3307",
+        "database" => "lotus_test",
+        "username" => "lotus",
+        "password" => "lotus",
+        "ssl" => true
+      }
+
+      # The test server's certificate is its own, which no system CA signed.
+      assert {:error, message} = Connections.test("mysql", mysql)
+      assert message =~ "CA"
     end
 
     test "a SQLite file must exist" do
