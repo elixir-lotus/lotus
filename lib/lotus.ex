@@ -710,7 +710,8 @@ defmodule Lotus do
             bound_identity(cache_bound || cache_identity, statement.params, statement.session),
             adapter.name,
             search_path,
-            Keyword.get(opts, :scope)
+            Keyword.get(opts, :scope),
+            Keyword.get(runner_opts, :read_only, true)
           ),
         tags: build_cache_tags(query_id, adapter.name, opts),
         profile: determine_cache_profile(opts)
@@ -1347,11 +1348,18 @@ defmodule Lotus do
   defp build_cache_options(cache_opts, tags),
     do: Lotus.Cache.build_options(cache_opts, tags)
 
-  defp result_key(body, bound_vars_map, repo_name, search_path, scope) do
+  # A statement a read-write run served (a `DELETE ... RETURNING`) is not
+  # one a read-only run may get back, so the mode is part of the key.
+  defp result_key(body, bound_vars_map, repo_name, search_path, scope, read_only) do
     Key.result(
       body,
       bound_vars_map,
-      [data_source: repo_name, search_path: search_path, lotus_version: Lotus.version()],
+      [
+        data_source: repo_name,
+        search_path: search_path,
+        lotus_version: Lotus.version(),
+        read_only: read_only != false
+      ],
       scope
     )
   end

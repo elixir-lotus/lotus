@@ -58,6 +58,7 @@ defmodule Lotus.Cache.KeyBuilder.Default do
           path,
           ?|,
           version
+          | mode_part(Keyword.get(opts, :read_only, true))
         ]
       )
       |> Base.encode16(case: :lower)
@@ -70,4 +71,8 @@ defmodule Lotus.Cache.KeyBuilder.Default do
 
     "result:#{repo}:#{digest}#{scope_part}"
   end
+
+  # A read-only run's key is as it always was; a read-write run's differs.
+  defp mode_part(false), do: [?|, "read-write"]
+  defp mode_part(_read_only), do: []
 end
