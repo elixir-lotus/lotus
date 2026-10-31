@@ -914,9 +914,15 @@ defmodule Lotus.Source.Adapters.EctoTest do
       lite = SQLite3.wrap("lite", SqliteRepo)
 
       refute Adapter.needs_preflight?(pg, Statement.new("SHOW search_path"))
-      refute Adapter.needs_preflight?(pg, Statement.new("/* plan */ explain SELECT 1"))
-      refute Adapter.needs_preflight?(pg, Statement.new("-- note\n  EXPLAIN SELECT 1"))
+      refute Adapter.needs_preflight?(pg, Statement.new("/* a /* b */ show */ SHOW search_path"))
       refute Adapter.needs_preflight?(my, Statement.new("# tables\nSHOW TABLES"))
+
+      # EXPLAIN, and a SHOW that describes a table, are read for the tables
+      # they describe.
+      assert Adapter.needs_preflight?(pg, Statement.new("/* plan */ explain SELECT 1"))
+      assert Adapter.needs_preflight?(pg, Statement.new("-- note\n  EXPLAIN SELECT 1"))
+      assert Adapter.needs_preflight?(my, Statement.new("# cols\nSHOW COLUMNS FROM t"))
+      assert Adapter.needs_preflight?(my, Statement.new("DESCRIBE t"))
 
       # SQLite reads the tables they name.
       assert Adapter.needs_preflight?(lite, Statement.new("PRAGMA table_info(t)"))

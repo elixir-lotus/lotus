@@ -17,6 +17,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   alias Lotus.Query.Filter
   alias Lotus.Query.Statement
   alias Lotus.Query.Tokenizer.Profile
+  alias Lotus.Source.Adapters.Ecto, as: EctoHelpers
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
   alias Lotus.SQL.FilterInjector
   alias Lotus.SQL.Identifier
@@ -476,8 +477,29 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
     %{statement | body: SortInjector.apply(sql, sorts, &quote_identifier/1)}
   end
 
+  # `SHOW` reads a setting, never a table. `EXPLAIN` describes how the
+  # statement it explains reads its tables (and with `ANALYZE` runs it), so
+  # it is checked by that statement.
   @impl true
-  def extract_accessed_resources(repo, %Statement{body: sql, params: params, meta: meta}) do
+  def needs_preflight?(%Statement{body: sql}) when is_binary(sql),
+    do: not Regex.match?(~r/\A\s*SHOW\b/i, statement_text(sql))
+
+  def needs_preflight?(_statement), do: true
+
+  @explain ~r/\A\s*EXPLAIN\b\s*(?:\([^()]*\)\s*)?(?:(?:ANALYZE|ANALYSE|VERBOSE)\b\s*)*(.*)\z/is
+
+  @impl true
+  def extract_accessed_resources(repo, %Statement{body: sql} = statement) when is_binary(sql) do
+    case Regex.run(@explain, statement_text(sql)) do
+      [_, inner] -> extract_accessed_resources(repo, %{statement | body: inner})
+      nil -> statement_relations(repo, statement)
+    end
+  end
+
+  defp statement_text(sql),
+    do: EctoHelpers.statement_text(sql, Profile.for_language(query_language()))
+
+  defp statement_relations(repo, %Statement{body: sql, params: params, meta: meta}) do
     search_path = Map.get(meta, :search_path)
     explain = "EXPLAIN (VERBOSE, FORMAT JSON) " <> sql
 

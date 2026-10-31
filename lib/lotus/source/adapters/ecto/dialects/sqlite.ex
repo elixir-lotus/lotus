@@ -419,14 +419,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   # The statement as SQLite reads it past comments: `EXPLAIN [QUERY PLAN]`
   # and the statement it explains, a `PRAGMA` and its form, or neither.
   defp introspection(sql) do
-    text =
-      sql
-      |> Tokenizer.tokenize(Profile.for_language(query_language()))
-      |> Enum.map(fn
-        {:comment, _raw} -> {:code, " "}
-        token -> token
-      end)
-      |> Tokenizer.to_string()
+    text = EctoHelpers.statement_text(sql, Profile.for_language(query_language()))
 
     cond do
       match = Regex.run(~r/\A\s*EXPLAIN\b(?:\s+QUERY\s+PLAN\b)?(.*)\z/is, text) ->
