@@ -244,6 +244,13 @@
   write such a text cell, and such a header, with a leading `'`. Numbers
   are left alone. It is off by default, so files are unchanged.
 
+- **Webhook and Slack deliveries go only to the URL they name.** They
+  followed redirects, so a receiver could send the results to another
+  host, plain `http` included. A redirect is now a failed delivery. A
+  failed webhook delivery records the status only, not the first 200
+  characters of the receiver's answer, which could be another service's.
+  A host's `req_options` can still turn redirects on.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

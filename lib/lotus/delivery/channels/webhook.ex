@@ -17,8 +17,10 @@ defmodule Lotus.Delivery.Channels.Webhook do
 
   An alert's has `"alert"` too, as the `"json"` format has it.
 
-  A 2xx response is a delivery; anything else, or no answer within 15
-  seconds, is a failure the run records. `"headers"` are sent as given, for
+  A 2xx response is a delivery; anything else (a redirect too, which is not
+  followed), or no answer within 15 seconds, is a failure the run records by
+  its status. The receiver's answer is not recorded: the URL is entered by
+  people, and its answer could be another service's. `"headers"` are sent as given, for
   a token the receiver checks; `"authorization"` is a shortcut for the
   `authorization` header, the one field an editor shows besides the URL
   (`settings/0`).
@@ -148,7 +150,7 @@ defmodule Lotus.Delivery.Channels.Webhook do
 
       case HTTP.post_json(config["url"], envelope(content, attachments), options) do
         {:ok, status, _body} when status in 200..299 -> :ok
-        {:ok, status, body} -> {:error, "the webhook answered #{status}: #{body}"}
+        {:ok, status, _body} -> {:error, "the webhook answered #{status}"}
         {:error, message} -> {:error, "the webhook could not be reached: #{message}"}
       end
     end
