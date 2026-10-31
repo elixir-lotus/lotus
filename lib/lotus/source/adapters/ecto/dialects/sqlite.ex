@@ -310,8 +310,24 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
     end
   end
 
+  # SQLite reads a table name in any case, while visibility rules match the
+  # name as given. A name that is a stored table's in another case is
+  # refused, so a rule for the table holds whatever case a caller asks in.
   @impl true
-  def resolve_table_namespace(_repo, _table, _schemas) do
+  def resolve_table_namespace(repo, table, _schemas) do
+    %{rows: rows} =
+      repo.query!(
+        "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name = ? COLLATE NOCASE",
+        [table]
+      )
+
+    stored = List.flatten(rows)
+    builtin? = table |> String.downcase() |> String.starts_with?("sqlite_")
+
+    if (stored != [] and table not in stored) or
+         (builtin? and not String.starts_with?(table, "sqlite_")),
+       do: raise(ArgumentError, "Table '#{table}' not found")
+
     nil
   end
 
@@ -353,8 +369,10 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
       execute_in_transaction(
         repo,
         fn ->
-          case repo.query(explain, params) do
-            {:ok, %{rows: rows}} -> parse_explain_rows(rows, alias_map)
+          with {:ok, %{rows: rows}} <- repo.query(explain, params),
+               {:ok, opened} <- opened_tables(repo, sql, params) do
+            rows |> parse_explain_rows(alias_map) |> MapSet.union(opened)
+          else
             {:error, err} -> repo.rollback(format_error(err))
           end
         end,
@@ -365,6 +383,58 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
       {:ok, relations} -> {:ok, relations}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # The plan names a table as the statement does: by its alias, in the case
+  # it was written, without its schema. The bytecode opens each table by
+  # the root page of its b-tree (or of an index on it), which the schema
+  # maps to the table's stored name.
+  @open_opcodes ~w(OpenRead OpenWrite ReopenIdx)
+
+  defp opened_tables(repo, sql, params) do
+    with {:ok, %{rows: rows}} <- repo.query("EXPLAIN " <> sql, params) do
+      rows
+      |> Enum.flat_map(fn
+        [_addr, opcode, _p1, root, db | _] when opcode in @open_opcodes -> [{db, root}]
+        _row -> []
+      end)
+      |> Enum.uniq()
+      |> resolve_root_pages(repo)
+    end
+  end
+
+  defp resolve_root_pages([], _repo), do: {:ok, MapSet.new()}
+
+  defp resolve_root_pages(pages, repo) do
+    %{rows: databases} = repo.query!("PRAGMA database_list")
+    names = Map.new(databases, fn [seq, name | _] -> {seq, name} end)
+
+    tables =
+      pages
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.uniq()
+      |> Map.new(&{&1, root_pages(repo, &1, names[&1])})
+
+    Enum.reduce_while(pages, {:ok, MapSet.new()}, fn {db, root}, {:ok, acc} ->
+      case Map.fetch(tables[db], root) do
+        {:ok, table} -> {:cont, {:ok, MapSet.put(acc, {nil, table})}}
+        :error -> {:halt, {:error, "Lotus can't tell which table the query reads"}}
+      end
+    end)
+  end
+
+  defp root_pages(_repo, _db, nil), do: %{}
+
+  # Root page 1 holds the schema table itself, which it doesn't list.
+  defp root_pages(repo, db, name) do
+    schema_table = if db == 1, do: "sqlite_temp_master", else: "sqlite_master"
+
+    %{rows: rows} =
+      repo.query!("SELECT rootpage, tbl_name FROM #{quote_identifier(name)}.sqlite_master")
+
+    rows
+    |> Map.new(fn [root, table] -> {root, table} end)
+    |> Map.put(1, schema_table)
   end
 
   defp parse_explain_rows(rows, alias_map) do

@@ -169,4 +169,77 @@ defmodule Lotus.PreflightSqliteTest do
       assert :ok = Preflight.authorize(@sqlite_adapter, Statement.new("SELECT * FROM orders", []))
     end
   end
+
+  describe "SQLite preflight reads the tables a statement opens" do
+    setup do
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _repo_name ->
+        %{
+          table: [deny: ["products"]],
+          column: [{"orders", "total_amount", :omit}]
+        }
+      end)
+
+      :ok
+    end
+
+    for sql <- [
+          "SELECT p.name FROM orders, products p",
+          "SELECT p.name FROM main.products p",
+          "SELECT name FROM main.products",
+          "SELECT * FROM (SELECT name FROM products a) s JOIN orders a ON 1 = 1",
+          "SELECT * FROM PRODUCTS",
+          ~s(SELECT name FROM "Products"),
+          "SELECT sku FROM products INDEXED BY products_sku_index WHERE sku = 'x'"
+        ] do
+      test "blocks a denied table however the statement names it: #{sql}" do
+        assert {:error, msg} =
+                 Preflight.authorize(@sqlite_adapter, Statement.new(unquote(sql), []))
+
+        assert msg =~ "blocked table"
+        assert msg =~ "products"
+      end
+    end
+
+    test "blocks the schema table in any case" do
+      for sql <- ["SELECT name FROM SQLITE_MASTER", "SELECT name FROM Sqlite_Schema"] do
+        assert {:error, msg} = Preflight.authorize(@sqlite_adapter, Statement.new(sql, []))
+        assert msg =~ "sqlite_master", sql
+      end
+    end
+
+    test "a column rule holds whatever case the table is named in" do
+      assert {:ok, %{columns: ["order_number"]}} =
+               Lotus.run_statement("SELECT order_number, total_amount FROM ORDERS", [],
+                 repo: "sqlite"
+               )
+    end
+
+    test "a table the statement doesn't open is not touched" do
+      assert :ok = Preflight.authorize(@sqlite_adapter, Statement.new("SELECT * FROM orders", []))
+    end
+  end
+
+  describe "SQLite discovery of a table named in another case" do
+    setup do
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _repo_name -> %{table: [deny: ["products"]]} end)
+
+      :ok
+    end
+
+    test "describe_table and get_table_stats refuse a denied table in any case" do
+      for name <- ["products", "PRODUCTS", "Products"] do
+        assert {:error, _} = Lotus.Schema.describe_table("sqlite", name), name
+        assert {:error, _} = Lotus.Schema.get_table_stats("sqlite", name), name
+      end
+
+      assert {:error, _} = Lotus.Schema.describe_table("sqlite", "SQLITE_MASTER")
+    end
+
+    test "a table named as stored is described" do
+      assert {:ok, [_ | _]} = Lotus.Schema.describe_table("sqlite", "orders")
+      assert {:ok, %{row_count: _}} = Lotus.Schema.get_table_stats("sqlite", "orders")
+    end
+  end
 end
