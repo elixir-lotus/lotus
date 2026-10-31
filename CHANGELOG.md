@@ -47,6 +47,15 @@
   its rows over in chunks, with their columns. Under a column policy, Lotus
   now refuses a chunk whose rows don't match its columns, from any adapter.
 
+- **SQLite: visibility rules hold however a statement names a table.**
+  Lotus took the tables a SQLite statement reads from the text of
+  `EXPLAIN QUERY PLAN`, which names a table by its alias and in the case it
+  was written. It now also reads the tables the statement's bytecode opens,
+  under the names the schema stores, so a table rule or a table's column
+  rule applies to an alias, a schema-qualified name or another letter case.
+  `Lotus.Schema.describe_table/3` and `get_table_stats/3` refuse a name
+  that is a stored table's in another case.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
