@@ -4,6 +4,7 @@ defmodule Lotus.CancelTest do
   use Lotus.Case, async: false
   use Mimic
 
+  alias Lotus.Runner.Cancel
   alias Lotus.Source.Adapter
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
   alias Lotus.Test.{MysqlRepo, Repo}
@@ -181,6 +182,66 @@ defmodule Lotus.CancelTest do
         end)
 
       assert {:ok, %{rows: [[1]]}} = Lotus.run_statement("SELECT 1")
+    end
+  end
+
+  describe "a cancel on its way when the statement returns" do
+    # The adapter refuses the first cancel and is slow with the second; the
+    # statement returns while the second is on its way. Its connection must
+    # not go back to the pool before that cancel lands.
+    setup do
+      calls = :counters.new(1, [])
+      released = :atomics.new(1, [])
+      test = self()
+
+      stub(Adapter, :cancel_handle, fn _adapter -> {:ok, 7} end)
+
+      stub(Adapter, :cancel, fn _adapter, 7 ->
+        :counters.add(calls, 1, 1)
+
+        case :counters.get(calls, 1) do
+          1 ->
+            {:error, "refused"}
+
+          _ ->
+            Process.sleep(500)
+            send(test, {:landed, :atomics.get(released, 1) == 1})
+            :ok
+        end
+      end)
+
+      %{adapter: EctoAdapter.wrap("postgres", Repo), released: released}
+    end
+
+    test "the statement waits for it, after a refused one", %{
+      adapter: adapter,
+      released: released
+    } do
+      test = self()
+      token = Cancel.prepare(adapter, on_cancel_token: &send(test, {:token, &1}))
+
+      owner =
+        Task.async(fn ->
+          result =
+            Cancel.run(token, [on_cancel_token: &send(test, {:token, &1})], fn ->
+              Process.sleep(300)
+              :done
+            end)
+
+          :atomics.put(released, 1, 1)
+          result
+        end)
+
+      assert_receive {:token, token}
+      Process.sleep(50)
+      assert {:error, "refused"} = Lotus.cancel(token)
+
+      Process.sleep(150)
+      canceller = Task.async(fn -> Lotus.cancel(token) end)
+
+      assert_receive {:landed, false}, 2_000
+      assert :ok = Task.await(canceller)
+      assert {:error, @cancelled} = Task.await(owner)
     end
   end
 

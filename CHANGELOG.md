@@ -107,6 +107,13 @@
   that read one table count as reads of it, and one whose table only a
   query can tell is refused.
 
+- **A cancel lands only on its own statement.** After the database refused
+  a `Lotus.cancel/1`, a second cancel could still be on its way when the
+  statement returned, and the statement gave its connection back to the
+  pool before it landed, where it could stop another caller's statement.
+  The statement now waits until no cancel is on its way, and the built-in
+  PostgreSQL and MySQL cancels give up after 5 seconds, within that wait.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

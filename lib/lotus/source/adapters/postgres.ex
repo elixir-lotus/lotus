@@ -13,6 +13,7 @@ defmodule Lotus.Source.Adapters.Postgres do
   and `Lotus.Source.Adapter.Cancel`.
   """
 
+  alias Lotus.Runner.Cancel
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
 
   use Lotus.Source.Adapters.Ecto,
@@ -93,7 +94,7 @@ defmodule Lotus.Source.Adapters.Postgres do
   @impl Lotus.Source.Adapter.Cancel
   def cancel(state, pid) when is_integer(pid) do
     EctoAdapter.with_repo(state, fn repo ->
-      case repo.query("SELECT pg_cancel_backend($1)", [pid]) do
+      case repo.query("SELECT pg_cancel_backend($1)", [pid], timeout: Cancel.cancel_timeout()) do
         {:ok, %{rows: [[true]]}} -> :ok
         {:ok, _other} -> {:error, "The database did not cancel the query"}
         {:error, error} -> {:error, Exception.message(error)}
