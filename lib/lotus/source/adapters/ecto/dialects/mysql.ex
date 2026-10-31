@@ -506,6 +506,34 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
 
   @impl true
   def extract_accessed_resources(repo, %Statement{body: sql} = statement) when is_binary(sql) do
+    with {:ok, relations} <- accessed(repo, statement),
+         do: {:ok, fold_case(repo, relations)}
+  end
+
+  # MySQL reads its system schemas' names in any case, and a table's too
+  # when `lower_case_table_names` folds them, while visibility rules match
+  # a name as given: those names are also checked as the server stores
+  # them.
+  @system_schemas ~w(information_schema mysql performance_schema sys)
+
+  defp fold_case(repo, relations) do
+    fold_tables? =
+      case repo.query("SELECT @@lower_case_table_names") do
+        {:ok, %{rows: [[mode]]}} -> mode != 0
+        _ -> true
+      end
+
+    relations
+    |> Enum.flat_map(fn {schema, table} = relation ->
+      down = schema && String.downcase(schema)
+      schema = if down in @system_schemas, do: down, else: schema
+      folded = if fold_tables?, do: [{down, String.downcase(table)}], else: []
+      [relation, {schema, table} | folded]
+    end)
+    |> MapSet.new()
+  end
+
+  defp accessed(repo, %Statement{body: sql} = statement) do
     text = statement_text(sql)
 
     cond do
@@ -526,7 +554,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     cond do
       String.starts_with?(first, "(") or
           Enum.any?(@statement_starts, &Regex.match?(~r/\A#{&1}\b/, first)) ->
-        extract_accessed_resources(repo, %{statement | body: inner})
+        accessed(repo, %{statement | body: inner})
 
       Regex.match?(~r/\Afor\b/, first) ->
         {:error, "Lotus can't tell which tables EXPLAIN FOR CONNECTION reads"}
