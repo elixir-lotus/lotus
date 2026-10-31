@@ -305,10 +305,11 @@ defmodule Lotus.Preflight.ColumnsPropertyTest do
   for file <- @corpus_files, do: @external_resource(file)
 
   # Before, a sort by position passed, and so did `TABLE t` in a set
-  # operation; now they may be refused. Those are the only differences
-  # between the two checks over `users` alone: a qualifier can only resolve
-  # to `users` then, whose `ssn` is protected either way.
+  # operation and a NATURAL join; now they may be refused. Those are the
+  # only differences between the two checks over `users` alone: a qualifier
+  # can only resolve to `users` then, whose `ssn` is protected either way.
   defp agree?(_sql, _old, {:error, "Query sorts or groups by position " <> _}), do: true
+  defp agree?(_sql, _old, {:error, "Query joins with NATURAL " <> _}), do: true
 
   defp agree?(sql, old, {:error, "Query combines * with UNION" <> _} = new),
     do: old == new or sql =~ ~r/table/i

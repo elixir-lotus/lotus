@@ -33,6 +33,11 @@
 
 ### Security
 
+- **A `NATURAL` join over a table with protected columns is refused.** A
+  `NATURAL` join compares the columns both sides share without naming
+  them, so the column check can't tell how a protected column is used.
+  Join with `ON` and name the columns.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

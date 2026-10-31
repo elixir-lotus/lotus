@@ -86,6 +86,27 @@ defmodule Lotus.Preflight.ColumnsTest do
       end
     end
 
+    for sql <- [
+          "SELECT name FROM users NATURAL JOIN (SELECT 1 AS ssn) p",
+          "SELECT name FROM users NATURAL LEFT JOIN orders",
+          "SELECT name FROM users natural inner join orders o",
+          "SELECT name FROM orders o NATURAL RIGHT OUTER JOIN users",
+          "SELECT name FROM users NATURAL FULL JOIN orders",
+          "SELECT * FROM (SELECT name FROM users NATURAL JOIN orders) t"
+        ] do
+      test "refuses a NATURAL join: #{sql}" do
+        assert {:error, "Query joins with NATURAL " <> _} = check(unquote(sql))
+      end
+    end
+
+    test "passes a NATURAL join when no touched relation has protected columns" do
+      assert :ok =
+               check("SELECT id FROM orders NATURAL JOIN payments", @postgres, [
+                 {"public", "orders"},
+                 {"public", "payments"}
+               ])
+    end
+
     test "refuses * across a set operation" do
       assert {:error, "Query combines * with UNION" <> _} =
                check("SELECT name, name FROM users UNION SELECT * FROM users")
