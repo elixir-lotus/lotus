@@ -1217,7 +1217,8 @@ defmodule Lotus.Source.Adapters.Ecto do
 
   # SQL-specific preflight heuristic. Skips introspection statements
   # (EXPLAIN, SHOW, PRAGMA) that do not touch visible relations. Dialects
-  # can override by implementing `needs_preflight?/1`.
+  # can override by implementing `needs_preflight?/1`, as SQLite does to
+  # check the tables its EXPLAIN and PRAGMA statements name.
   #
   # Skipping the preflight skips column visibility, so the check errs
   # toward running it: the statement is skipped only when the first word

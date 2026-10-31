@@ -18,6 +18,7 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
   alias __MODULE__.EditorConfig
   alias Lotus.Query.Filter
   alias Lotus.Query.Statement
+  alias Lotus.Query.Tokenizer
   alias Lotus.Query.Tokenizer.Profile
   alias Lotus.Source.Adapters.Ecto.Dialects.Default
   alias Lotus.SQL.FilterInjector
@@ -361,8 +362,21 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
 
   alias Lotus.Source.Adapters.Ecto, as: EctoHelpers
 
+  # `EXPLAIN` and `PRAGMA` name tables too (`PRAGMA table_info(t)` returns a
+  # table's columns), so they are checked as any statement is.
   @impl true
-  def extract_accessed_resources(repo, %Statement{body: sql, params: params, meta: meta}) do
+  def needs_preflight?(_statement), do: true
+
+  @impl true
+  def extract_accessed_resources(repo, %Statement{body: sql} = statement) when is_binary(sql) do
+    case introspection(sql) do
+      {:explain, inner} -> extract_accessed_resources(repo, %{statement | body: inner})
+      {:pragma, form} -> pragma_relations(repo, form, statement.meta)
+      :none -> statement_relations(repo, statement)
+    end
+  end
+
+  defp statement_relations(repo, %Statement{body: sql, params: params, meta: meta}) do
     opts = Map.to_list(meta)
     alias_map = EctoHelpers.parse_alias_map(sql, Profile.for_language(query_language()))
     explain = "EXPLAIN QUERY PLAN " <> sql
@@ -376,8 +390,12 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
         repo,
         fn ->
           with {:ok, %{rows: rows}} <- repo.query(explain, params),
-               {:ok, opened} <- opened_tables(repo, sql, params) do
-            rows |> parse_explain_rows(alias_map) |> MapSet.union(opened)
+               {:ok, opened} <- opened_tables(repo, sql, params),
+               {:ok, introspected} <- pragma_function_relations(repo, sql) do
+            rows
+            |> parse_explain_rows(alias_map)
+            |> MapSet.union(opened)
+            |> MapSet.union(introspected)
           else
             {:error, err} -> repo.rollback(format_error(err))
           end
@@ -390,6 +408,147 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.SQLite3 do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  # The pragmas that read one table, named as their argument, and those that
+  # read one index (of a table).
+  @table_pragmas ~w(table_info table_xinfo index_list foreign_key_list foreign_key_check)
+  @index_pragmas ~w(index_info index_xinfo)
+
+  @name ~S/(\w+|"(?:[^"]|"")*"|'(?:[^']|'')*'|`(?:[^`]|``)*`|\[[^\]]*\])/
+
+  # The statement as SQLite reads it past comments: `EXPLAIN [QUERY PLAN]`
+  # and the statement it explains, a `PRAGMA` and its form, or neither.
+  defp introspection(sql) do
+    text =
+      sql
+      |> Tokenizer.tokenize(Profile.for_language(query_language()))
+      |> Enum.map(fn
+        {:comment, _raw} -> {:code, " "}
+        token -> token
+      end)
+      |> Tokenizer.to_string()
+
+    cond do
+      match = Regex.run(~r/\A\s*EXPLAIN\b(?:\s+QUERY\s+PLAN\b)?(.*)\z/is, text) ->
+        {:explain, List.last(match)}
+
+      Regex.match?(~r/\A\s*PRAGMA\b/i, text) ->
+        {:pragma, Regex.run(pragma_regex(), text)}
+
+      true ->
+        :none
+    end
+  end
+
+  defp pragma_regex do
+    Regex.compile!(
+      "\\A\\s*PRAGMA\\s*(?:#{@name}\\s*\\.\\s*)?#{@name}\\s*(?:=.*|\\(\\s*#{@name}\\s*\\))?\\s*\\z",
+      "is"
+    )
+  end
+
+  defp pragma_relations(repo, form, meta) do
+    execute_in_transaction(
+      repo,
+      fn ->
+        case form do
+          [_, _schema, name, arg] -> pragma_tables(repo, unquote_name(name), unquote_name(arg))
+          [_ | _] -> MapSet.new()
+          nil -> repo.rollback(unreadable_pragma())
+        end
+      end,
+      Map.to_list(meta)
+    )
+  end
+
+  defp pragma_tables(repo, pragma, arg) do
+    case String.downcase(pragma) do
+      p when p in @table_pragmas ->
+        MapSet.new([{nil, stored_table(repo, arg, ["table", "view"])}])
+
+      p when p in @index_pragmas ->
+        MapSet.new([{nil, stored_table(repo, arg, ["index"])}])
+
+      _ ->
+        MapSet.new()
+    end
+  end
+
+  # `pragma_table_info('t')` and its kin in a query read the table their
+  # first argument names, which only a literal tells.
+  defp pragma_function_relations(repo, sql) do
+    sql
+    |> Tokenizer.tokenize(Profile.for_language(query_language()))
+    |> pragma_calls([])
+    |> Enum.reduce_while({:ok, MapSet.new()}, fn
+      {pragma, {:literal, arg}}, {:ok, acc} ->
+        {:cont, {:ok, MapSet.union(acc, pragma_tables(repo, pragma, arg))}}
+
+      {_pragma, :unknown}, _acc ->
+        {:halt, {:error, unreadable_pragma()}}
+    end)
+  end
+
+  defp pragma_calls([], acc), do: acc
+
+  defp pragma_calls([{:code, raw} | rest], acc) do
+    calls =
+      for [{at, size}, {name_at, name_size}] <-
+            Regex.scan(~r/(?<![\w$])pragma_(\w+)\s*\(/i, raw, return: :index),
+          pragma = raw |> binary_part(name_at, name_size) |> String.downcase(),
+          pragma in @table_pragmas or pragma in @index_pragmas do
+        tail = binary_part(raw, at + size, byte_size(raw) - at - size)
+        {pragma, if(String.trim(tail) == "", do: pragma_argument(rest), else: :unknown)}
+      end
+
+    pragma_calls(rest, calls ++ acc)
+  end
+
+  defp pragma_calls([{:identifier, raw} | rest], acc) do
+    with "pragma_" <> pragma <- raw |> unquote_name() |> String.downcase(),
+         true <- pragma in @table_pragmas or pragma in @index_pragmas,
+         [{:code, paren} | after_paren] <- rest,
+         [_, tail] <- Regex.run(~r/\A\s*\((.*)\z/s, paren) do
+      argument = if String.trim(tail) == "", do: pragma_argument(after_paren), else: :unknown
+      pragma_calls(rest, [{pragma, argument} | acc])
+    else
+      _ -> pragma_calls(rest, acc)
+    end
+  end
+
+  defp pragma_calls([_token | rest], acc), do: pragma_calls(rest, acc)
+
+  defp pragma_argument([{:string, raw}, {:code, after_arg} | _]) do
+    if Regex.match?(~r/\A\s*[,)]/, after_arg),
+      do: {:literal, unquote_name(raw)},
+      else: :unknown
+  end
+
+  defp pragma_argument(_rest), do: :unknown
+
+  defp unreadable_pragma, do: "Lotus can't tell which table the PRAGMA reads"
+
+  # The name a table (or the index's table) is stored under, in any case;
+  # one that isn't there stands as given.
+  defp stored_table(repo, name, types) do
+    %{rows: rows} =
+      repo.query!(
+        "SELECT tbl_name FROM sqlite_master WHERE type IN (#{Enum.map_join(types, ", ", &"'#{&1}'")}) AND name = ? COLLATE NOCASE",
+        [name]
+      )
+
+    case rows do
+      [[table] | _] -> table
+      [] -> name
+    end
+  end
+
+  defp unquote_name(<<q, _::binary>> = raw) when q in [?", ?', ?`] do
+    raw |> String.slice(1..-2//1) |> String.replace(<<q, q>>, <<q>>)
+  end
+
+  defp unquote_name("[" <> _ = raw), do: String.slice(raw, 1..-2//1)
+  defp unquote_name(raw), do: raw
 
   # The plan names a table as the statement does: by its alias, in the case
   # it was written, without its schema. The bytecode opens each table by

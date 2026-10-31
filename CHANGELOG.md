@@ -98,6 +98,15 @@
   holds. Preflight now first checks the tables the statement names, and
   refuses one that the rules hide as it refuses a planned statement.
 
+- **SQLite: `EXPLAIN` and `PRAGMA` statements are checked against
+  visibility rules.** Lotus skipped the visibility check for a statement
+  that starts with `EXPLAIN` or `PRAGMA`, so `PRAGMA table_info(t)` read the
+  columns of a hidden table. The SQLite dialect now checks them: `EXPLAIN`
+  by the statement it explains, a `PRAGMA` by the table or index it names.
+  In a query, `pragma_table_info('t')` and the other `pragma_` functions
+  that read one table count as reads of it, and one whose table only a
+  query can tell is refused.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
