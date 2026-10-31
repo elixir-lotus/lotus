@@ -30,8 +30,8 @@ is separate and stays optional.
 | `run_query` | `lotus:query` | Run a saved query, with values for its variables |
 | `run_dashboard` | `lotus:query` | Run a dashboard's query cards, with filter values |
 | `save_query`, `update_query` | `lotus:write` | Save a statement, or change a saved query |
-| `save_chart` | `lotus:write` | Set a saved query's chart, as Lotus Web shows it |
-| `create_dashboard`, `add_dashboard_card` | `lotus:write` | Build a dashboard of queries, charts, text and headings |
+| `save_chart` | `lotus:write`, `lotus:query` | Set a saved query's chart, as Lotus Web shows it. It runs the query once to check the chart's fields |
+| `create_dashboard`, `add_dashboard_card` | `lotus:write` | Build a dashboard of queries, charts, text and headings. A card with a chart also needs `lotus:query` |
 
 Saved queries (`lotus://queries/{id}`) and dashboards
 (`lotus://dashboards/{id}`) are also resources, which a client can attach

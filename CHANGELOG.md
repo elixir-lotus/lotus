@@ -69,6 +69,12 @@
   doesn't close every parenthesis it opens, closes one it didn't open, or
   ends inside a comment. Such a statement isn't valid SQL on its own.
 
+- **MCP: a tool that runs a query needs `lotus:query`.** `save_chart`, and
+  `add_dashboard_card` with a chart, run the saved query once to check the
+  chart's fields, but needed only `lotus:write`. `save_chart` now declares
+  both scopes, and `add_dashboard_card` refuses a chart to a token without
+  `lotus:query`. A card without a chart still needs only `lotus:write`.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
