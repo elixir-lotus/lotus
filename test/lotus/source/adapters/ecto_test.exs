@@ -349,14 +349,28 @@ defmodule Lotus.Source.Adapters.EctoTest do
             "SELECT load_extension('x')",
             "PRAGMA query_only = 0",
             "PRAGMA main.journal_mode = DELETE",
-            "PRAGMA foreign_keys(0)"
+            "PRAGMA foreign_keys(0)",
+            "PRAGMA 'ignore_check_constraints' = 1",
+            "PRAGMA main.'case_sensitive_like' = 1",
+            "PRAGMA 'main'.'busy_timeout'(0)",
+            ~s(PRAGMA"query_only"=0),
+            "PRAGMA[query_only]=0",
+            "PRAGMA `query_only` = 0",
+            "PRAGMA 'two words' = 1",
+            "PRAGMA - 1",
+            ~s(DETACH"other")
           ] do
         assert {:error, "Only read-only queries are allowed" <> _} =
                  Adapter.sanitize_query(adapter, Statement.new(sql), []),
                sql
       end
 
-      for sql <- ["PRAGMA table_info(users)", "PRAGMA foreign_keys"] do
+      for sql <- [
+            "PRAGMA table_info(users)",
+            "PRAGMA foreign_keys",
+            "PRAGMA 'table_info'('users')",
+            ~s(PRAGMA main."foreign_keys")
+          ] do
         assert :ok = Adapter.sanitize_query(adapter, Statement.new(sql), []), sql
       end
     end
