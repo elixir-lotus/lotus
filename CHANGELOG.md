@@ -84,6 +84,13 @@
   character a header can't hold (a pasted line break), and the message of
   a refused header names the header, not its value.
 
+- **A variable's type comes only from a table the caller may see.**
+  `Lotus.Storage.Query.compile/3` types a `{{variable}}` from the column it
+  is compared with, before the run's visibility check. It now does so only
+  when the source and the column's table are visible in the caller's
+  `:scope` (new option, which `Lotus.run_query/2`, `Lotus.stream_query/3`
+  and `Lotus.can_run?/2` pass); otherwise the variable is text.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
