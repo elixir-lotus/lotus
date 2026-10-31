@@ -38,6 +38,15 @@
   them, so the column check can't tell how a protected column is used.
   Join with `ON` and name the columns.
 
+- **Streams and exports on SQLite apply column policies.** The SQLite
+  driver doesn't name the columns of the rows it streams, so their values
+  reached `Lotus.stream_query/3`, `Lotus.stream_statement/4` and
+  `Lotus.Export.stream/4` without the policies, and a CSV export had no
+  header. The SQLite adapter no longer declares
+  `Lotus.Source.Adapter.Streaming`: Lotus runs the statement once and hands
+  its rows over in chunks, with their columns. Under a column policy, Lotus
+  now refuses a chunk whose rows don't match its columns, from any adapter.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

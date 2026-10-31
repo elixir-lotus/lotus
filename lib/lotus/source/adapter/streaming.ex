@@ -5,9 +5,10 @@ defmodule Lotus.Source.Adapter.Streaming do
   `Lotus.Export.stream/4` use it, so an export of a million rows holds one
   chunk at a time.
 
-  The built-in PostgreSQL, MySQL and SQLite adapters declare it, with
-  `Ecto.Adapters.SQL.stream/4`. A source without it still streams through the
-  same API: Lotus runs the statement once and hands its rows over in chunks.
+  The built-in PostgreSQL and MySQL adapters declare it, with
+  `Ecto.Adapters.SQL.stream/4`. A source without it, SQLite among them, still
+  streams through the same API: Lotus runs the statement once and hands its
+  rows over in chunks.
 
   Declare it next to the core behaviour:
 
@@ -28,7 +29,9 @@ defmodule Lotus.Source.Adapter.Streaming do
   the transaction ends; the rows must be read only as it is enumerated.
   `opts` carries `:max_rows`, the most rows a chunk should hold, and the
   options of `execute_query/4`. Every chunk carries the columns, and an empty
-  result yields one chunk with no rows. A source error before the stream
+  result yields one chunk with no rows. Under a column policy, Lotus refuses
+  a chunk whose rows don't match its columns, as it can't tell which
+  values the policy protects. A source error before the stream
   exists is `{:error, reason}`; one while it is read raises.
   """
   @callback stream_query(

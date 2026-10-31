@@ -8,6 +8,11 @@ defmodule Lotus.Source.Adapters.SQLite3 do
 
   Dialect behaviour comes from
   `Lotus.Source.Adapters.Ecto.Dialects.SQLite3`: a flat namespace (no schemas) and `EXPLAIN QUERY PLAN` query plans.
+
+  It doesn't declare `Lotus.Source.Adapter.Streaming`: the SQLite driver
+  doesn't name the columns of the rows it streams, and column policies
+  apply by name. `Lotus.stream_query/3` runs the statement once and hands
+  its rows over in chunks.
   """
 
   use Lotus.Source.Adapters.Ecto,
@@ -34,11 +39,4 @@ defmodule Lotus.Source.Adapters.SQLite3 do
       do: super(name, settings),
       else: {:error, %{database: "There is no database file at #{settings[:database]}."}}
   end
-
-  @behaviour Lotus.Source.Adapter.Streaming
-
-  @impl Lotus.Source.Adapter.Streaming
-  defdelegate stream_query(state, sql, params, opts),
-    to: Lotus.Source.Adapters.Ecto,
-    as: :do_stream_query
 end
