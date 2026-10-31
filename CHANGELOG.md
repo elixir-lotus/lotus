@@ -258,6 +258,16 @@
   those fields. A filter mapping must link a card and a filter of the same
   dashboard.
 
+- **SSL on a server source checks the certificate, and works on MySQL.**
+  A PostgreSQL or MySQL source connected from settings with "Use SSL"
+  passed `ssl: true` to the driver. MyXQL 0.8 and 0.9 crash on it, so such
+  a MySQL source never connected. Lotus now passes the TLS options itself:
+  the server's certificate is checked against the system's CAs, or against
+  the new "CA certificate" (PEM, which also turns SSL on), and its host
+  name too unless "Check the host name" is off, for a certificate that
+  names none (one MySQL makes for itself). A PostgreSQL source with "Use
+  SSL" alone connects as before.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
