@@ -121,6 +121,12 @@
   caller's `:scope` and `:context`: a statement over a hidden source or
   table gets no plan in the prompt, and a generated one is not taken.
 
+- **Email: the subject is one line.** Without a configured subject, the
+  email channel used the run's title (the schedule's name) as it was, and
+  some mail encoders write a line break in a header as is. The title now
+  has its line breaks made spaces; a configured subject is still refused
+  with one, as before.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

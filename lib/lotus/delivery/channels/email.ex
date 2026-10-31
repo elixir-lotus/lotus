@@ -260,11 +260,14 @@ defmodule Lotus.Delivery.Channels.Email do
     if bytes > max_bytes, do: {[], bytes}, else: {attachments, nil}
   end
 
+  # A subject is one header line. The configured one is checked when the
+  # delivery is saved; the run's title (a schedule's name) is not, and some
+  # mail encoders write a line break in it as is, so it is made one line.
   defp subject(content, subject) do
     base =
       case subject do
         subject when is_binary(subject) and subject != "" -> String.trim(subject)
-        _ -> content.title
+        _ -> content.title |> to_string() |> String.replace(~r/[\r\n]+/, " ") |> String.trim()
       end
 
     case content.alert do
