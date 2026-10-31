@@ -141,6 +141,13 @@
   denied function written as `U&"..."` with escapes (and an optional
   `UESCAPE`) is the function it spells, and is refused as it is.
 
+- **A CTE name hides a table only where the CTE is in scope.** The text
+  readers that back up the plan (PostgreSQL's tables the planner leaves
+  out, MySQL's statement reader) took a name for a CTE wherever a CTE of
+  that name was defined in the statement. A table read before a later
+  CTE of its name, outside the subquery that defines one, or in the body
+  of a non-recursive CTE of its own name, now counts as the table.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

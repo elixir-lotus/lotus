@@ -316,13 +316,27 @@ defmodule Lotus.Preflight.ColumnsPropertyTest do
 
   defp agree?(_sql, old, new), do: old == new
 
+  # `name [(columns)] AS [NOT] [MATERIALIZED] (`.
+  defp cte_definition(name) do
+    ~r/\b#{Regex.escape(name)}\s*(?:\([^()]*\))?\s*AS\s+(?:NOT\s+)?(?:MATERIALIZED\s*)?\(/i
+  end
+
   defp assert_agree(sql) do
     for profile <- [@postgres, @mysql] do
       old = OldColumns.check(sql, profile, @matcher, @users)
       new = Columns.check(sql, profile, @matcher, @users)
       assert agree?(sql, old, new), "#{sql}\nold: #{inspect(old)}\nnew: #{inspect(new)}"
 
-      assert Columns.table_names(sql, profile) == OldColumns.table_names(sql, profile), sql
+      # The old reader took a name for a CTE wherever one of that name was
+      # defined; the new one only where the CTE is in scope, so it finds the
+      # same tables and, where a CTE elsewhere shares a table's name, that
+      # table too.
+      new_tables = Columns.table_names(sql, profile)
+      old_tables = OldColumns.table_names(sql, profile)
+      assert old_tables -- new_tables == [], sql
+
+      for [name] <- new_tables -- old_tables,
+          do: assert(sql =~ cte_definition(name), sql)
     end
   end
 

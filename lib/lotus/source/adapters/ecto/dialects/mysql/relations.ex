@@ -15,7 +15,10 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL.Relations do
   # list) and in CTEs. A FROM inside a function's parentheses
   # (`EXTRACT(YEAR FROM d)`, `TRIM(x FROM s)`) names no table. A name that
   # a WITH clause defines is not a table, nor is an alias of one, nor is
-  # `DUAL`.
+  # `DUAL`. A name is a CTE only where SQL puts the CTE in scope: after its
+  # definition in its WITH list (from its own name on, with RECURSIVE), up
+  # to the end of the query the WITH belongs to. Anywhere else it is the
+  # table of that name.
 
   alias Lotus.Query.Tokenizer.Profile
   alias Lotus.Source.Adapters.Ecto, as: EctoHelpers
@@ -26,10 +29,11 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL.Relations do
           tables: [relation()],
           names: %{String.t() => [relation()]},
           not_tables: %{String.t() => true},
-          ctes: %{String.t() => true}
+          ctes: %{String.t() => true},
+          scopes: [{String.t(), non_neg_integer(), non_neg_integer()}]
         }
 
-  defstruct tables: [], names: %{}, not_tables: %{}, ctes: %{}
+  defstruct tables: [], names: %{}, not_tables: %{}, ctes: %{}, scopes: []
 
   # Words that end a FROM clause.
   @ends ~w(where group having order limit union except intersect window for into lock
@@ -51,16 +55,10 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL.Relations do
   """
   @spec read(String.t()) :: t()
   def read(sql) when is_binary(sql) do
-    acc =
-      sql
-      |> EctoHelpers.sql_lexemes(Profile.for_language("sql:mysql"))
-      |> walk([true], %__MODULE__{})
+    lexemes = EctoHelpers.sql_lexemes(sql, Profile.for_language("sql:mysql"))
+    acc = walk(lexemes, [true], %__MODULE__{scopes: cte_scopes(lexemes, [])})
 
-    cte? = fn {schema, table} -> is_nil(schema) and Map.has_key?(acc.ctes, table) end
-    tables = acc.tables |> Enum.reverse() |> Enum.reject(cte?) |> Enum.uniq()
-    names = Map.new(acc.names, fn {name, relations} -> {name, Enum.reject(relations, cte?)} end)
-
-    %{acc | tables: tables, names: names}
+    %{acc | tables: acc.tables |> Enum.reverse() |> Enum.uniq(), scopes: []}
   end
 
   @doc """
@@ -182,14 +180,22 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL.Relations do
     end
   end
 
-  defp table_reference([table | rest], acc) do
+  defp table_reference([table | rest] = lexemes, acc) do
     case name_of(table) do
       {:ok, name} ->
+        cte? = cte_in_scope?(acc.scopes, name, length(lexemes))
         {alias_name, rest} = alias_of(rest)
 
-        if String.downcase(name) == "dual" and match?({:word, _}, table),
-          do: from_list(rest, false, acc),
-          else: from_list(rest, false, add_table(acc, {nil, name}, alias_name))
+        cond do
+          String.downcase(name) == "dual" and match?({:word, _}, table) ->
+            from_list(rest, false, acc)
+
+          cte? ->
+            from_list(rest, false, add_not_table(acc, alias_name))
+
+          true ->
+            from_list(rest, false, add_table(acc, {nil, name}, alias_name))
+        end
 
       :error ->
         from_list(rest, false, acc)
@@ -268,6 +274,66 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL.Relations do
   end
 
   defp cte_list([], acc), do: acc
+
+  # Where each CTE is in scope, as `{name, from, to}`: a reference with
+  # `n` lexemes left, its own included, is to the CTE when `to < n < from`.
+  # `from` is the CTE's closing parenthesis (its name, with RECURSIVE), `to`
+  # the parenthesis that closes the query the WITH belongs to, or 0.
+  defp cte_scopes([], scopes), do: scopes
+
+  defp cte_scopes([{:word, word} | rest], scopes) do
+    if String.downcase(word) == "with" do
+      {recursive?, items} =
+        case rest do
+          [{:word, w} | items] ->
+            if String.downcase(w) == "recursive", do: {true, items}, else: {false, rest}
+
+          _ ->
+            {false, rest}
+        end
+
+      to = rest |> split_group() |> elem(1) |> length() |> closing_left()
+      cte_scopes(rest, scope_items(items, recursive?, to, scopes))
+    else
+      cte_scopes(rest, scopes)
+    end
+  end
+
+  defp cte_scopes([_lexeme | rest], scopes), do: cte_scopes(rest, scopes)
+
+  # `split_group/1` past the end of the input leaves nothing after it.
+  defp closing_left(0), do: 0
+  defp closing_left(after_close), do: after_close + 1
+
+  defp scope_items([name | rest] = items, recursive?, to, scopes) do
+    from_name = length(items)
+
+    rest =
+      case rest do
+        [{:punct, "("} | columns] -> columns |> split_group() |> elem(1)
+        _ -> rest
+      end
+
+    with {:ok, name} <- name_of(name),
+         [{:word, as}, {:punct, "("} | body] <- rest,
+         "as" <- String.downcase(as) do
+      {_body, after_body} = split_group(body)
+      from = if recursive?, do: from_name, else: length(after_body) + 1
+      scopes = [{name, from, to} | scopes]
+
+      case after_body do
+        [{:punct, ","} | more] -> scope_items(more, recursive?, to, scopes)
+        _ -> scopes
+      end
+    else
+      _ -> scopes
+    end
+  end
+
+  defp scope_items([], _recursive?, _to, scopes), do: scopes
+
+  defp cte_in_scope?(scopes, name, left),
+    do: Enum.any?(scopes, fn {cte, from, to} -> cte == name and to < left and left < from end)
 
   # The lexemes up to the `)` that closes an open parenthesis, and those
   # after it.

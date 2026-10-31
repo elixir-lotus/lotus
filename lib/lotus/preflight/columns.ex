@@ -275,31 +275,34 @@ defmodule Lotus.Preflight.Columns do
   # The tables a statement names in FROM and JOIN, as name paths
   # (`[schema, table]` or `[table]`), CTEs and functions left out. A dialect
   # whose plan can omit a table the planner proved empty (`WHERE false`)
-  # resolves these to make sure preflight still sees it.
+  # resolves these to make sure preflight still sees it. A name is a CTE
+  # only where SQL puts the CTE in scope (see `cte_scopes/2`); anywhere
+  # else it is the table of that name.
   @spec table_names(String.t(), Profile.t()) :: [[String.t()]]
   def table_names(sql, %Profile{} = profile) when is_binary(sql) do
-    %{out: out, ctes: ctes} = sql |> lex(profile) |> annotate()
+    %{out: out} = sql |> lex(profile) |> annotate()
+    scopes = out |> Enum.map(&elem(&1, 0)) |> cte_scopes([])
 
-    out |> table_paths(:bof, ctes, []) |> Enum.reverse() |> Enum.uniq()
+    out |> table_paths(:bof, scopes, []) |> Enum.reverse() |> Enum.uniq()
   end
 
-  defp table_paths([{lexeme, _reaches?, clause, _level} = entry | rest], prev, ctes, acc) do
+  defp table_paths([{lexeme, _reaches?, clause, _level} = entry | rest], prev, scopes, acc) do
     acc =
       with {:name, _raw, _down} <- lexeme,
            :from <- clause,
            true <- prev in @table_starts,
            {path, after_path} = path_of([entry | rest], []),
            true <- next_lexeme(after_path) != "(",
-           false <- cte?(path, ctes) do
+           false <- cte_in_scope?(path, scopes, length(rest) + 1) do
         [path | acc]
       else
         _ -> acc
       end
 
-    table_paths(rest, lexeme, ctes, acc)
+    table_paths(rest, lexeme, scopes, acc)
   end
 
-  defp table_paths([], _prev, _ctes, acc), do: acc
+  defp table_paths([], _prev, _scopes, acc), do: acc
 
   # The raw names of a `schema.table` path at the head of `entries`, and the
   # entries after it.
@@ -312,6 +315,72 @@ defmodule Lotus.Preflight.Columns do
 
   defp cte?([name], ctes), do: Map.has_key?(ctes, downcase(name))
   defp cte?(_path, _ctes), do: false
+
+  defp cte_in_scope?([name], scopes, left) do
+    down = downcase(name)
+    Enum.any?(scopes, fn {cte, from, to} -> cte == down and to < left and left < from end)
+  end
+
+  defp cte_in_scope?(_path, _scopes, _left), do: false
+
+  # Where each CTE is in scope, as `{name, from, to}`: a name with `n`
+  # lexemes left, its own included, is the CTE when `to < n < from`. A CTE
+  # is in scope after its definition in its WITH list (from its own name
+  # on, with RECURSIVE), up to the parenthesis that closes the query the
+  # WITH belongs to (`to`, 0 at the top).
+  defp cte_scopes([], scopes), do: scopes
+
+  defp cte_scopes([{:kw, "with"} | rest], scopes) do
+    {recursive?, items} =
+      case rest do
+        [{:kw, "recursive"} | items] -> {true, items}
+        _ -> {false, rest}
+      end
+
+    to = rest |> after_group() |> length() |> closing_left()
+    cte_scopes(rest, scope_items(items, recursive?, to, scopes))
+  end
+
+  defp cte_scopes([_lexeme | rest], scopes), do: cte_scopes(rest, scopes)
+
+  defp closing_left(0), do: 0
+  defp closing_left(after_close), do: after_close + 1
+
+  defp scope_items([{:name, _raw, down} | rest] = items, recursive?, to, scopes) do
+    from_name = length(items)
+    rest = if match?(["(" | _], rest), do: after_group(tl(rest)), else: rest
+
+    with [{:kw, "as"} | rest] <- rest,
+         rest = skip_materialized(rest),
+         ["(" | body] <- rest do
+      after_body = after_group(body)
+      from = if recursive?, do: from_name, else: length(after_body) + 1
+      scopes = [{down, from, to} | scopes]
+
+      case after_body do
+        ["," | more] -> scope_items(more, recursive?, to, scopes)
+        _ -> scopes
+      end
+    else
+      _ -> scopes
+    end
+  end
+
+  defp scope_items(_lexemes, _recursive?, _to, scopes), do: scopes
+
+  # `AS [NOT] MATERIALIZED (...)`.
+  defp skip_materialized([{:name, _, "not"}, {:name, _, "materialized"} | rest]), do: rest
+  defp skip_materialized([{:kw, "not"}, {:name, _, "materialized"} | rest]), do: rest
+  defp skip_materialized([{:name, _, "materialized"} | rest]), do: rest
+  defp skip_materialized(rest), do: rest
+
+  # The lexemes after the `)` that closes an open parenthesis.
+  defp after_group(lexemes), do: after_group(lexemes, 1)
+  defp after_group([], _depth), do: []
+  defp after_group([")" | rest], 1), do: rest
+  defp after_group([")" | rest], depth), do: after_group(rest, depth - 1)
+  defp after_group(["(" | rest], depth), do: after_group(rest, depth + 1)
+  defp after_group([_lexeme | rest], depth), do: after_group(rest, depth)
 
   defp next_lexeme([{lexeme, _reaches?, _clause, _level} | _]), do: lexeme
   defp next_lexeme([]), do: :eof
