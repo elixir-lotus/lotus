@@ -13,7 +13,7 @@ defmodule Lotus.SQL.FilterInjector do
       Lotus.SQL.FilterInjector.apply("SELECT * FROM users", [25], [
         %Lotus.Query.Filter{column: "region", op: :eq, value: "US"}
       ], quote_fn, placeholder_fn)
-      #=> {~s(WITH _base AS (SELECT * FROM users) SELECT * FROM _base WHERE "region" = $2), [25, "US"]}
+      #=> {~s(WITH _base AS (\nSELECT * FROM users\n) SELECT * FROM _base WHERE "region" = $2), [25, "US"]}
   """
 
   alias Lotus.Query.Filter
@@ -47,7 +47,9 @@ defmodule Lotus.SQL.FilterInjector do
 
     conditions = Enum.join(condition_fragments, " AND ")
     bare = strip_trailing_semicolon(sql)
-    new_sql = "WITH _base AS (#{bare}) SELECT * FROM _base WHERE #{conditions}"
+    # On lines of its own, so that a line comment at its end can't reach
+    # the conditions.
+    new_sql = "WITH _base AS (\n#{bare}\n) SELECT * FROM _base WHERE #{conditions}"
 
     {new_sql, params ++ new_params}
   end

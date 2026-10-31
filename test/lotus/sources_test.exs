@@ -374,7 +374,7 @@ defmodule Lotus.SourcesTest do
 
       assert %Statement{body: body, params: params} = Source.limit_query(adapter, statement, 10)
 
-      assert body == "SELECT * FROM (SELECT * FROM users) AS limited_query LIMIT 10"
+      assert body == "SELECT * FROM (\nSELECT * FROM users\n) AS limited_query LIMIT 10"
       assert params == [:bound]
     end
 
@@ -382,7 +382,7 @@ defmodule Lotus.SourcesTest do
       statement = Statement.new("SELECT * FROM users")
 
       assert %Statement{body: body} = Source.limit_query("postgres", statement, 10)
-      assert body == "SELECT * FROM (SELECT * FROM users) AS limited_query LIMIT 10"
+      assert body == "SELECT * FROM (\nSELECT * FROM users\n) AS limited_query LIMIT 10"
     end
   end
 end
