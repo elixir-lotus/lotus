@@ -208,6 +208,12 @@
   options (the last by default the source's setting), and returns a
   refusal as the run would.
 
+- **PostgreSQL: a rule for a partitioned table holds for its partitions.**
+  The plan of a partitioned table names its partitions, which a rule for
+  the table didn't match, so a partition read directly wasn't covered.
+  Preflight now adds each relation's partitioned ancestors, at any depth.
+  Tables that only inherit from another (not partitions) are unchanged.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
