@@ -698,6 +698,8 @@ defmodule Lotus do
     # count are both built from the statement the plug returned. Everything that
     # keys the entry — the body, the bound values, the window — therefore
     # describes what will actually execute.
+    runner_opts = put_shaped_columns(runner_opts, filters, sorts)
+
     Runner.run(adapter, statement, runner_opts, fn %Statement{} = statement ->
       {statement, pagination_meta, cache_bound} =
         maybe_paginate(statement, adapter, runner_opts, Keyword.get(opts, :window))
@@ -1108,7 +1110,7 @@ defmodule Lotus do
     :ok = validate_sort_columns!(adapter, sorts)
     statement = Adapter.apply_sorts(adapter, statement, sorts)
 
-    Runner.stream(adapter, statement, runner_opts, fun)
+    Runner.stream(adapter, statement, put_shaped_columns(runner_opts, filters, sorts), fun)
   end
 
   @doc """
@@ -1384,6 +1386,21 @@ defmodule Lotus do
   # adapter can't handle) before we ever hand them to `apply_filters/3` /
   # `apply_sorts/3` — so the failure mode is a clear error at the boundary,
   # not a cryptic SQL/DSL error from deep inside the adapter.
+  # The columns the caller filters or sorts by, for the runner's column check.
+  defp put_shaped_columns(runner_opts, [], []), do: runner_opts
+
+  defp put_shaped_columns(runner_opts, filters, sorts) do
+    columns =
+      Enum.map(filters, & &1.column) ++
+        Enum.flat_map(sorts, fn
+          %Sort{column: column} -> [column]
+          column when is_binary(column) -> [column]
+          _other -> []
+        end)
+
+    Keyword.put(runner_opts, :shaped_columns, Enum.uniq(columns))
+  end
+
   defp validate_filter_columns!(_adapter, []), do: :ok
 
   defp validate_filter_columns!(adapter, filters) do

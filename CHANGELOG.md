@@ -231,6 +231,12 @@
   at a time (new option, twice the schedulers online by default), each
   still bounded by `:timeout`.
 
+- **A filter or sort by a protected column is refused on a non-SQL
+  source.** The column check reads SQL, so on an adapter with another query
+  language a caller's filter or sort by a masked column ran on its values
+  before the policy applied to the result. Lotus now refuses a filter or
+  sort by a column a restricting policy protects on such a source.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
