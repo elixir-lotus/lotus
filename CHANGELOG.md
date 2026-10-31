@@ -188,6 +188,12 @@
   `:language`. The generator raised a `MatchError` when listing schemas or
   tables failed; it now returns the error.
 
+- **An untrusted adapter's unknown capability value is no capability.**
+  `Lotus.Source.Adapter.ai_context/1` raised a `FunctionClauseError` for an
+  untrusted adapter that gave a capability any value other than `true` or
+  `{false, reason}`. Such a value now reads as unsupported, with the
+  generic reason.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
