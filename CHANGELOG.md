@@ -214,6 +214,11 @@
   Preflight now adds each relation's partitioned ancestors, at any depth.
   Tables that only inherit from another (not partitions) are unchanged.
 
+- **The AI's `get_column_values` needs a source that checks its names.**
+  It writes SQL with the table and column names quoted in it, and only a
+  source with `Lotus.Source.Adapter.Introspection` checks those names. On
+  any other source it now refuses.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

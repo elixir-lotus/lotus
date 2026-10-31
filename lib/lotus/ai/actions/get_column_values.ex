@@ -48,11 +48,21 @@ defmodule Lotus.AI.Actions.GetColumnValues do
   def run(params, context) do
     adapter = Source.resolve!(params.data_source, nil)
 
-    with {:ok, {schema, table}} <- parse_name(adapter, params.table_name),
+    with :ok <- introspectable(adapter),
+         {:ok, {schema, table}} <- parse_name(adapter, params.table_name),
          :ok <- validate_parts(adapter, schema, table),
          :ok <- Adapter.validate_identifier(adapter, :column, params.column_name) do
       execute_query(schema, table, params, actor_opts(context))
     end
+  end
+
+  # The statement is SQL with the names quoted in it, which only a source
+  # that checks its identifiers (`Lotus.Source.Adapter.Introspection`) can
+  # take.
+  defp introspectable(adapter) do
+    if Adapter.capability?(adapter, :introspection),
+      do: :ok,
+      else: {:error, "This data source can't list a column's values"}
   end
 
   defp parse_name(adapter, table_name) do
