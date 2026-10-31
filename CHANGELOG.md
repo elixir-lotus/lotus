@@ -167,6 +167,14 @@
   turned read-only off on PostgreSQL. An answer that doesn't validate now
   keeps the config's value, with a warning.
 
+- **Lotus's own SQL around a statement holds.** The filter and sort
+  wrappers (`WITH _base AS (...)`, `WITH _sorted AS (...)`) and
+  `Lotus.Source.limit_query/3` put the statement on lines of its own, as a
+  window does, so the sanitizer refuses one that doesn't stay inside.
+  `limit_query/3` takes only a positive integer, and on PostgreSQL a
+  `:statement_timeout_ms` that is not a non-negative integer falls back to
+  the default, as on MySQL.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

@@ -20,7 +20,7 @@ defmodule Lotus.SQL.SortInjectorTest do
       result = SortInjector.apply(sql, sorts, &double_quote/1)
 
       assert result ==
-               ~s[WITH _sorted AS (SELECT * FROM users) SELECT * FROM _sorted ORDER BY "name" ASC]
+               ~s[WITH _sorted AS (\nSELECT * FROM users\n) SELECT * FROM _sorted ORDER BY "name" ASC]
     end
 
     test "wraps SQL in CTE with single desc sort" do
@@ -30,7 +30,7 @@ defmodule Lotus.SQL.SortInjectorTest do
       result = SortInjector.apply(sql, sorts, &double_quote/1)
 
       assert result ==
-               ~s[WITH _sorted AS (SELECT * FROM users) SELECT * FROM _sorted ORDER BY "created_at" DESC]
+               ~s[WITH _sorted AS (\nSELECT * FROM users\n) SELECT * FROM _sorted ORDER BY "created_at" DESC]
     end
 
     test "handles multiple sorts" do
@@ -44,7 +44,7 @@ defmodule Lotus.SQL.SortInjectorTest do
       result = SortInjector.apply(sql, sorts, &double_quote/1)
 
       assert result ==
-               ~s[WITH _sorted AS (SELECT * FROM orders) SELECT * FROM _sorted ORDER BY "status" ASC, "created_at" DESC]
+               ~s[WITH _sorted AS (\nSELECT * FROM orders\n) SELECT * FROM _sorted ORDER BY "status" ASC, "created_at" DESC]
     end
 
     test "works with backtick quoting (MySQL style)" do
@@ -52,7 +52,7 @@ defmodule Lotus.SQL.SortInjectorTest do
       result = SortInjector.apply("SELECT * FROM users", sorts, &backtick_quote/1)
 
       assert result ==
-               "WITH _sorted AS (SELECT * FROM users) SELECT * FROM _sorted ORDER BY `name` ASC"
+               "WITH _sorted AS (\nSELECT * FROM users\n) SELECT * FROM _sorted ORDER BY `name` ASC"
     end
 
     test "strips trailing semicolon before wrapping in CTE" do
@@ -62,7 +62,7 @@ defmodule Lotus.SQL.SortInjectorTest do
       result = SortInjector.apply(sql, sorts, &double_quote/1)
 
       assert result ==
-               ~s[WITH _sorted AS (SELECT * FROM users) SELECT * FROM _sorted ORDER BY "name" ASC]
+               ~s[WITH _sorted AS (\nSELECT * FROM users\n) SELECT * FROM _sorted ORDER BY "name" ASC]
     end
 
     test "strips trailing semicolon with surrounding whitespace" do
@@ -72,7 +72,7 @@ defmodule Lotus.SQL.SortInjectorTest do
       result = SortInjector.apply(sql, sorts, &double_quote/1)
 
       assert result ==
-               ~s[WITH _sorted AS (SELECT * FROM users) SELECT * FROM _sorted ORDER BY "name" ASC]
+               ~s[WITH _sorted AS (\nSELECT * FROM users\n) SELECT * FROM _sorted ORDER BY "name" ASC]
     end
 
     test "safely wraps queries that already have ORDER BY" do
@@ -82,7 +82,7 @@ defmodule Lotus.SQL.SortInjectorTest do
       result = SortInjector.apply(sql, sorts, &double_quote/1)
 
       assert result ==
-               ~s[WITH _sorted AS (SELECT * FROM users ORDER BY id) SELECT * FROM _sorted ORDER BY "name" DESC]
+               ~s[WITH _sorted AS (\nSELECT * FROM users ORDER BY id\n) SELECT * FROM _sorted ORDER BY "name" DESC]
     end
 
     test "works after CTE-wrapped filtered query" do
@@ -93,7 +93,7 @@ defmodule Lotus.SQL.SortInjectorTest do
       result = SortInjector.apply(sql, sorts, &double_quote/1)
 
       assert result ==
-               ~s[WITH _sorted AS (WITH _base AS (SELECT * FROM users) SELECT * FROM _base WHERE "region" = $1) SELECT * FROM _sorted ORDER BY "name" ASC]
+               ~s[WITH _sorted AS (\nWITH _base AS (SELECT * FROM users) SELECT * FROM _base WHERE "region" = $1\n) SELECT * FROM _sorted ORDER BY "name" ASC]
     end
   end
 

@@ -35,7 +35,9 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   @impl true
   def execute_in_transaction(repo, fun, opts) do
     read_only? = Keyword.get(opts, :read_only, true)
-    stmt_ms = Keyword.get(opts, :statement_timeout_ms, @default_statement_timeout_ms)
+
+    stmt_ms = statement_timeout_ms(opts)
+
     timeout = Keyword.get(opts, :timeout, 15_000)
     search_path = Keyword.get(opts, :search_path)
 
@@ -66,6 +68,14 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
     end
   rescue
     e -> {:error, Exception.message(e)}
+  end
+
+  # Interpolated into `SET LOCAL`, so only a non-negative integer.
+  defp statement_timeout_ms(opts) do
+    case Keyword.get(opts, :statement_timeout_ms, @default_statement_timeout_ms) do
+      ms when is_integer(ms) and ms >= 0 -> ms
+      _ -> @default_statement_timeout_ms
+    end
   end
 
   @impl true
@@ -160,8 +170,9 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.Postgres do
   end
 
   @impl true
-  def limit_query(%Statement{body: body} = statement, limit) do
-    %{statement | body: "SELECT * FROM (#{body}) AS limited_query LIMIT #{limit}"}
+  def limit_query(%Statement{body: body} = statement, limit)
+      when is_integer(limit) and limit > 0 do
+    %{statement | body: "SELECT * FROM (\n#{body}\n) AS limited_query LIMIT #{limit}"}
   end
 
   @impl true

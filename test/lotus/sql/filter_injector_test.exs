@@ -25,7 +25,7 @@ defmodule Lotus.SQL.FilterInjectorTest do
         FilterInjector.apply(sql, [], filters, &double_quote/1, &pg_placeholder/1)
 
       assert result ==
-               ~s[WITH _base AS (SELECT * FROM users) SELECT * FROM _base WHERE "region" = $1]
+               ~s[WITH _base AS (\nSELECT * FROM users\n) SELECT * FROM _base WHERE "region" = $1]
 
       assert params == ["US"]
     end
@@ -42,7 +42,7 @@ defmodule Lotus.SQL.FilterInjectorTest do
         FilterInjector.apply(sql, [], filters, &double_quote/1, &pg_placeholder/1)
 
       assert result ==
-               ~s[WITH _base AS (SELECT * FROM orders) SELECT * FROM _base WHERE "region" = $1 AND "status" != $2]
+               ~s[WITH _base AS (\nSELECT * FROM orders\n) SELECT * FROM _base WHERE "region" = $1 AND "status" != $2]
 
       assert params == ["US", "cancelled"]
     end
@@ -56,7 +56,7 @@ defmodule Lotus.SQL.FilterInjectorTest do
         FilterInjector.apply(sql, existing_params, filters, &double_quote/1, &pg_placeholder/1)
 
       assert result ==
-               ~s[WITH _base AS (SELECT * FROM users WHERE age > $1) SELECT * FROM _base WHERE "region" = $2]
+               ~s[WITH _base AS (\nSELECT * FROM users WHERE age > $1\n) SELECT * FROM _base WHERE "region" = $2]
 
       assert params == [25, "US"]
     end
@@ -190,7 +190,7 @@ defmodule Lotus.SQL.FilterInjectorTest do
         )
 
       assert result ==
-               "WITH _base AS (SELECT * FROM users) SELECT * FROM _base WHERE `region` = ? AND `status` = ?"
+               "WITH _base AS (\nSELECT * FROM users\n) SELECT * FROM _base WHERE `region` = ? AND `status` = ?"
 
       assert params == ["US", "active"]
     end
@@ -249,7 +249,7 @@ defmodule Lotus.SQL.FilterInjectorTest do
         FilterInjector.apply(sql, [], filters, &double_quote/1, &pg_placeholder/1)
 
       assert result ==
-               ~s[WITH _base AS (SELECT * FROM users) SELECT * FROM _base WHERE "region" = $1]
+               ~s[WITH _base AS (\nSELECT * FROM users\n) SELECT * FROM _base WHERE "region" = $1]
     end
 
     test "strips trailing semicolon with surrounding whitespace" do
@@ -260,7 +260,7 @@ defmodule Lotus.SQL.FilterInjectorTest do
         FilterInjector.apply(sql, [], filters, &double_quote/1, &pg_placeholder/1)
 
       assert result ==
-               ~s[WITH _base AS (SELECT * FROM users) SELECT * FROM _base WHERE "region" = $1]
+               ~s[WITH _base AS (\nSELECT * FROM users\n) SELECT * FROM _base WHERE "region" = $1]
     end
 
     test "handles CTE query with trailing semicolon" do
@@ -289,7 +289,7 @@ defmodule Lotus.SQL.FilterInjectorTest do
       {result, params} =
         FilterInjector.apply(sql, [], filters, &double_quote/1, &pg_placeholder/1)
 
-      assert result =~ "WITH _base AS (#{sql})"
+      assert result =~ "WITH _base AS (\n#{sql}\n)"
       assert result =~ ~s(SELECT * FROM _base WHERE "name" = $1)
       assert params == ["test"]
     end
