@@ -201,6 +201,13 @@
   default one keys a read-write run apart. A read-only run's key is the
   same as before.
 
+- **`Lotus.SQL.Validator.validate/3` checks a statement as a run would.**
+  It ran `EXPLAIN` on the statement with no visibility rules, so its answer
+  could tell whether a hidden table or column exists. It now first runs the
+  checks of a run, with the new `:scope`, `:context` and `:read_only`
+  options (the last by default the source's setting), and returns a
+  refusal as the run would.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
