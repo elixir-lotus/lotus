@@ -424,17 +424,21 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     for [schema, table, rows] <- rows, is_integer(rows), into: %{}, do: {{schema, table}, rows}
   end
 
+  # In a read-only transaction, as preflight's EXPLAIN runs.
   @impl true
-  def query_plan(repo, %Statement{body: sql, params: params}, _opts) do
+  def query_plan(repo, %Statement{body: sql, params: params}, opts) do
     explain_sql = "EXPLAIN FORMAT=JSON " <> sql
 
-    case repo.query(explain_sql, params) do
-      {:ok, %{rows: [[json]]}} ->
-        {:ok, json}
-
-      {:error, err} ->
-        {:error, format_error(err)}
-    end
+    execute_in_transaction(
+      repo,
+      fn ->
+        case repo.query(explain_sql, params) do
+          {:ok, %{rows: [[json]]}} -> json
+          {:error, err} -> repo.rollback(format_error(err))
+        end
+      end,
+      Keyword.take(opts, [:read_only, :statement_timeout_ms, :timeout])
+    )
   end
 
   @impl true
@@ -627,47 +631,26 @@ defmodule Lotus.Source.Adapters.Ecto.Dialects.MySQL do
     end
   end
 
-  defp collect_mysql_relations(%{"query_block" => query_block}, acc) do
-    collect_query_block(query_block, acc)
-  end
-
-  defp collect_mysql_relations(data, acc) when is_list(data) do
-    Enum.reduce(data, acc, &collect_mysql_relations/2)
-  end
-
+  # Every table the plan names, wherever it sits: under a query block's
+  # nested loop, beside it (`select_list_subqueries`,
+  # `optimized_away_subqueries`) or in a table's `attached_subqueries`.
   defp collect_mysql_relations(data, acc) when is_map(data) do
-    case Map.get(data, "query_block") do
-      nil -> acc
-      query_block -> collect_query_block(query_block, acc)
-    end
+    acc =
+      case data do
+        %{"table_name" => name} when is_binary(name) ->
+          MapSet.put(acc, {Map.get(data, "schema"), name})
+
+        _ ->
+          acc
+      end
+
+    Enum.reduce(data, acc, fn {_key, value}, acc -> collect_mysql_relations(value, acc) end)
   end
 
-  defp collect_mysql_relations(_, acc), do: acc
+  defp collect_mysql_relations(data, acc) when is_list(data),
+    do: Enum.reduce(data, acc, &collect_mysql_relations/2)
 
-  defp collect_query_block(%{"table" => table_info}, acc) when is_map(table_info) do
-    case Map.get(table_info, "table_name") do
-      table_name when is_binary(table_name) ->
-        schema = Map.get(table_info, "schema")
-        MapSet.put(acc, {schema, table_name})
-
-      _ ->
-        acc
-    end
-  end
-
-  defp collect_query_block(%{"nested_loop" => nested_loop}, acc) when is_list(nested_loop) do
-    Enum.reduce(nested_loop, acc, fn item, acc_inner ->
-      collect_query_block(item, acc_inner)
-    end)
-  end
-
-  defp collect_query_block(data, acc) when is_map(data) do
-    Enum.reduce(data, acc, fn {_key, value}, acc_inner ->
-      collect_mysql_relations(value, acc_inner)
-    end)
-  end
-
-  defp collect_query_block(_, acc), do: acc
+  defp collect_mysql_relations(_data, acc), do: acc
 
   # The tables the statement's text reads, as `{schema, table}`; see
   # `MySQL.Relations`.

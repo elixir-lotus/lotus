@@ -3,6 +3,7 @@ defmodule Lotus.PreflightMysqlTest do
   use Mimic
   alias Lotus.Preflight
   alias Lotus.Query.Statement
+  alias Lotus.Source.Adapter
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
 
   @moduletag :mysql
@@ -279,6 +280,41 @@ defmodule Lotus.PreflightMysqlTest do
                  @mysql_adapter,
                  Statement.new("SELECT * FROM products LIMIT 1", [])
                )
+    end
+  end
+
+  describe "MySQL plans" do
+    test "query_plan/3 reads the plan in a read-only transaction" do
+      assert {:ok, json} =
+               Adapter.query_plan(
+                 @mysql_adapter,
+                 Statement.new("SELECT title FROM test_posts"),
+                 []
+               )
+
+      assert json =~ "query_block"
+
+      assert {:error, "MySQL Error" <> _} =
+               Adapter.query_plan(
+                 @mysql_adapter,
+                 Statement.new("SELECT nope FROM test_posts"),
+                 []
+               )
+    end
+
+    test "a table in a subquery beside another is named" do
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _ -> %{table: [deny: ["test_posts"]]} end)
+
+      assert {:error, msg} =
+               Preflight.authorize(
+                 @mysql_adapter,
+                 Statement.new(
+                   "SELECT (SELECT title FROM test_posts LIMIT 1) AS t FROM test_users"
+                 )
+               )
+
+      assert msg =~ "test_posts"
     end
   end
 end
