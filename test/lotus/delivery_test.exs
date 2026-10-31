@@ -313,10 +313,28 @@ defmodule Lotus.DeliveryTest do
                })
     end
 
+    test "a redirect is not followed" do
+      pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(pid, {:requested, conn.host, conn.request_path})
+
+        conn
+        |> Plug.Conn.put_resp_header("location", "https://internal.example/steal")
+        |> Plug.Conn.send_resp(307, "elsewhere")
+      end)
+
+      assert {:error, "the webhook answered 307"} =
+               Webhook.deliver(content([]), [], %{"url" => "https://x.io/hook"})
+
+      assert_received {:requested, "x.io", "/hook"}
+      refute_received {:requested, "internal.example", _}
+    end
+
     test "a response that is not 2xx is an error" do
       Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 503, "busy") end)
 
-      assert {:error, "the webhook answered 503: busy"} =
+      assert {:error, "the webhook answered 503"} =
                Webhook.deliver(content([]), [], %{"url" => "https://x.io"})
     end
   end
@@ -593,7 +611,7 @@ defmodule Lotus.DeliveryTest do
     test "says the channel's reason when it fails" do
       Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 401, "bad token") end)
 
-      assert {:error, "the webhook answered 401: bad token"} =
+      assert {:error, "the webhook answered 401"} =
                Delivery.send_test("webhook", "json", %{"url" => "https://hooks.example.com/x"})
     end
   end
@@ -660,7 +678,7 @@ defmodule Lotus.DeliveryTest do
               %ScheduleRun{status: "failed", error: "1 of 2 deliveries failed", details: details}} =
                Worker.perform(run.id)
 
-      assert %{"status" => "failed", "error" => "the webhook answered 500: down"} =
+      assert %{"status" => "failed", "error" => "the webhook answered 500"} =
                details["deliveries"][webhook.id]
 
       assert_received {:delivered, "ops", _, _}
