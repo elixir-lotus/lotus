@@ -366,7 +366,7 @@ list in `@optional_callbacks` on `Lotus.Source.Adapters.Ecto.Dialect`:
 | `editor_config/0` | Editor | `%{language: "sql", keywords: [], types: [], functions: [], context_boundaries: []}` |
 | `ai_context/0` | AI | Generic-SQL context synthesized from `query_language/0`, with an empty `:error_patterns` list |
 | `extract_accessed_resources/2` | Visibility | `{:unrestricted, "dialect ... does not implement extract_accessed_resources/2"}` — visibility is **not** enforced until you implement it |
-| `needs_preflight?/1` | Visibility | The Ecto adapter's SQL heuristic: `false` for statements starting with `EXPLAIN`, `SHOW` or `PRAGMA`, `true` otherwise |
+| `needs_preflight?/1` | Visibility | The Ecto adapter's SQL heuristic: `false` for statements starting with `EXPLAIN`, `SHOW` or `PRAGMA`, `true` otherwise. The SQLite dialect checks every statement, and reads the tables its `EXPLAIN` and `PRAGMA` statements name |
 | `transform_statement/1` | Statement rewriting | Statement unchanged |
 | `db_type_to_lotus_type/1` | Type mapping | `:text` |
 

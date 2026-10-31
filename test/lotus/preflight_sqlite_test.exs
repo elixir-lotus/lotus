@@ -242,4 +242,54 @@ defmodule Lotus.PreflightSqliteTest do
       assert {:ok, %{row_count: _}} = Lotus.Schema.get_table_stats("sqlite", "orders")
     end
   end
+
+  describe "SQLite introspection statements" do
+    setup do
+      Lotus.Config
+      |> stub(:visibility_for_source_name, fn _repo_name -> %{table: [deny: ["products"]]} end)
+
+      :ok
+    end
+
+    for sql <- [
+          "PRAGMA table_info(products)",
+          "PRAGMA main.table_xinfo('Products')",
+          "PRAGMA index_list([products])",
+          "PRAGMA foreign_key_list(products)",
+          "PRAGMA index_info(products_sku_index)",
+          "EXPLAIN SELECT name FROM products",
+          "EXPLAIN QUERY PLAN SELECT name FROM products",
+          "/* x */ EXPLAIN SELECT name FROM products",
+          "SELECT name, type FROM pragma_table_info('products')",
+          "SELECT * FROM orders, pragma_index_info('products_sku_index')",
+          ~s(SELECT * FROM "pragma_table_info"\('products'\))
+        ] do
+      test "are refused on a denied table: #{sql}" do
+        assert {:error, msg} = Lotus.run_statement(unquote(sql), [], repo: "sqlite")
+        assert msg =~ "blocked table"
+        assert msg =~ "products"
+      end
+    end
+
+    test "a pragma function whose table only the query tells is refused" do
+      for sql <- [
+            "SELECT p.name FROM sqlite_master m, pragma_table_info(m.name) p",
+            "SELECT * FROM pragma_table_info('pro' || 'ducts')",
+            "SELECT * FROM pragma_table_info((SELECT 'products'))"
+          ] do
+        assert {:error, _} = Lotus.run_statement(sql, [], repo: "sqlite"), sql
+      end
+    end
+
+    test "run on a visible table" do
+      for sql <- [
+            "PRAGMA table_info(orders)",
+            "PRAGMA foreign_keys",
+            "EXPLAIN QUERY PLAN SELECT * FROM orders",
+            "SELECT name FROM pragma_table_info('orders')"
+          ] do
+        assert {:ok, %{rows: [_ | _]}} = Lotus.run_statement(sql, [], repo: "sqlite"), sql
+      end
+    end
+  end
 end

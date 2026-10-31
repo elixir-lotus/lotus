@@ -917,7 +917,10 @@ defmodule Lotus.Source.Adapters.EctoTest do
       refute Adapter.needs_preflight?(pg, Statement.new("/* plan */ explain SELECT 1"))
       refute Adapter.needs_preflight?(pg, Statement.new("-- note\n  EXPLAIN SELECT 1"))
       refute Adapter.needs_preflight?(my, Statement.new("# tables\nSHOW TABLES"))
-      refute Adapter.needs_preflight?(lite, Statement.new("PRAGMA table_info(t)"))
+
+      # SQLite reads the tables they name.
+      assert Adapter.needs_preflight?(lite, Statement.new("PRAGMA table_info(t)"))
+      assert Adapter.needs_preflight?(lite, Statement.new("EXPLAIN SELECT 1"))
     end
 
     test "runs the preflight when SHOW is the end of a nested comment" do
