@@ -666,7 +666,7 @@ MyApp.Adapters.Echo
 
 | Callback | Default without the capability | When to implement |
 |---|---|---|
-| `stream_query/4` | the statement runs whole, and its rows are handed over in chunks | Return a lazy stream of `%{columns, rows}` chunks of at most `opts[:max_rows]` rows, read from the source as it is enumerated, so `Lotus.stream_query/3` and `Lotus.Export.stream/4` hold one chunk at a time. Lotus enumerates it inside your `transaction/3`. The built-in Ecto adapters use `Ecto.Adapters.SQL.stream/4`. |
+| `stream_query/4` | the statement runs whole, and its rows are handed over in chunks | Return a lazy stream of `%{columns, rows}` chunks of at most `opts[:max_rows]` rows, read from the source as it is enumerated, so `Lotus.stream_query/3` and `Lotus.Export.stream/4` hold one chunk at a time. Lotus enumerates it inside your `transaction/3`. Every chunk names its columns: under a column policy, Lotus refuses rows it can't match to a column. The built-in PostgreSQL and MySQL adapters use `Ecto.Adapters.SQL.stream/4`. |
 
 **`Lotus.Source.Adapter.Cancel`**
 

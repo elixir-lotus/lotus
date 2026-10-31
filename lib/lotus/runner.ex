@@ -873,26 +873,24 @@ defmodule Lotus.Runner do
     sources = pad_sources(cols || [], sources)
     policies = column_policies(matcher, cols || [], rels, sources)
 
-    case enforce_column_policies(cols || [], rows || [], policies) do
-      {:error, msg} ->
-        {:error, msg}
+    with :ok <- check_named_values(matcher, rels, cols || [], rows || []),
+         {final_cols, final_rows} when is_list(final_cols) <-
+           enforce_column_policies(cols || [], rows || [], policies) do
+      result_meta =
+        raw
+        |> Map.take([:connection_id, :messages])
+        |> maybe_put_total_count(raw)
+        |> maybe_put_cost(raw)
 
-      {final_cols, final_rows} ->
-        result_meta =
-          raw
-          |> Map.take([:connection_id, :messages])
-          |> maybe_put_total_count(raw)
-          |> maybe_put_cost(raw)
+      result =
+        Result.new(final_cols, final_rows,
+          num_rows: num_rows,
+          duration_ms: duration_ms,
+          command: command,
+          meta: result_meta
+        )
 
-        result =
-          Result.new(final_cols, final_rows,
-            num_rows: num_rows,
-            duration_ms: duration_ms,
-            command: command,
-            meta: result_meta
-          )
-
-        {:ok, %{result: result, column_sources: kept_sources(sources, policies)}}
+      {:ok, %{result: result, column_sources: kept_sources(sources, policies)}}
     end
   end
 
@@ -902,6 +900,20 @@ defmodule Lotus.Runner do
 
   defp handle_query_result(other, _elapsed_us, _adapter, _columns, _scope) do
     other
+  end
+
+  # Column policies apply by name, so under one each value of a row needs a
+  # named column. A source that returns rows without their columns (or with
+  # fewer) would hand the values over unprotected.
+  defp check_named_values(_matcher, _rels, _cols, []), do: :ok
+
+  defp check_named_values(matcher, rels, cols, [row | _]) do
+    if is_list(row) and length(row) != length(cols) and Matcher.restricts_columns?(matcher, rels),
+      do:
+        {:error,
+         "The source returned rows whose columns it didn't name, so Lotus can't apply " <>
+           "column policies to them."},
+      else: :ok
   end
 
   # One source per column: a column past the end of what the column check

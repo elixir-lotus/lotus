@@ -8,6 +8,7 @@ defmodule Lotus.StreamTest do
   """
 
   use Lotus.Case, async: false
+  use Mimic
 
   import Lotus.Fixtures
 
@@ -16,7 +17,8 @@ defmodule Lotus.StreamTest do
   alias Lotus.Runner
   alias Lotus.Source.Adapter
   alias Lotus.Source.Adapters.Ecto, as: EctoAdapter
-  alias Lotus.Test.InMemoryAdapter
+  alias Lotus.Storage.Query
+  alias Lotus.Test.{InMemoryAdapter, SqliteRepo}
 
   @series "SELECT n FROM generate_series(1, 2500) AS s(n)"
 
@@ -84,14 +86,13 @@ defmodule Lotus.StreamTest do
                Lotus.stream_statement(sql, [], [], &Enum.to_list/1)
     end
 
-    test "the built-in Ecto adapters stream; others don't" do
-      for {name, repo} <- [
-            {"postgres", Lotus.Test.Repo},
-            {"mysql", Lotus.Test.MysqlRepo},
-            {"sqlite", Lotus.Test.SqliteRepo}
-          ] do
+    test "the built-in Postgres and MySQL adapters stream; others don't" do
+      for {name, repo} <- [{"postgres", Lotus.Test.Repo}, {"mysql", Lotus.Test.MysqlRepo}] do
         assert Adapter.capability?(EctoAdapter.wrap(name, repo), :streaming)
       end
+
+      # The SQLite driver doesn't name the columns of the rows it streams.
+      refute Adapter.capability?(EctoAdapter.wrap("sqlite", Lotus.Test.SqliteRepo), :streaming)
 
       refute Adapter.capability?(
                InMemoryAdapter.adapter("mem", InMemoryAdapter.dataset()),
@@ -246,6 +247,92 @@ defmodule Lotus.StreamTest do
              )
 
     assert chunks |> Enum.flat_map(& &1.rows) == [[1], [2], [3], [4], [5]]
+    assert Enum.all?(chunks, &(&1.columns == ["n"]))
+  end
+
+  describe "column policies on SQLite" do
+    @describetag :sqlite
+
+    setup do
+      SqliteRepo.query!(
+        "INSERT INTO test_users (name, email, age, inserted_at, updated_at) " <>
+          "VALUES ('a', 'a@example.com', 30, '2024-01-01', '2024-01-01')"
+      )
+
+      stub(Lotus.Config, :visibility_for_source_name, fn _source ->
+        %{
+          column: [
+            {"test_users", "email", [action: :mask, mask: {:fixed, "REDACTED"}]},
+            {"test_users", "metadata", :omit},
+            {"test_users", "age", :error}
+          ]
+        }
+      end)
+
+      :ok
+    end
+
+    defp sqlite_stream(sql) do
+      Lotus.stream_statement(sql, [], [repo: "sqlite"], &Enum.to_list/1)
+    end
+
+    test "a streamed result is masked and omitted as a run's is" do
+      sql = "SELECT name, email, metadata FROM test_users"
+
+      assert {:ok, %Result{columns: columns, rows: rows}} =
+               Lotus.run_statement(sql, [], repo: "sqlite")
+
+      assert {:ok, chunks} = sqlite_stream(sql)
+      assert Enum.all?(chunks, &(&1.columns == columns))
+      assert Enum.flat_map(chunks, & &1.rows) == rows
+      assert columns == ["name", "email"]
+      assert rows == [["a", "REDACTED"]]
+    end
+
+    test "a streamed hidden column is refused as in a run" do
+      assert {:error, "Query selects hidden column(s): age"} =
+               sqlite_stream("SELECT name, age FROM test_users")
+    end
+
+    test "a CSV export has the header and the masked values" do
+      query = %Query{
+        statement: "SELECT name, email FROM test_users",
+        data_source: "sqlite",
+        variables: []
+      }
+
+      assert {:ok, csv} =
+               Lotus.Export.stream(
+                 query,
+                 :csv,
+                 [],
+                 &(&1 |> Enum.to_list() |> IO.iodata_to_binary())
+               )
+
+      assert csv == "name,email\na,REDACTED\n"
+    end
+  end
+
+  test "a chunk whose rows its columns don't name is refused under a column policy" do
+    stub(Lotus.Config, :visibility_for_source_name, fn _source ->
+      %{column: [{"users", "secret", :omit}]}
+    end)
+
+    stub(Adapter, :capability?, fn
+      _adapter, :streaming -> true
+      adapter, capability -> call_original(Adapter, :capability?, [adapter, capability])
+    end)
+
+    stub(Adapter, :stream_query, fn _adapter, _body, _params, _opts ->
+      {:ok, [%{columns: [], rows: [[1, "s"]]}]}
+    end)
+
+    tables = %{"users" => %{columns: ["id", "secret"], rows: [[1, "s"]], types: %{}}}
+    adapter = InMemoryAdapter.adapter("mem", InMemoryAdapter.dataset(tables: tables))
+    statement = %Statement{adapter: InMemoryAdapter, body: %{from: "users"}}
+
+    assert {:error, "The source returned rows whose columns it didn't name" <> _} =
+             Runner.stream(adapter, statement, [], &Enum.to_list/1)
   end
 
   @tag :mysql
