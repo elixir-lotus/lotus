@@ -10,6 +10,7 @@ defmodule Lotus.Integration.NonSql.InMemoryEndToEndTest do
   alias Lotus.Cache
   alias Lotus.Config
   alias Lotus.Query.Filter
+  alias Lotus.Query.Sort
   alias Lotus.Query.Statement
   alias Lotus.Runner
   alias Lotus.Source
@@ -125,6 +126,37 @@ defmodule Lotus.Integration.NonSql.InMemoryEndToEndTest do
 
       assert :ok = Cache.invalidate_tags(["source:#{@source_name}"])
       assert Cache.get(key) == :miss
+    end
+  end
+
+  describe "filters and sorts on a protected column" do
+    setup do
+      stub(Config, :visibility_for_source_name, fn _source ->
+        %{column: [{"users", "status", [action: :mask, mask: {:fixed, "***"}]}]}
+      end)
+
+      :ok
+    end
+
+    test "are refused, as the column check can't read the statement" do
+      for opts <- [
+            [filters: [Filter.new("status", :eq, "active")]],
+            [sorts: [Sort.new("status", :asc)]]
+          ] do
+        assert {:error, "Query filters or sorts by protected column status" <> _} =
+                 Lotus.run_statement(%{from: "users"}, [], [repo: @source_name] ++ opts),
+               inspect(opts)
+      end
+    end
+
+    test "on another column run, and the result is masked" do
+      assert {:ok, %{rows: rows}} =
+               Lotus.run_statement(%{from: "users"}, [],
+                 repo: @source_name,
+                 filters: [Filter.new("name", :eq, "Alice")]
+               )
+
+      assert [[1, "Alice", "***"]] = rows
     end
   end
 end
