@@ -194,6 +194,13 @@
   `{false, reason}`. Such a value now reads as unsupported, with the
   generic reason.
 
+- **The result cache keeps read-write runs apart.** A cache hit skips the
+  read-only check, and the key didn't hold the run's mode, so a read-only
+  run could get back the rows of a statement a read-write run stored (a
+  `DELETE ... RETURNING`). The key builders now get `:read_only`, and the
+  default one keys a read-write run apart. A read-only run's key is the
+  same as before.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
