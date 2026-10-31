@@ -225,6 +225,12 @@
   a longer one ended it early. The checkout now takes the caller's
   timeout.
 
+- **A dashboard runs a few cards at a time.** `run_dashboard/2` started a
+  task for every card at once, so a dashboard with many cards could take
+  every connection of the pool. Cards now run at most `:max_concurrency`
+  at a time (new option, twice the schedulers online by default), each
+  still bounded by `:timeout`.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send

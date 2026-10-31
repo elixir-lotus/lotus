@@ -835,6 +835,8 @@ defmodule Lotus.Dashboards do
 
     * `:filter_values` - Map of filter names to their current values
     * `:parallel` - Whether to run cards in parallel (default: true)
+    * `:max_concurrency` - How many cards run at once when parallel
+      (default: twice the schedulers online)
     * `:timeout` - Timeout per card in milliseconds (default: 30000)
 
   ## Filter Resolution
@@ -1007,27 +1009,24 @@ defmodule Lotus.Dashboards do
     |> Enum.group_by(& &1.card_id)
   end
 
+  # A dashboard of many cards runs a few at a time, so it doesn't take every
+  # connection of the pool at once.
   defp run_cards_parallel(cards, vars_for_card, opts, timeout) do
-    cards
-    |> Enum.map(fn card ->
-      # Capture card_id before spawning to handle timeouts
-      card_id = card.id
+    max_concurrency = Keyword.get(opts, :max_concurrency, System.schedulers_online() * 2)
 
-      task =
-        Task.Supervisor.async(Lotus.Supervisor.task_supervisor_name(Lotus), fn ->
-          execute_card(card, vars_for_card, opts)
-        end)
-
-      {card_id, task}
-    end)
-    |> Enum.reduce(%{}, fn {card_id, task}, acc ->
-      result =
-        case Task.yield(task, timeout) || Task.shutdown(task) do
-          {:ok, result} -> result
-          nil -> {:error, :timeout}
-        end
-
-      Map.put(acc, card_id, result)
+    Lotus.Supervisor.task_supervisor_name(Lotus)
+    |> Task.Supervisor.async_stream_nolink(
+      cards,
+      &execute_card(&1, vars_for_card, opts),
+      max_concurrency: max_concurrency,
+      timeout: timeout,
+      on_timeout: :kill_task
+    )
+    |> Enum.zip(cards)
+    |> Map.new(fn
+      {{:ok, result}, card} -> {card.id, result}
+      {{:exit, :timeout}, card} -> {card.id, {:error, :timeout}}
+      {{:exit, reason}, card} -> {card.id, {:error, Exception.format_exit(reason)}}
     end)
   end
 
@@ -1041,7 +1040,7 @@ defmodule Lotus.Dashboards do
   defp execute_card(card, vars_for_card, opts) do
     vars = vars_for_card.(card)
 
-    query_opts = Keyword.drop(opts, [:filter_values, :parallel, :timeout])
+    query_opts = Keyword.drop(opts, [:filter_values, :parallel, :max_concurrency, :timeout])
     run_opts = query_opts |> Keyword.put(:vars, vars) |> read_only()
 
     Lotus.run_query(card.query_id, run_opts)
