@@ -464,6 +464,16 @@ defmodule Lotus.DeliveryTest do
       assert email.text_body =~ "region | total"
     end
 
+    test "a title with a line break makes a one-line subject" do
+      content = %{content([]) | title: "Weekly\r\nBcc: dummy@example.invalid\n"}
+
+      assert :ok = Email.deliver(content, [], %{"to" => ["team@example.com"]})
+
+      assert_received {:email, email}
+      assert email.subject == "Weekly Bcc: dummy@example.invalid"
+      assert email.bcc == []
+    end
+
     test "an alert's subject says it fired or recovered" do
       content = %{
         content([])
