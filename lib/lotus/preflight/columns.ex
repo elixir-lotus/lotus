@@ -19,6 +19,8 @@ defmodule Lotus.Preflight.Columns do
     * refer to a whole row (`SELECT u`, `to_json(u)`, `row(u.*)`);
     * rename columns with a column alias list (`AS t(a, b)`,
       `WITH c(a, b) AS ...`);
+    * join with `NATURAL`, which compares every column the two sides share
+      by name, none of them written in the statement;
     * combine `*` or `TABLE t` with `UNION`, `INTERSECT` or `EXCEPT`, whose
       result takes the first branch's column names;
     * sort or group by the position of a protected column (`SELECT ssn ...
@@ -778,6 +780,9 @@ defmodule Lotus.Preflight.Columns do
   defp check_entry({{:kw, "table"}, _, :none, _}, _prev, _prev2, _chain, _rest, ctx, cache),
     do: star_ok(ctx, cache)
 
+  defp check_entry({{:kw, "natural"}, _, _, _}, _prev, _prev2, _chain, _rest, _ctx, _cache),
+    do: natural_join_error()
+
   defp check_entry({:escaped_name, _, _, _}, _prev, _prev2, _chain, _rest, _ctx, _cache) do
     {:error,
      "Query uses a Unicode-escaped identifier (U&\"...\"), which Lotus can't check " <>
@@ -1295,6 +1300,13 @@ defmodule Lotus.Preflight.Columns do
     {:error,
      "Query reads whole rows of #{name}, which has protected columns, so Lotus can't " <>
        "apply their column policies. Select the columns instead."}
+  end
+
+  defp natural_join_error do
+    {:error,
+     "Query joins with NATURAL over a table with protected columns, which compares " <>
+       "columns the statement doesn't name, so Lotus can't check them against column " <>
+       "policies. Join with ON and name the columns."}
   end
 
   defp set_op_error do

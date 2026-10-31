@@ -52,4 +52,13 @@ defmodule Lotus.ColumnPolicyUsageTest do
     assert {:error, "Query reads whole rows of u" <> _} =
              run("SELECT to_json(u) FROM test_users u")
   end
+
+  test "a NATURAL join over the table is refused before it runs" do
+    for sql <- [
+          "SELECT name FROM test_users NATURAL JOIN (SELECT 'x' AS email) p",
+          "SELECT name FROM test_users NATURAL LEFT JOIN (SELECT 'x' AS email) p"
+        ] do
+      assert {:error, "Query joins with NATURAL " <> _} = run(sql), sql
+    end
+  end
 end
