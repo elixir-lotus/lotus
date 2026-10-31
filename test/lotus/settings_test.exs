@@ -68,6 +68,16 @@ defmodule Lotus.SettingsTest do
     assert capture_log(fn -> assert Config.read_only?() end) =~ "store down"
   end
 
+  test "an answer the config would not take keeps the config's" do
+    for value <- [nil, "no", 0] do
+      answer(:read_only, {:ok, value})
+      assert capture_log(fn -> assert Config.read_only?() == true end) =~ "would not take"
+    end
+
+    answer(:default_page_size, {:ok, -1})
+    capture_log(fn -> assert Config.default_page_size() != -1 end)
+  end
+
   test "validate/2 checks a value as the config would" do
     assert {:ok, 100} = Settings.validate(:default_page_size, 100)
     assert {:error, _message} = Settings.validate(:default_page_size, -1)
