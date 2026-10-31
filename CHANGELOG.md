@@ -237,6 +237,13 @@
   before the policy applied to the result. Lotus now refuses a filter or
   sort by a column a restricting policy protects on such a source.
 
+- **CSV exports can escape cells a spreadsheet would run.** A cell that
+  starts with `=`, `+`, `-`, `@`, a tab or a carriage return runs as a
+  formula when a spreadsheet opens the file. With the new
+  `config :lotus, csv_escape_formulas: true`, CSV exports and deliveries
+  write such a text cell, and such a header, with a leading `'`. Numbers
+  are left alone. It is off by default, so files are unchanged.
+
 - **Requires `req_llm` 1.29 or later.** `req_llm` 1.28 and earlier don't
   check the TLS certificate of their WebSocket sessions, so someone on the
   network path could read the API keys and OAuth tokens they send
