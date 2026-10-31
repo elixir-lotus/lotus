@@ -960,7 +960,10 @@ defmodule Lotus do
     * `:read_only` — when `true`, blocks write operations (INSERT, UPDATE,
       DELETE, DDL) at both the application and database level. Set to `false` to allow
       write queries. Defaults to the source's setting (`read_only?/1`), which
-      is `true` unless configured otherwise.
+      is `true` unless configured otherwise. On PostgreSQL a read-only run
+      rolls its transaction back, which undoes what the statement changed in
+      the session; inside a transaction the caller already opened it can't,
+      and those changes last until that transaction ends.
     * `:on_cancel_token` — a function of one argument, called with a token
       when the statement starts, in the process that runs it, on a source
       that can cancel (`cancellable?/1`). Pass the token to `cancel/1` to
